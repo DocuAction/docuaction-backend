@@ -86,10 +86,10 @@ class _Recorder:
                 "rendered_sha256": "f" * 64, "size_bytes": len(kw["content"])}
 
 
-async def _queue_and_run(db, monkeypatch, intake_id, fmt, rec):
+async def _queue_and_run(db, monkeypatch, intake_id, fmt, rec, *, cutoff=CUTOFF_ISO):
     from app.reports.data import artifact_registry
     monkeypatch.setattr(artifact_registry, "finalize_artifact", rec)
-    out = await report_routes.export_record_review(_req(intake_id, fmt), db=db, user=QA)
+    out = await report_routes.export_record_review(_req(intake_id, fmt, cutoff=cutoff), db=db, user=QA)
     job = await db.get(ReportExportJob, uuid.UUID(out["job_id"]))
     state = await run_record_review_export_job(db, job)
     return out, job, state
@@ -308,7 +308,7 @@ async def test_stored_comments_reach_the_registered_artifact_in_separate_verbati
         e(recs[1], "QA_IZAAN", izaan_text, author_attribution="Izaan", attribution_basis="owner designation"),
         e(recs[2], "QA_ORIGINAL", "held record comment")])        # recs[2] is HELD in this fixture
     rec = _Recorder()
-    _, _, state = await _queue_and_run(db, monkeypatch, intake_id, "csv", rec)
+    _, _, state = await _queue_and_run(db, monkeypatch, intake_id, "csv", rec, cutoff="2099-01-01T00:00:00")
     assert state == ReportExportJob.STATE_SUCCEEDED
     rows = list(csv.reader(io.StringIO(rec.calls[0]["content"].decode("utf-8-sig"))))[2:]
     o = ds_mod.RECORD_COLUMNS.index(ds_mod.ORIGINAL_COMMENTS_COLUMN)

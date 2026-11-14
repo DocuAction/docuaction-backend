@@ -89,7 +89,7 @@ class RceRecordComment(Base):
     imported_at = Column(DateTime(timezone=True), nullable=False,
                          server_default=func.clock_timestamp())
     import_batch_id = Column(UUID(as_uuid=True), nullable=False)
-    #: sha256(source_record_id | kind | text_sha256 | supersedes_comment_id or '')
+    #: Stable operation key: sha256(intake | import batch | entry index).
     idempotency_key = Column(String(64), nullable=False)
     supersedes_comment_id = Column(
         UUID(as_uuid=True), ForeignKey(f"{TABLE}.id", ondelete="RESTRICT"))

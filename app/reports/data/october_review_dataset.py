@@ -186,13 +186,18 @@ def _entity_type(fact: Dict[str, Any]) -> str:
     return ENTITY_TYPE_NOT_ESTABLISHED
 
 
-def _comment_source_label(src: Any) -> str:
+def _comment_source_label(src: Any, *, strict: bool = False) -> str:
     """A non-blank attributable source for comment text, or ''."""
-    if isinstance(src, dict):
-        parts = [f"{k}={src[k]}" for k in ("file", "sha256", "sheet", "column")
-                 if src.get(k)]
-        return "; ".join(parts) if len(parts) >= 2 else ""
-    return _s(src).strip()
+    import re
+    if isinstance(src, str) and not strict:
+        return src.strip()
+    fields = ("file", "sha256", "sheet", "column")
+    if not isinstance(src, dict) or not all(
+            isinstance(src.get(k), str) and src[k].strip() for k in fields):
+        return ""
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", src["sha256"].strip()):
+        return ""
+    return "; ".join(f"{k}={src[k]}" for k in fields)
 
 
 def build_record_row(fact: Dict[str, Any]) -> List[str]:
@@ -206,10 +211,10 @@ def build_record_row(fact: Dict[str, Any]) -> List[str]:
                 f"blanket wording {phrase!r}; supply the cause-specific text")
     # The second comment column is populated ONLY from an attributable source.
     izaan = _s(fact.get("qa_comments_izaan"))
-    if izaan and not _comment_source_label(fact.get("qa_comments_izaan_source")):
+    if izaan and not _comment_source_label(fact.get("qa_comments_izaan_source"), strict=True):
         raise DatasetRefused(
             f"{IZAAN_COMMENTS_COLUMN} text for {fact.get('agt_record_id')} has "
-            f"no attributable source (file + sha256/sheet/column); refusing to "
+            f"no attributable source (file + sha256 + sheet + column); refusing to "
             f"attach unattributed comment text")
     flag = _s(fact.get("flag"))
     if fact.get("provisional") and "PROVISIONAL" not in flag.upper():
@@ -278,7 +283,7 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
     for f in facts:
         for kind, key in (("original", "qa_comments_source"),
                           ("izaan", "qa_comments_izaan_source")):
-            lab = _comment_source_label(f.get(key))
+            lab = _comment_source_label(f.get(key), strict=key == "qa_comments_izaan_source")
             if lab and lab not in comment_sources[kind]:
                 comment_sources[kind].append(lab)
     summary = {

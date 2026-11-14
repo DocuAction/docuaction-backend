@@ -270,3 +270,19 @@ async def test_end_to_end_csv_preview_uses_the_real_validator_and_applies_nothin
     n = (await db.execute(select(reg.ReviewRecord.review_id).where(
         reg.ReviewRecord.review_id.like("REV-9982-%")))).all()
     assert len(n) == 1
+
+
+@pytest.mark.parametrize("review_id,accepted", [("REV-2026-000001", True), ("REV-2026-000002", False)])
+async def test_mixed_review_and_agt_identity_must_resolve_to_the_same_case(review_id, accepted):
+    val, res = _validator(), _resolver("REV-2026-000001")
+    out = await cui.preview_rows([_row(review_id=review_id, assign_to_email="a@x.invalid")], res, val)
+    assert len(val.calls) == 1 and len(res.calls) == 1
+    assert out["rows"][0]["disposition"] == (cui.DISP_ACCEPTED if accepted else cui.DISP_REJECTED)
+    assert bool(cui.plan_apply(out)["assignments"]) == accepted
+
+
+async def test_review_id_does_not_bypass_a_foreign_agt_record_validator():
+    res = _resolver("REV-2026-000001")
+    out = await cui.preview_rows([_row(review_id="REV-2026-000001", analyst_note="x")],
+        res, _validator(problem="record belongs to another intake"))
+    assert out["rows"][0]["disposition"] == cui.DISP_REJECTED and res.calls == []
