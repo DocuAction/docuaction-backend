@@ -414,3 +414,132 @@ class TestADuplicateRefusedAtCompletionStaysClosed:
         # The creator still reads its state; nothing says it was staged.
         status = await routes.upload_status(second_id, db, user=owner)
         assert status["status"] == um.IqviaUploadSession.STATUS_COMPLETE
+
+
+class TestAnInterruptedRegistrationCanBeRetried:
+    """Reviewer finding on #218, 2026-11-14. `register_snapshot` commits before
+    the import job is enqueued, and the upload is linked to its snapshot after
+    that. A failure between those commits left a registered snapshot that the
+    creator's own retry was then refused as a duplicate of (DUPLICATE_SNAPSHOT):
+    no job, no link, no way forward.
+
+    A retry of `/complete` for the SAME upload now finishes the registration it
+    started - recognised by the snapshot having been registered from this
+    upload's own file - without reopening the upload and without a second
+    snapshot or a second job. Any other upload of the same bytes is still
+    refused as a duplicate."""
+
+    async def _upload(self, db, tmp_path, monkeypatch, label):
+        content = write_csv(tmp_path / f"{label}.csv", HCO_HEADER, [
+            [f"{SYN}-RETRY-HCO-{i}-{uuid.uuid4().hex[:6]}", "", "", f"{SYN} Org {i}", "02101"]
+            for i in range(2)]).read_bytes()
+        owner = _User("reviewer", OWNER)
+        upload_id = await _start(db, monkeypatch, payload=content, chunk_size=len(content),
+                                 label=label)
+        await routes.upload_chunk(upload_id, 0, _FakeRequest(content), db, user=owner)
+        return upload_id, content, owner
+
+    async def _counts(self, db, content):
+        import hashlib
+
+        from sqlalchemy import func
+
+        from app.tefca_registry.rce import iqvia_upload_models as um
+        from app.tefca_registry.rce import snapshot_models as sm
+        sha = hashlib.sha256(content).hexdigest()
+        await db.rollback()
+        snapshots = (await db.execute(select(sm.SourceSnapshot).where(
+            sm.SourceSnapshot.sha256 == sha))).scalars().all()
+        for snap in snapshots:
+            if snap.id not in _created_snapshot_ids:
+                _created_snapshot_ids.append(snap.id)
+        n_jobs = (await db.execute(select(func.count()).select_from(um.IqviaImportJob).where(
+            um.IqviaImportJob.snapshot_id.in_([x.id for x in snapshots] or [uuid.uuid4()])
+        ))).scalar_one()
+        return snapshots, n_jobs
+
+    async def test_enqueue_fails_after_the_snapshot_is_registered(self, db, tmp_path, monkeypatch):
+        from app.tefca_registry.rce import iqvia_upload_models as um
+
+        upload_id, content, owner = await self._upload(db, tmp_path, monkeypatch, "retry-a")
+        real_enqueue = jobs.enqueue_import_job
+        failures = []
+
+        async def _fail_once(*args, **kwargs):
+            if not failures:
+                failures.append(1)
+                raise RuntimeError("synthetic failure before the job row is written")
+            return await real_enqueue(*args, **kwargs)
+
+        monkeypatch.setattr(jobs, "enqueue_import_job", _fail_once)
+        with pytest.raises(RuntimeError):
+            await routes.complete_upload(upload_id, db, user=owner)
+        snapshots, n_jobs = await self._counts(db, content)
+        assert len(snapshots) == 1 and n_jobs == 0, "the state the finding describes"
+
+        done = await routes.complete_upload(upload_id, db, user=owner)
+        assert done["snapshot_id"] == str(snapshots[0].id)
+        assert done["job_id"] and done["job_state"] == um.IqviaImportJob.STATE_QUEUED
+        snapshots, n_jobs = await self._counts(db, content)
+        assert len(snapshots) == 1 and n_jobs == 1
+        session = await jobs.get_upload_session(db, upload_id)
+        await db.refresh(session)
+        assert session.status == "STAGING_QUEUED", "linked exactly as a first completion is"
+        assert session.snapshot_id == snapshots[0].id
+
+        # Not reopened: the bytes cannot change, and a further repeat is the same answer.
+        with pytest.raises(HTTPException) as exc:
+            await routes.upload_chunk(upload_id, 0, _FakeRequest(b"X" * len(content)), db,
+                                      user=owner)
+        assert exc.value.detail["code"] == "UPLOAD_CLOSED"
+        again = await routes.complete_upload(upload_id, db, user=owner)
+        assert again["snapshot_id"] == done["snapshot_id"] and again["job_id"] == done["job_id"]
+        assert (await self._counts(db, content))[1] == 1
+
+    async def test_the_link_fails_after_the_job_is_enqueued(self, db, tmp_path, monkeypatch):
+        upload_id, content, owner = await self._upload(db, tmp_path, monkeypatch, "retry-b")
+        real_mark = jobs.mark_upload_complete
+        failures = []
+
+        async def _fail_once(*args, **kwargs):
+            if not failures:
+                failures.append(1)
+                raise RuntimeError("synthetic failure before the upload is linked")
+            return await real_mark(*args, **kwargs)
+
+        monkeypatch.setattr(jobs, "mark_upload_complete", _fail_once)
+        with pytest.raises(RuntimeError):
+            await routes.complete_upload(upload_id, db, user=owner)
+        snapshots, n_jobs = await self._counts(db, content)
+        assert len(snapshots) == 1 and n_jobs == 1
+
+        done = await routes.complete_upload(upload_id, db, user=owner)
+        assert done["snapshot_id"] == str(snapshots[0].id)
+        snapshots, n_jobs = await self._counts(db, content)
+        assert len(snapshots) == 1 and n_jobs == 1, "the existing job is returned, not a second one"
+        session = await jobs.get_upload_session(db, upload_id)
+        await db.refresh(session)
+        assert session.snapshot_id == snapshots[0].id
+
+    async def test_another_upload_of_the_same_bytes_is_still_a_duplicate(
+            self, db, tmp_path, monkeypatch):
+        upload_id, content, owner = await self._upload(db, tmp_path, monkeypatch, "retry-c")
+
+        async def _always_fail(*args, **kwargs):
+            raise RuntimeError("synthetic failure before the job row is written")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(jobs, "enqueue_import_job", _always_fail)
+            with pytest.raises(RuntimeError):
+                await routes.complete_upload(upload_id, db, user=owner)
+        snapshots, n_jobs = await self._counts(db, content)
+        assert len(snapshots) == 1 and n_jobs == 0
+
+        other = await _start(db, monkeypatch, payload=content, chunk_size=len(content),
+                             label="retry-c-other")
+        await routes.upload_chunk(other, 0, _FakeRequest(content), db, user=owner)
+        with pytest.raises(HTTPException) as exc:
+            await routes.complete_upload(other, db, user=owner)
+        assert exc.value.detail["code"] == "DUPLICATE_SNAPSHOT"
+        snapshots, n_jobs = await self._counts(db, content)
+        assert len(snapshots) == 1 and n_jobs == 0, "a different upload does not finish it"

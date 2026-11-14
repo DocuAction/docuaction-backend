@@ -216,6 +216,29 @@ async def _register_and_enqueue(
                sm.SourceSnapshot.supersedes_snapshot_id.is_(None))
         .order_by(sm.SourceSnapshot.created_at.asc()).limit(1))).scalars().first()
     if existing is not None:
+        # An interrupted registration of THIS upload, finished rather than
+        # refused. `register_snapshot` commits before the job is enqueued, and
+        # the upload is linked after that; a failure in between left a snapshot
+        # that the same upload's own retry was then told is a duplicate, with no
+        # job and no way forward (review finding, #218, 2026-11-14). It is this
+        # upload's registration only when the snapshot was registered from this
+        # upload's own server-side file AND either no job was ever created for
+        # it, or its job names this upload. The upload is not reopened; no
+        # second snapshot and no second job are created. Every other caller -
+        # another upload of the same bytes, a server-local stage - is refused
+        # below exactly as before.
+        if upload_id is not None and \
+                (existing.metadata_ or {}).get("original_path") == str(path):
+            job = await jobs.latest_job_for_snapshot(db, existing.id)
+            if job is None:
+                job = await jobs.enqueue_import_job(
+                    db, snapshot_id=existing.id, source=source, file_path=str(path),
+                    label=label, created_by=created_by, upload_id=upload_id)
+            if job.upload_id == upload_id:
+                return {"snapshot_id": str(existing.id), "source": source,
+                        "status": "PENDING", "import_status": "staging",
+                        "job_id": str(job.id), "job_state": job.state,
+                        "resumed_registration": True}
         raise HTTPException(409, detail={
             "error": (f"this exact file (sha256 {file_sha[:12]}...) is already registered "
                       f"for {source} as snapshot {existing.id} (label {existing.snapshot_label!r}, "
