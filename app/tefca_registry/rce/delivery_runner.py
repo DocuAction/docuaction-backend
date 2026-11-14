@@ -183,7 +183,9 @@ async def _run_stages(db, job, detail: Dict[str, Any]) -> str:
             await _close(db, ev_schema, "FAILED", failure=exc)
             await _close(db, ev_parse, "FAILED", failure=exc)
             await jobs.finish_failed(db, job_id, reason,
-                                     detail={"PARSING": {"error": stage_events.safe_failure_text(exc, 1000)}})
+                                     detail={"PARSING": {
+                                         "error": stage_events.safe_failure_text(exc, 1000),
+                                         "error_writer": stage_events.ERROR_WRITER}})
             return RceDeliveryJob.STATE_FAILED
 
         for ev in (ev_schema, ev_parse):
@@ -273,6 +275,7 @@ async def _run_after_area1(db, job, detail: Dict[str, Any], intake_id,
             except Exception as exc:  # noqa: BLE001
                 stage_error = _reason(stage_name, exc)
                 detail[stage_name] = {"error": stage_events.safe_failure_text(exc, 1000),
+                                      "error_writer": stage_events.ERROR_WRITER,
                                       "completed": False}
                 logger.error("delivery job %s stage %s did not complete: %s",
                              job_id, stage_name, type(exc).__name__, exc_info=True)
@@ -339,7 +342,8 @@ async def _run_after_area1(db, job, detail: Dict[str, Any], intake_id,
             passed = bool(recon.get("passed"))
         except Exception as exc:  # noqa: BLE001
             detail[RceDeliveryJob.STAGE_RECONCILIATION] = {
-                "error": stage_events.safe_failure_text(exc, 1000), "completed": False}
+                "error": stage_events.safe_failure_text(exc, 1000),
+                "error_writer": stage_events.ERROR_WRITER, "completed": False}
             logger.error("delivery job %s reconciliation did not complete: %s",
                          job_id, type(exc).__name__, exc_info=True)
             await _settle(db)
@@ -357,6 +361,7 @@ async def _run_after_area1(db, job, detail: Dict[str, Any], intake_id,
                              job_id, type(exc).__name__, exc_info=True)
                 await _settle(db)
                 recon["snapshot_error"] = stage_events.safe_failure_text(exc, 500)
+                recon["snapshot_error_writer"] = stage_events.ERROR_WRITER
             detail[RceDeliveryJob.STAGE_RECONCILIATION] = recon
             eq = (full.get("equation") or {})
             await _close(db, ev, "COMPLETED",
@@ -569,8 +574,10 @@ async def _snapshot_effects(db, intake_id, actor) -> Dict[str, Any]:
             logger.error("snapshot failure row for %s not written: %s",
                          intake_id, type(exc2).__name__, exc_info=True)
             await _settle(db)
-            failure = {"recorded": False, "error": stage_events.safe_failure_text(exc2, 300)}
-        return {"completed": False, "error": error, "failure_record": failure}
+            failure = {"recorded": False, "error": stage_events.safe_failure_text(exc2, 300),
+                       "error_writer": stage_events.ERROR_WRITER}
+        return {"completed": False, "error": error,
+                "error_writer": stage_events.ERROR_WRITER, "failure_record": failure}
 
 
 def _snapshot_summary(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -582,7 +589,9 @@ def _snapshot_summary(result: Dict[str, Any]) -> Dict[str, Any]:
             "material_changes": delta.get("material_changes"),
             "presence": result.get("presence"),
             "stale_marked": (result.get("stale") or {}).get("marked"),
-            "error": result.get("error")}
+            "error": result.get("error"),
+            # Carried with the error it vouches for, or absent with it.
+            "error_writer": result.get("error_writer") if result.get("error") else None}
 
 
 async def _stage_promotion(db, intake_id, actor):
@@ -709,7 +718,8 @@ async def _bridge(db, intake_id, actor) -> Dict[str, Any]:
         logger.error("delivery %s: review bridge did not complete: %s", intake_id,
                      type(exc).__name__, exc_info=True)
         await _settle(db)
-        return {"completed": False, "error": stage_events.safe_failure_text(exc, 500)}
+        return {"completed": False, "error": stage_events.safe_failure_text(exc, 500),
+                "error_writer": stage_events.ERROR_WRITER}
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

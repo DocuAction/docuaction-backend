@@ -26,6 +26,7 @@ import json
 from datetime import datetime
 
 import pytest
+from sqlalchemy import select
 
 from app.core import logging_config as lc
 from app.core.logging_config import sanitize_stored_error, sanitize_stored_error_tree
@@ -270,3 +271,337 @@ async def test_e_routes_mask_and_the_stored_row_is_not_rewritten(failed_jobs, ro
         assert SECRET not in json.dumps(await jobs.status_for_job(db, job), default=str)
         await db.refresh(job)
         assert job.error_reason == reason, "the stored evidence row is unchanged"
+
+
+# ── 2026-11-14, second pass: per-stage error values and the recheck path ─────
+#
+# The first runner stored `str(exc)` under `stage_detail[stage]["error"]`: a
+# bare driver message with no class beside it, which the general rule cannot
+# tell from a controlled string. Under an ERROR KEY the rule is the other way
+# round: only the shapes a writer of this application produces are shown.
+
+BARE_UNDER_ERROR_KEY = [
+    f"invalid input syntax for type uuid: \"{SECRET}\"",
+    f"duplicate key value violates unique constraint \"uq_x\" {SECRET}",
+    f"value too long for type character varying(500) {SECRET}",
+    f"connection to {SECRET} refused",
+]
+WRITER_SHAPES_UNDER_ERROR_KEY = [
+    "RuntimeError (message withheld from evidence; see the server log for correlation id abc)",
+    "UniqueViolationError (message withheld from evidence; see the server log)",
+    "TimeoutError",                       # a bare class name, as connector readiness writes it
+    "worker_stopped_without_reporting",
+]
+
+
+@pytest.mark.parametrize("reason", BARE_UNDER_ERROR_KEY)
+def test_a_bare_message_under_an_error_key_is_withheld(reason):
+    stored = {"PROMOTION": {"error": reason, "completed": False, "note": "Controlled note"},
+              "RECONCILIATION": {"snapshot_error": reason},
+              "list": [{"error": reason}]}
+    before = json.dumps(stored, sort_keys=True)
+    out = sanitize_stored_error_tree(stored, strict_error_keys=True)
+    assert SECRET not in json.dumps(out), out
+    assert out["PROMOTION"]["completed"] is False and out["PROMOTION"]["note"] == "Controlled note"
+    assert "withheld" in out["PROMOTION"]["error"]
+    assert json.dumps(stored, sort_keys=True) == before, "the stored structure is not mutated"
+    assert sanitize_stored_error_tree(out, strict_error_keys=True) == out      # idempotent
+
+
+@pytest.mark.parametrize("reason", WRITER_SHAPES_UNDER_ERROR_KEY)
+def test_what_a_writer_produces_under_an_error_key_stays_readable(reason):
+    stored = {"QUALITY": {"error": reason}}
+    assert sanitize_stored_error_tree(stored, strict_error_keys=True) == stored
+
+
+def test_strictness_applies_to_error_keys_only_and_only_when_asked():
+    sentence = "The delivery is preserved and curated; resolve the stated condition."
+    stored = {"PROMOTION": {"reason": sentence, "note": sentence, "error": sentence}}
+    strict = sanitize_stored_error_tree(stored, strict_error_keys=True)
+    assert strict["PROMOTION"]["reason"] == sentence and strict["PROMOTION"]["note"] == sentence
+    assert strict["PROMOTION"]["error"] != sentence and "withheld" in strict["PROMOTION"]["error"]
+    assert sanitize_stored_error_tree(stored) == stored
+
+
+def test_job_to_dict_withholds_a_bare_per_stage_error_and_keeps_the_row():
+    import uuid
+
+    reason = BARE_UNDER_ERROR_KEY[0]
+    now = datetime.utcnow()
+    job = RceDeliveryJob(
+        id=uuid.uuid4(), state=RceDeliveryJob.STATE_FAILED, stage="PROMOTION",
+        created_at=now, started_at=now, failed_at=now,
+        error_reason="PROMOTION did not complete: ValueError: declared delimiter not found",
+        stage_detail={"PROMOTION": {"error": reason, "completed": False}})
+    out = job.to_dict()
+    assert SECRET not in json.dumps(out, default=str)
+    assert out["error_reason"].endswith("ValueError: declared delimiter not found")
+    assert job.stage_detail["PROMOTION"]["error"] == reason
+
+
+class TestTheRecheckPath:
+    """`rechecks._process_batch` stored `f"{type(exc).__name__}: {exc}"` for an
+    entity whose lookup raised, and the job and item readers returned stored
+    text unmasked. Both now go through the same contract: the writer stores
+    `safe_exception_text`, and the readers mask what older rows hold."""
+
+    def test_the_writer_stores_only_what_the_write_rule_allows(self):
+        from app.tefca_registry.rce import rechecks
+
+        class _Driver(Exception):
+            pass
+
+        _Driver.__module__ = "asyncpg.exceptions"
+        text = rechecks.item_error_text(_Driver(f"duplicate key {SECRET}"))
+        assert SECRET not in text and text.startswith("_Driver")
+        assert rechecks.item_error_text(ValueError("no NPI on record")) == "ValueError: no NPI on record"
+        assert len(rechecks.item_error_text(ValueError("x" * 5000))) <= 500
+
+    def test_the_readers_mask_what_an_older_row_holds(self):
+        import uuid
+
+        from app.tefca_registry.rce import rechecks
+        from app.tefca_registry.rce.recheck_models import RceRecheckItem, RceRecheckJob
+
+        legacy = f"UniqueViolationError: duplicate key value {SECRET}"
+        job = RceRecheckJob(id=uuid.uuid4(), intake_id=uuid.uuid4(), state="FAILED",
+                            error_reason=f"PROMOTION: DataError: bad value {SECRET}")
+        assert SECRET not in json.dumps(rechecks.job_dto(job), default=str)
+        assert job.error_reason.endswith(SECRET), "the stored row is unchanged"
+
+        controlled = RceRecheckJob(id=uuid.uuid4(), intake_id=uuid.uuid4(), state="FAILED",
+                                   error_reason="attempts exhausted (3); source still unavailable")
+        assert rechecks.job_dto(controlled)["error_reason"] == controlled.error_reason
+
+        item = RceRecheckItem(job_id=job.id, entity_id=uuid.uuid4(), entity_ref="SYNTHETIC-1",
+                              state="ERROR", detail={"error": legacy})
+        shown = rechecks.item_dto(item)
+        assert SECRET not in json.dumps(shown, default=str)
+        assert shown["detail"]["error"].startswith("UniqueViolationError")
+        assert item.detail == {"error": legacy}
+
+        sentence = "pinned PPEF snapshot 2026-10 no longer exists; nothing was looked up"
+        kept = RceRecheckItem(job_id=job.id, entity_id=uuid.uuid4(), entity_ref="SYNTHETIC-2",
+                              state="ERROR", detail={"error": sentence})
+        assert rechecks.item_dto(kept)["detail"]["error"] == sentence
+
+
+# ── 2026-11-14, third pass (review of f396b4c) ───────────────────────────────
+
+def test_the_dashboard_stage_checklist_masks_per_stage_errors_too():
+    """`delivery_dashboard._stages` read the raw `stage_detail` and copied its
+    values into a viewer-readable response, beside the masked `to_dict()`."""
+    reason = BARE_UNDER_ERROR_KEY[0]
+    stored = {"PROMOTION": {"error": reason, "completed": False},
+              "QUALITY": {"completed": True, "records": 2}}
+    job = type("Job", (), {"state": "FAILED", "stage": "PROMOTION", "error_reason": reason,
+                           "stage_detail": stored})()
+    before = json.dumps(stored, sort_keys=True)
+    out = dash._stages(job, None, {})
+    assert SECRET not in json.dumps(out, default=str), out
+    assert out["PROMOTION"]["state"] == "FAILED" and "withheld" in out["PROMOTION"]["error"]
+    assert out["QUALITY"]["state"] == "COMPLETE" and out["QUALITY"]["records"] == 2
+    assert json.dumps(stored, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("token", [
+    SECRET,                              # one identifier-shaped token is not a code
+    "SYNTHETICORGANISATIONNAME",
+    "synthetic_delivered_value",
+    "1234567893x",
+    "Synthetic.Value-With.Dots",
+])
+def test_a_single_token_under_an_error_key_is_not_trusted_as_a_code(token):
+    out = sanitize_stored_error_tree({"PROMOTION": {"error": token}}, strict_error_keys=True)
+    assert token not in json.dumps(out), out
+
+
+@pytest.mark.parametrize("code", [
+    "TimeoutError", "ConnectTimeout", "CancelledError", "KeyError", "IntakeError",
+    "NotADelimitedFile", "LineCountMismatch", "RuntimeException",
+    "worker_stopped_without_reporting",
+])
+def test_an_exception_class_name_or_a_known_token_under_an_error_key_is_a_code(code):
+    stored = {"readiness": {"usps": {"status": "unknown", "error": code}}}
+    assert sanitize_stored_error_tree(stored, strict_error_keys=True) == stored
+
+
+class TestLegacyRecheckItemErrors:
+    """The old recheck writer stored "{ClassName}: {message}" with no stage in
+    front. A class name that is not CamelCase ("gaierror", "_Private", "error")
+    was not recognised by the general rule and its message was returned."""
+
+    @pytest.mark.parametrize("stored", [
+        f"gaierror: {SECRET}",
+        f"_RetryableProviderError: upstream said {SECRET}",
+        f"error: [Errno 111] {SECRET}",
+        f"OSError: {SECRET}",
+        f"timeout: {SECRET}",
+    ])
+    def test_any_leading_class_name_loses_its_message(self, stored):
+        import uuid
+
+        from app.tefca_registry.rce import rechecks
+        from app.tefca_registry.rce.recheck_models import RceRecheckItem
+
+        item = RceRecheckItem(job_id=uuid.uuid4(), entity_id=uuid.uuid4(),
+                              entity_ref="SYNTHETIC-3", state="ERROR", detail={"error": stored})
+        shown = rechecks.item_dto(item)["detail"]["error"]
+        assert SECRET not in shown and shown.startswith(stored.split(":")[0]), shown
+        assert item.detail == {"error": stored}
+
+    @pytest.mark.parametrize("stored", [
+        "ValueError: no NPI on record",
+        "LookupError: entity not found",
+        "pinned PPEF snapshot 2026-10 no longer exists; nothing was looked up",
+        "RuntimeError (message withheld from evidence; see the server log for correlation id abc)",
+    ])
+    def test_controlled_messages_on_that_path_stay_readable(self, stored):
+        import uuid
+
+        from app.tefca_registry.rce import rechecks
+        from app.tefca_registry.rce.recheck_models import RceRecheckItem
+
+        item = RceRecheckItem(job_id=uuid.uuid4(), entity_id=uuid.uuid4(),
+                              entity_ref="SYNTHETIC-4", state="ERROR",
+                              detail={"error": stored, "note": "kept"})
+        assert rechecks.item_dto(item)["detail"] == {"error": stored, "note": "kept"}
+
+
+# ── 2026-11-14, fourth pass (review of cfdfba3) ──────────────────────────────
+#
+# Under an error key nothing stored beside the text says which exception was
+# raised. A legacy `str(exc)` can itself begin "ValueError: ...", so a class
+# name in FRONT of the message is not provenance there. The message is
+# withheld for every class; the class name, the withheld form and bare codes
+# are what remains. The job's `error_reason` (whose class always came from
+# `type(exc).__name__`) and a stage event's `failure_reason` (which has
+# `failure_class` beside it) still carry a domain message.
+
+PREFIXED_UNDER_ERROR_KEY = [
+    f"ValueError: {SECRET}",
+    f"IntakeError: row 3 holds {SECRET}",
+    f"PROMOTION: ValueError: {SECRET}",
+    f"KeyError: '{SECRET}'",
+]
+
+
+@pytest.mark.parametrize("reason", PREFIXED_UNDER_ERROR_KEY)
+def test_a_class_name_in_front_is_not_provenance_under_an_error_key(reason):
+    out = sanitize_stored_error_tree({"PROMOTION": {"error": reason}}, strict_error_keys=True)
+    shown = out["PROMOTION"]["error"]
+    assert SECRET not in shown and "withheld" in shown, shown
+    assert sanitize_stored_error_tree(out, strict_error_keys=True) == out
+    # The same text as a job's error_reason keeps its message: there the class
+    # in front was written from type(exc).__name__ by every runner.
+    if not reason.startswith("KeyError"):
+        assert sanitize_stored_error(reason) == reason
+
+
+@pytest.fixture
+async def stored_failed_job(rolled_back_db):  # noqa: F811
+    """A persisted FAILED job whose stage_detail holds legacy per-stage errors."""
+    db = rolled_back_db
+    intake_id, job = await seed_intake(db, make_rows(2))
+    stored = {"PROMOTION": {"error": f"ValueError: {SECRET}", "completed": False},
+              "CURATION": {"error": f"invalid input syntax for type uuid: \"{SECRET}\""},
+              "QUALITY": {"completed": True, "records": 2},
+              "RECONCILIATION": {"snapshot_error": SECRET}}
+    job.state = RceDeliveryJob.STATE_FAILED
+    job.active_marker = None
+    job.failed_at = datetime.utcnow()
+    job.error_reason = "PROMOTION did not complete: ValueError: declared delimiter not found"
+    job.stage_detail = stored
+    await db.commit()
+    jobs.reset_list_status_cache()
+    return db, intake_id, job, json.loads(json.dumps(stored))
+
+
+@pytest.mark.regression
+@pytest.mark.parametrize("role", ["viewer", "admin"])
+async def test_a_persisted_job_is_masked_through_every_response_and_not_rewritten(
+        stored_failed_job, role):
+    from app.tefca_registry.rce.delivery_dashboard import delivery_dashboard
+
+    db, intake_id, job, stored = stored_failed_job
+    one = await routes.get_delivery_job(str(job.id), db=db, user=_User(role))
+    assert SECRET not in json.dumps(one, default=str)
+    listing = await routes.list_delivery_jobs(limit=50, offset=0, state="FAILED", db=db,
+                                              user=_User(role))
+    assert str(job.id) in {i["job_id"] for i in listing["items"]}
+    assert SECRET not in json.dumps(listing, default=str)
+    assert SECRET not in json.dumps(await jobs.status_for_job(db, job), default=str)
+
+    # The FULL dashboard response, not only the stage checklist.
+    dashboard = await delivery_dashboard(db, intake_id)
+    text = json.dumps(dashboard, default=str)
+    assert SECRET not in text, text[:400]
+    assert "declared delimiter not found" in text, "the job's own reason is still shown"
+
+    reloaded = (await db.execute(
+        select(RceDeliveryJob).where(RceDeliveryJob.id == job.id)
+        .execution_options(populate_existing=True))).scalar_one()
+    assert reloaded.stage_detail == stored, "the stored evidence row is unchanged"
+
+
+# ── 2026-11-14, fifth pass: the writer's mark is the provenance ──────────────
+#
+# Withholding every class-prefixed message under an error key (fourth pass)
+# also hid what the CURRENT runner writes on purpose - the true reason of a
+# domain refusal, e.g. "SnapshotRefused: ... not 1:1" on the MATCHING event,
+# which an existing test requires. The runner now stores, beside every
+# per-stage error it writes, the mark of the function that produced it. A
+# message is shown only where that mark is present.
+
+def test_a_marked_per_stage_error_keeps_its_domain_message():
+    from app.tefca_registry.rce import stage_events
+
+    assert stage_events.ERROR_WRITER == lc.SAFE_ERROR_WRITER
+    marked = {"MATCHING": {"snapshot": {
+        "completed": False, "error": "SnapshotRefused: identifiers are not 1:1",
+        "error_writer": lc.SAFE_ERROR_WRITER}},
+        "RECONCILIATION": {"snapshot_error": "ValueError: totals do not close",
+                           "snapshot_error_writer": lc.SAFE_ERROR_WRITER}}
+    assert sanitize_stored_error_tree(marked, strict_error_keys=True) == marked
+
+
+@pytest.mark.parametrize("mark", [None, "", "safe_exception_text/0", "something else", 1, True])
+def test_without_the_exact_mark_the_message_is_withheld(mark):
+    stored = {"PROMOTION": {"error": f"ValueError: {SECRET}", "error_writer": mark}}
+    shown = sanitize_stored_error_tree(stored, strict_error_keys=True)["PROMOTION"]["error"]
+    assert SECRET not in shown and shown.startswith("ValueError") and "withheld" in shown
+
+
+def test_the_mark_does_not_switch_the_general_rule_off():
+    """Marked or not, driver text is still masked by the contract itself."""
+    stored = {"PROMOTION": {
+        "error": f"PROMOTION: (sqlalchemy.exc.Error) <class 'asyncpg.X'>: {SECRET} [SQL: x]",
+        "error_writer": lc.SAFE_ERROR_WRITER}}
+    assert SECRET not in json.dumps(sanitize_stored_error_tree(stored, strict_error_keys=True))
+
+
+def test_a_mark_vouches_only_for_its_own_key():
+    stored = {"RECONCILIATION": {"error": f"ValueError: {SECRET}",
+                                 "snapshot_error": "ValueError: totals do not close",
+                                 "snapshot_error_writer": lc.SAFE_ERROR_WRITER}}
+    shown = sanitize_stored_error_tree(stored, strict_error_keys=True)["RECONCILIATION"]
+    assert SECRET not in shown["error"]
+    assert shown["snapshot_error"] == "ValueError: totals do not close"
+
+
+def test_every_per_stage_error_the_runner_writes_carries_the_mark():
+    """Source check: wherever the runner stores `safe_failure_text` under an
+    error key, the mark is stored beside it. A writer added later without the
+    mark is caught here (its message would be withheld on read)."""
+    import inspect
+    import re as _re
+
+    from app.tefca_registry.rce import delivery_runner
+
+    source = inspect.getsource(delivery_runner)
+    writes = [m.start() for m in _re.finditer(
+        r'"(?:snapshot_)?error"\]? ?[:=] ?stage_events\.safe_failure_text\(', source)]
+    assert len(writes) >= 6, len(writes)
+    for at in writes:
+        window = source[at:at + 260]
+        assert "error_writer" in window and "ERROR_WRITER" in window, window[:120]

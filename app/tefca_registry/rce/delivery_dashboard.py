@@ -211,7 +211,12 @@ def _stages(job, recon, integrity) -> Dict[str, Dict[str, Any]]:
     PENDING for not yet reached, and HELD or FAILED where the stage said so.
     Nothing here is inferred from elapsed time.
     """
-    detail = (job.stage_detail or {}) if job else {}
+    # Masked exactly as `RceDeliveryJob.to_dict()` masks it: this checklist copies
+    # per-stage values into a viewer-readable response (review finding 2026-11-14).
+    from app.core.logging_config import sanitize_stored_error_tree
+
+    detail = (sanitize_stored_error_tree(job.stage_detail or {}, strict_error_keys=True)
+              if job else {})
     order = ["PARSING", "QUALITY", "CURATION", "PROMOTION", "VERIFICATION",
              "RECONCILIATION"]
     current = job.stage if job else None
