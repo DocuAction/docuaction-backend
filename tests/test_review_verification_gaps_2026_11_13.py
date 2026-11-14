@@ -362,3 +362,35 @@ def test_stored_error_contract_keeps_controlled_stage_reasons_readable(failure_c
         failure_class=failure_class, failure_reason=reason, detail={},
         correlation_id="synthetic", worker_id="synthetic", build_sha="test")
     assert event.to_dict()["failure_reason"] == reason
+
+
+@pytest.mark.asyncio
+async def test_a_marked_snapshot_error_stays_readable_in_the_reconciliation_event(rolled_back_db):
+    """The reconciliation event carries `snapshot_error` copied from the stage
+    detail. With the mark of its writer beside it, a controlled reason stays
+    readable through to_dict() and timeline(); without the mark the same text
+    keeps its class name only (review finding on #221 0c9f8dc)."""
+    from app.core.logging_config import SAFE_ERROR_WRITER
+    from app.tefca_registry.rce import stage_events
+    from rce_traceability_support import make_rows, seed_intake
+    db = rolled_back_db
+    intake, job = await seed_intake(db, make_rows(1, arc="9.99.777.992"))
+    reason = "ValueError: totals do not close"
+    marked = {"passed": False, "snapshot_error": reason,
+              "snapshot_error_writer": SAFE_ERROR_WRITER}
+    event = await stage_events.record_instant(
+        db, job.id, "RECONCILIATION", status="COMPLETED", intake_id=intake,
+        detail=copy.deepcopy(marked))
+    assert stage_events.ERROR_WRITER == SAFE_ERROR_WRITER
+    assert event.to_dict()["detail"]["snapshot_error"] == reason
+    shown = [e for e in await stage_events.timeline(db, job.id)
+             if e["stage"] == "RECONCILIATION"][0]["detail"]
+    assert shown["snapshot_error"] == reason
+    await db.refresh(event)
+    assert event.detail == marked
+
+    unmarked = await stage_events.record_instant(
+        db, job.id, "MATCHING", status="COMPLETED", intake_id=intake,
+        detail={"snapshot_error": "ValueError: SYNTHETIC_SECRET"})
+    assert "SYNTHETIC_SECRET" not in json.dumps(unmarked.to_dict())
+    assert unmarked.to_dict()["detail"]["snapshot_error"].startswith("ValueError")
