@@ -433,10 +433,15 @@ def _precedence(status: Optional[str]) -> int:
     return _PERSISTED_PRECEDENCE.get(status, len(_PERSISTED_PRECEDENCE))
 
 
-async def latest_persisted_exclusion_evidence(db, entity_id) -> Dict[str, Any]:
+async def latest_persisted_exclusion_evidence(db, entity_id, *, accept=None) -> Dict[str, Any]:
     """Most recent `tefca_dimension_evidence` row per source for the
     EXCLUSION_REVOCATION dimension. Rows are append-only, so the newest
-    `created_at` is the newest generation."""
+    `created_at` is the newest generation.
+
+    `accept(source, row)` restricts WHICH rows may be chosen, and it is applied
+    BEFORE the newest is taken: a record-specific review wants the newest row
+    keyed by an identifier that record carries, and a newer row keyed by
+    something else must not hide it (review finding 2026-11-14)."""
     from sqlalchemy import select
     from app.Tefca.models import TEFCADimensionEvidence as DE
 
@@ -447,6 +452,8 @@ async def latest_persisted_exclusion_evidence(db, entity_id) -> Dict[str, Any]:
         .order_by(DE.created_at.desc(), DE.generation_timestamp.desc()))).scalars().all()
     latest: Dict[str, Any] = {}
     for row in rows:
+        if accept is not None and not accept(row.source, row):
+            continue
         latest.setdefault(row.source, row)
     return latest
 
@@ -1012,8 +1019,10 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     # the stub stays NOT_CHECKED and the failure is logged, never "clear".
     persisted_used: List[dict] = []
     try:
-        persisted_rows = await latest_persisted_exclusion_evidence(db, entity.id)
-        if selected is not None:
+        persisted_rows = {}
+        if selected is None:
+            persisted_rows = await latest_persisted_exclusion_evidence(db, entity.id)
+        else:
             # An entity may have historical evidence for an older identifier.
             # Reuse only an explicit query identifier carried by THIS record.
             # NPI evidence: the record's own submitted NPI, exactly. NAME
@@ -1030,6 +1039,10 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
                     source, row.query_identifier, submitted_npi=submitted,
                     record_identity=record_identity, names_usable=names_usable)
 
+            # Filtered inside the read (newest ACCEPTED row per source), and
+            # again here so a reader that ignores `accept` cannot widen it.
+            persisted_rows = await latest_persisted_exclusion_evidence(
+                db, entity.id, accept=_is_this_records)
             persisted_rows = {source: row for source, row in persisted_rows.items()
                               if _is_this_records(source, row)}
         persisted_used = apply_persisted_exclusion_evidence(sources, persisted_rows)

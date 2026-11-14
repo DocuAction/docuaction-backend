@@ -151,7 +151,7 @@ def _patch_edges(monkeypatch, *, screen_status="not_found", persisted=None):
     async def none(*_a, **_k):
         return None
 
-    async def stored(_db, _entity_id):
+    async def stored(_db, _entity_id, **_kwargs):
         return dict(persisted or {})
 
     monkeypatch.setattr(rs, "_leie_org_name_screen", screen)
@@ -268,3 +268,48 @@ async def test_an_entity_level_review_is_unchanged(rolled_back_db, monkeypatch):
     out = await rs.run_review(db, ent)
     assert len(calls) == 1 and out["source_record_id"] is None
     assert out["verification"]["oig_leie"]["status"] == "not_found"
+
+
+async def test_an_older_row_for_this_record_is_not_hidden_by_a_newer_row_for_another_name(
+        rolled_back_db, monkeypatch):
+    """Review finding 2026-11-14: the newest row per source was chosen BEFORE the
+    record filter, so a newer row keyed by another identifier hid an older row
+    keyed by this record's, and the evidence went unused. Real evidence rows;
+    only the live LEIE edge is replaced (unreachable)."""
+    from datetime import timedelta
+
+    from app.Tefca.models import TEFCADimensionEvidence as DE
+
+    db = rolled_back_db
+    ent, rec, delivered = await _npi_less_record(db, "9.99.780.08", entity_name=str.lower)
+    base = datetime(2026, 11, 8, 12)
+    for offset, query in ((0, f"org={delivered}"), (1, f"org={delivered} SOME OTHER ORGANISATION")):
+        db.add(DE(entity_id=str(ent.id), evidence_dimension=rs.PERSISTED_EXCLUSION_DIMENSION,
+                  dimension_disposition="REVIEW", dimension_applicability="REQUIRED",
+                  source="OIG_LEIE", disposition="REVIEW", query_identifier=query,
+                  generation_timestamp=(base + timedelta(hours=offset)).isoformat(),
+                  created_at=base + timedelta(hours=offset)))
+    await db.flush()
+
+    calls = []
+
+    async def unreachable(_db, _entity_id, *args, **kwargs):
+        calls.append(kwargs.get("name", args[0] if args else None))
+        return {"status": rs.UNAVAILABLE, "matched_by": rs.MATCHED_BY_ORG_NAME,
+                "potential_hit": False, "reason": "synthetic outage", "label": "l",
+                "lookup_identifier": "org=<name>"}
+
+    async def none(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(rs, "_leie_org_name_screen", unreachable)
+    monkeypatch.setattr(rs, "_resolve_entity", none)
+    monkeypatch.setattr(rs, "_compare_addresses", none)
+    out = await rs.run_review(db, ent, source_record_id=rec.id)
+    used = (await _stored_review(db, out["review_id"])).verification_results["persisted_evidence"]
+    assert [u["source"] for u in used] == ["OIG_LEIE"], "this record's older row is used"
+    assert out["verification"]["oig_leie"]["status"] == rs.NOT_FOUND
+
+    # An entity-level read is unchanged: the newest row per source, whatever its key.
+    latest = await rs.latest_persisted_exclusion_evidence(db, ent.id)
+    assert latest["OIG_LEIE"].query_identifier.endswith("SOME OTHER ORGANISATION")
