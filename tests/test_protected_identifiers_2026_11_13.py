@@ -456,7 +456,7 @@ class TestALongSeparatorRunInsideALabelIsNotABypass:
     def test_the_run_is_unbounded_and_possessive(self):
         assert not hasattr(pi, "LABEL_SEPARATOR_MAX")
         assert pi._SEP.endswith("*+") and "{0," not in pi._SEP
-        assert pi.PROTECTED_IDENTIFIERS_VERSION == "1.2.0"
+        assert pi.PROTECTED_IDENTIFIERS_VERSION == "1.3.0"
 
     @pytest.mark.parametrize("count", RUNS)
     @pytest.mark.parametrize("sep", ["_", " ", "-", " _-", "\t", "\r\n", " \n\t_-\r"])
@@ -510,9 +510,9 @@ class TestALongSeparatorRunInsideALabelIsNotABypass:
         "syntax" + "_" * 5_000 + "id: 000000000",
         "routing" + "_" * 5_000 + "number: 000000000",
         "id" + "_" * 5_000 + "tax: 000000000",                # wrong order
-        # A padded label with the value far away: the label-to-value gap is
-        # still at most 16 characters (unchanged, stated limit).
-        "tax" + "_" * 5_000 + "id" + " " * 17 + "000000000",
+        # A padded label with WORDS between it and the nine digits is not that
+        # label's value. (Padding alone between them is no longer a way out:
+        # see TestPaddingBetweenALabelAndItsValue.)
         "tax" + "_" * 5_000 + "id was not supplied; the count was 000000000",
     ])
     def test_long_runs_without_a_label_or_far_from_the_value_are_not_flagged(self, text):
@@ -586,3 +586,70 @@ class TestALongSeparatorRunInsideALabelIsNotABypass:
         assert t_large < 5.0, f"{t_large:.2f} CPU s for {total:,} characters"
         # Linear work is 4x; quadratic would be 16x.
         assert t_large < 9 * t_small + 0.3, (t_small, t_large)
+
+
+# ── padding between the label and its value (2026-11-14) ─────────────────────
+#
+# Closing the padded-label bypass left its sibling open: the gap between a
+# label and its value allowed 16 characters in total, so 17 spaces (or tabs,
+# underscores, hyphens) after `tax_id` let a bare value through. Padding is
+# not content: a run of horizontal white space, underscores or hyphens of any
+# length is now free, and the limit of 16 counts only punctuation and joining
+# words.
+
+class TestPaddingBetweenALabelAndItsValue:
+    PADS = [" ", "\t", "_", "-", " \t", "_-", " _-\t"]
+    RUNS = [17, 18, 1_000, 100_000]
+
+    @pytest.mark.parametrize("pad", PADS)
+    @pytest.mark.parametrize("count", RUNS)
+    def test_padding_of_any_length_does_not_hide_the_value(self, pad, count):
+        run = (pad * count)[:count]
+        for text in (f"tax_id{run}{SYN_EIN_BARE}",
+                     f"ORG_TAX_ID:{run}{SYN_EIN_BARE} for SYNTHETIC ORG",
+                     f'"ein"{run}:{run}"{SYN_EIN_BARE}"',
+                     f"provider ein is{run}{SYN_EIN_BARE}"):
+            found = pi.find_in_text(text)
+            assert found, (pad, count, text[:30])
+            redacted = pi.redact_text(text)
+            assert SYN_EIN_BARE not in redacted
+            assert redacted == text.replace(SYN_EIN_BARE, redacted[text.index(SYN_EIN_BARE):
+                                            len(redacted) - (len(text) - text.index(SYN_EIN_BARE)
+                                                             - len(SYN_EIN_BARE))])
+            assert pi.redact_text(redacted) == redacted
+            with pytest.raises(Exception):
+                pi.assert_safe_for_ai(text)
+
+    def test_the_limit_still_counts_punctuation_and_joining_words(self):
+        """Padding is free; seventeen punctuation marks are still not a label's value."""
+        assert pi.find_in_text("tax_id" + ":" * 16 + SYN_EIN_BARE)
+        assert not pi.find_in_text("tax_id" + ":" * 17 + SYN_EIN_BARE)
+        assert not pi.find_in_text("tax_id" + ": " * 17 + SYN_EIN_BARE)
+        assert pi.find_in_text("tax_id" + (":" + " " * 500) * 16 + SYN_EIN_BARE)
+
+    def test_a_word_between_is_still_not_padding(self):
+        assert not pi.find_in_text(f"tax_id   belongs to someone else   {SYN_EIN_BARE}")
+        assert not pi.find_in_text(f"tax_id {' ' * 500} see invoice {SYN_EIN_BARE}")
+
+    def test_a_line_break_between_label_and_value_is_treated_as_before(self):
+        """Unchanged by this fix and pinned so a later change is deliberate: the
+        gap does not cross a line feed."""
+        before = bool(pi.find_in_text(f"tax_id\n{SYN_EIN_BARE}"))
+        assert before is False
+        assert bool(pi.find_in_text(f"tax_id{' ' * 500}\n{SYN_EIN_BARE}")) is False
+
+    def test_padding_heavy_text_stays_linear(self):
+        import time
+
+        hostile = [
+            "tax_id" + " " * 400_000 + "x",
+            ("tax_id" + " " * 50 + ":") * 8_000,
+            ("tax id " + "-" * 40) * 10_000 + "z",
+            "tax_id" + (":" + "_" * 20_000) * 17 + SYN_EIN_BARE,
+            " " * 400_000 + "tax_id" + "\t" * 400_000,
+        ]
+        started = time.process_time()
+        for text in hostile:
+            pi.find_in_text(text)
+            pi.redact_text(text)
+        assert time.process_time() - started < 5.0

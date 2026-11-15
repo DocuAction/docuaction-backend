@@ -50,7 +50,7 @@ from typing import Any, Iterable, List
 
 from app.Tefca.identifier_boundary import GOVERNMENT_RESTRICTED
 
-PROTECTED_IDENTIFIERS_VERSION = "1.2.0"
+PROTECTED_IDENTIFIERS_VERSION = "1.3.0"
 
 #: What replaces a protected value. Deliberately not a mask of the value: a
 #: partial tax identifier is still part of a tax identifier.
@@ -91,8 +91,8 @@ _SPLIT = re.compile(r"[^A-Za-z0-9]+")
 #: a run fails at once, and each run is read by the few alternatives of the
 #: one label start in front of it. Two timing tests hold this.
 #:
-#: STILL A STATED LIMIT, and unchanged: the gap between a label and its VALUE
-#: (`_GAP`) is at most 16 characters of punctuation and joining words.
+#: The gap between a label and its VALUE (`_GAP`) allows at most 16 punctuation
+#: marks and joining words; padding between them is free (see `_PAD`).
 _SEP = r"[\s_\-]*+"
 _SUFFIX = "(?:" + "|".join(sorted((re.escape(x) for x in _ID_SUFFIXES), key=len, reverse=True)) + ")"
 _SINGLE = "(?:" + "|".join(sorted((re.escape(x) for x in _SINGLE_TOKENS), key=len, reverse=True)) + ")"
@@ -105,7 +105,18 @@ _LABEL = (
     + r")(?![A-Za-z])")
 #: What may stand between a label and its value: punctuation of any
 #: serialization (quotes, colon, equals, brackets, spaces) and a joining word.
-_GAP = r"(?:[^A-Za-z0-9\n]|\b(?:is|no|number|num|value|val)\b){0,16}"
+#: PADDING IS NOT CONTENT (2026-11-14): a run of horizontal white space,
+#: underscores or hyphens of any length is free (`_PAD`, possessive, so it is
+#: read once and never given back), and the limit of 16 counts only the
+#: punctuation marks and joining words between such runs. Before, the 16
+#: counted every character, so seventeen spaces after `tax_id` hid the value.
+#: The gap still does not cross a line break.
+_PAD = r"(?:[^\S\r\n]|[_\-])*+"
+#: A joining word is bounded by anything that is not a letter or digit - an
+#: underscore beside it is padding, not part of the word (`\b` would say no).
+_JOINING = r"(?<![A-Za-z0-9])(?:is|no|number|num|value|val)(?![A-Za-z0-9])"
+_GAP = (rf"{_PAD}(?:(?:[^A-Za-z0-9\s_\-]|{_JOINING}){_PAD})"
+        r"{0,16}")
 #: Nine digits as an EIN (NN-NNNNNNN, NN NNNNNNN, NNNNNNNNN) or in the
 #: three-two-four grouping an ITIN is written in.
 _VALUE = r"(?:\d{2}[-\s]?\d{7}|\d{3}-\d{2}-\d{4})(?![\d\-])"
