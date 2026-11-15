@@ -102,10 +102,12 @@ bound is stated in every result (`rows_sampled`, `tail_checked`).
     keys them. A required column delivered with a space around its name was
     matched after trimming and the file was CLEAR; it is now REF-SCH-004
     (present only under another spelling), which is what the importer sees.
-  * NOT changed, pinned by a test: a byte-order mark. The mark is removed
-    before the first column name is matched here (REF-SCH-010, informational,
-    as decided 2026-10-04), while the importer opens the file as utf-8 and
-    keeps the mark in that name. Which side changes is an owner decision.
+  * a byte-order mark (changed 2026-11-14, fifth pass, on the IMPORTER's side).
+    The mark is removed before the first column name is matched here
+    (REF-SCH-010, informational, as decided 2026-10-04). The importer opened
+    the file as utf-8, kept the mark in that name and rejected every row; it
+    now decodes with REFERENCE_FILE_ENCODING, the same as this gate, so the two
+    read a marked file identically. This gate's verdicts are unchanged.
   * consequences of the same change: a header longer than the window is read
     whole; a file larger than the window whose start is blank is no longer
     called empty; a field-count finding's `line` is always the physical line
@@ -159,6 +161,13 @@ REFERENCE_SCHEMAS: Dict[str, Dict[str, Any]] = {
 
 #: Why a strict read of the file stopped, in this module's own words (the csv
 #: module's message is classified, never passed on).
+#: How the bytes of a staged reference file become text, for THIS gate and for
+#: the importer alike (iqvia_import.iter_reference_rows uses this name). A
+#: UTF-8 byte-order mark at the very start of the file is not part of the
+#: first column name; a U+FEFF anywhere else is data. Nothing computed on the
+#: raw bytes (the sha256, the preserved original) is affected by it.
+REFERENCE_FILE_ENCODING = "utf-8-sig"
+
 READER_ENDS_IN_QUOTES = "ends_inside_quoted_field"
 READER_FIELD_TOO_LONG = "field_longer_than_reader_limit"
 READER_NOT_WELL_FORMED = "not_well_formed_csv"
@@ -240,7 +249,8 @@ def _read_as_records(path) -> Dict[str, Any]:
                 "wrong_first": wrong_first}
 
     with open_no_follow(path, "rb") as raw:
-        with io.TextIOWrapper(raw, encoding="utf-8-sig", errors="strict", newline="") as text:
+        with io.TextIOWrapper(raw, encoding=REFERENCE_FILE_ENCODING, errors="strict",
+                              newline="") as text:
             reader = csv.reader(text, strict=True)
             try:
                 for row in reader:

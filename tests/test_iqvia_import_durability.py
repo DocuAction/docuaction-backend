@@ -365,3 +365,93 @@ class TestReaperRequeuesOrFails:
         await db.refresh(job)
         assert job.state == um.IqviaImportJob.STATE_FAILED
         assert job.active_marker is None
+
+
+class TestAByteOrderMarkedFileImportsAndResumes:
+    """Fifth pass on #216 (2026-11-14). The reference preflight tolerates a
+    leading UTF-8 byte-order mark (REF-SCH-010, informational, decided
+    2026-10-04) and answered CLEAR, while the importer kept the mark in the
+    first column's name and rejected every row. The importer now decodes the
+    file as the preflight does. What is computed on the raw bytes - the
+    snapshot's sha256, which is also its duplicate key - is unchanged, and a
+    resumed import of a marked file stages each row exactly once."""
+
+    BOM = b"\xef\xbb\xbf"
+
+    def _marked(self, tmp_path, n, tag):
+        import hashlib
+
+        f = write_csv(tmp_path / f"bom-{tag}.csv", HCO_HEADER, [
+            [f"{SYN}-BOM-{tag}-{uuid.uuid4().hex[:6]}-{i}", "", "", f"{SYN} Bom Org {i}", "02101"]
+            for i in range(n)])
+        delivered = self.BOM + f.read_bytes()
+        f.write_bytes(delivered)
+        return f, delivered, hashlib.sha256(delivered).hexdigest()
+
+    async def test_every_row_is_staged_under_the_documented_column_name(self, db, tmp_path):
+        n = 5
+        f, delivered, sha = self._marked(tmp_path, n, "a")
+        summary = await ii.import_hco_csv(db, file_path=f, label=f"{SYN}-bom-a-{uuid.uuid4().hex[:8]}",
+                                          created_by=SYN)
+        _created_snapshot_ids.append(summary.snapshot_id)
+        assert (summary.rows_read, summary.rows_rejected, summary.rows_staged) == (n, 0, n)
+        assert summary.completed and summary.file_sha256 == sha
+
+        db.expire_all()
+        snapshot = await db.get(sm.SourceSnapshot, summary.snapshot_id)
+        assert snapshot.sha256 == sha, "the snapshot identity is the hash of the delivered bytes"
+        assert snapshot.record_count == n
+        recorded = snapshot.metadata_["reference_preflight"]
+        assert recorded["gate"] == "CLEAR"
+        assert "REF-SCH-010" in [x["code"] for x in recorded["findings"]]
+        rows = (await db.execute(select(sm.IqviaHcoObservation).where(
+            sm.IqviaHcoObservation.source_snapshot_id == summary.snapshot_id))).scalars().all()
+        assert len(rows) == n
+        for row in rows:
+            assert row.source_record_key == row.payload["HCO_HCE_ID"]
+            assert not [k for k in row.payload if k.startswith("﻿")]
+        assert f.read_bytes() == delivered, "the staged file is not rewritten"
+
+        # Asked again with the same snapshot: the same file, nothing new, nothing lost.
+        again = await ii.import_hco_csv(db, file_path=f, label="unused", created_by=SYN,
+                                        snapshot_id=summary.snapshot_id)
+        assert (again.rows_read, again.rows_staged, again.rows_already_staged) == (n, 0, n)
+
+    async def test_an_import_interrupted_midway_resumes_without_a_duplicate_or_a_gap(
+            self, db, tmp_path, monkeypatch):
+        n = 6
+        f, _delivered, sha = self._marked(tmp_path, n, "b")
+        real_stage_rows = ii._stage_rows
+        calls = {"n": 0}
+
+        async def second_chunk_fails(db_, *, snapshot_id, model, rows):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("simulated worker crash after the first chunk")
+            return await real_stage_rows(db_, snapshot_id=snapshot_id, model=model, rows=rows)
+
+        monkeypatch.setattr(ii, "_stage_rows", second_chunk_fails)
+        label = f"{SYN}-bom-b-{uuid.uuid4().hex[:8]}"
+        with pytest.raises(RuntimeError):
+            await ii.import_hco_csv(db, file_path=f, label=label, created_by=SYN, chunk_size=2)
+        await db.rollback()
+        snapshot = (await db.execute(select(sm.SourceSnapshot).where(
+            sm.SourceSnapshot.snapshot_label == label))).scalar_one()
+        _created_snapshot_ids.append(snapshot.id)
+        assert snapshot.sha256 == sha
+
+        async def staged():
+            return (await db.execute(
+                select(func.count()).select_from(sm.IqviaHcoObservation)
+                .where(sm.IqviaHcoObservation.source_snapshot_id == snapshot.id))).scalar()
+
+        assert await staged() == 2, "the first chunk was committed before the crash"
+
+        resumed = await ii.import_hco_csv(db, file_path=f, label="unused", created_by=SYN,
+                                          chunk_size=2, snapshot_id=snapshot.id)
+        assert (resumed.rows_read, resumed.rows_rejected) == (n, 0)
+        assert (resumed.rows_already_staged, resumed.rows_staged) == (2, n - 2)
+        assert await staged() == n
+        keys = (await db.execute(select(sm.IqviaHcoObservation.source_record_key).where(
+            sm.IqviaHcoObservation.source_snapshot_id == snapshot.id))).scalars().all()
+        assert len(set(keys)) == n

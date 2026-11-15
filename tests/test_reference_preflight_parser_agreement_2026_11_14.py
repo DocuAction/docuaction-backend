@@ -15,9 +15,9 @@ review; each is fixed here or pinned as it stands:
   e. PINNED - a field beyond the reader's limit: blocked here, and the
               importer's reader fails on the same file.
 
-The importer's reader is restated here exactly as iqvia_import opens the file
-(text mode, utf-8, newline="", csv.DictReader) and checked against the source,
-so the two cannot drift apart unnoticed.
+The importer's reader is the importer's own (`iqvia_import.iter_reference_rows`:
+text mode, the preflight's REFERENCE_FILE_ENCODING, newline="", csv.DictReader),
+called directly since the fifth pass, so the two cannot drift apart unnoticed.
 
 Pure: files in tmp_path, no database, no network. Synthetic values only.
 """
@@ -58,14 +58,22 @@ def _findings(result, code):
 
 
 def _importer_reads(path) -> int:
-    """Read `path` exactly as the importer does; the number of records."""
-    with open(path, "r", encoding="utf-8", newline="") as fh:
-        return sum(1 for _ in csv.DictReader(fh))
+    """The number of records the importer's OWN reader yields for `path`
+    (fifth pass, 2026-11-14: `iqvia_import.iter_reference_rows`, no longer a
+    restatement of how the importer opens the file)."""
+    return sum(1 for _ in ii.iter_reference_rows(path))
 
 
-def test_the_importers_reader_is_restated_here_as_it_is_written():
+def test_the_importers_reader_is_what_these_tests_call():
+    """Updated in the fifth pass: the importer now decodes with the preflight's
+    REFERENCE_FILE_ENCODING (utf-8-sig) instead of utf-8, so a leading
+    byte-order mark is read the same way by both; everything else about the
+    reader - text mode, newline="", csv.DictReader, the process's own field
+    limit - is as before."""
     source = inspect.getsource(ii)
-    assert 'open_no_follow(path, "r", encoding="utf-8", newline="")' in source
+    assert ('open_no_follow(path, "r", encoding=REFERENCE_FILE_ENCODING, newline="")'
+            in source)
+    assert ii.REFERENCE_FILE_ENCODING == rp.REFERENCE_FILE_ENCODING == "utf-8-sig"
     assert "csv.DictReader(fh)" in source
     assert "field_size_limit" not in source, "the importer does not change the reader's limit"
 

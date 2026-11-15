@@ -199,11 +199,12 @@ def test_no_field_count_verdict_is_taken_from_the_sample():
 # ── the header as the importer's reader keys it ──────────────────────────────
 
 def _importer_first_key_and_value(path, column):
-    """Read `path` exactly as the importer does (utf-8, newline="", DictReader)."""
-    with open(path, "r", encoding="utf-8", newline="") as fh:
-        reader = csv.DictReader(fh)
-        row = next(reader)
-        return reader.fieldnames[0], row.get(column)
+    """Read `path` with the importer's OWN reader (`iter_reference_rows`), not a
+    copy of how it used to open the file."""
+    from app.tefca_registry.rce import iqvia_import as ii
+
+    _line, row = next(iter(ii.iter_reference_rows(path)))
+    return next(iter(row)), row.get(column)
 
 
 @pytest.mark.parametrize("delivered", [b" HCO_HCE_ID", b"HCO_HCE_ID ", b"\tHCO_HCE_ID"])
@@ -227,12 +228,13 @@ def test_an_exactly_named_header_is_still_clear(tmp_path):
         "HCO_HCE_ID", "ORG_NPI", "ORG_CCN_ID"]
 
 
-def test_pinned_a_byte_order_mark_is_clear_here_and_kept_in_the_name_by_the_importer(tmp_path):
-    """NOT changed in this pass; pinned so a change is deliberate. The gate
-    removes the mark before matching the first column (REF-SCH-010,
-    informational, decided 2026-10-04). The importer opens the file as utf-8,
-    keeps the mark in the first column's name, and so finds no HCO_HCE_ID in
-    any row. The two disagree; which one changes is an owner decision."""
+def test_a_byte_order_mark_is_clear_here_and_read_the_same_way_by_the_importer(tmp_path):
+    """Replaces the fourth-pass test that PINNED a disagreement (the importer
+    kept the mark in the first column's name and found no HCO_HCE_ID). Fifth
+    pass, 2026-11-14: the gate's answer is unchanged (REF-SCH-010,
+    informational, decided 2026-10-04) and the importer now decodes the file
+    the same way. The full agreement cases are in
+    tests/test_reference_preflight_bom_agreement_2026_11_14.py."""
     path = _write(tmp_path, "bom.csv",
                   b"\xef\xbb\xbfHCO_HCE_ID,ORG_NPI,ORG_CCN_ID\nA,1,2\n")
     result = rp.preflight_reference_file(path, HCO)
@@ -240,4 +242,4 @@ def test_pinned_a_byte_order_mark_is_clear_here_and_kept_in_the_name_by_the_impo
     assert [f["disposition"] for f in result["findings"] if f["code"] == "REF-SCH-010"] == [
         pm.DISP_INFORMATIONAL]
     first_key, value = _importer_first_key_and_value(path, "HCO_HCE_ID")
-    assert first_key == "\ufeffHCO_HCE_ID" and value is None
+    assert first_key == "HCO_HCE_ID" and value == "A"
