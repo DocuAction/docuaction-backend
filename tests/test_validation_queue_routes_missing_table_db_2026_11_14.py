@@ -102,6 +102,23 @@ class _Site:
             await conn.run_sync(vr.ValidationItem.__table__.create)
 
 
+def _sqlalchemy_url(parts, database_name):
+    """A URL OBJECT, never an interpolated string: a decoded password such as 'p@ss:w/rd' must stay a password
+    (CodeRabbit Major on #233, same defect as #225)."""
+    from sqlalchemy.engine import URL
+    return URL.create("postgresql+asyncpg", username=parts["user"] or None, password=parts["password"] or None,
+                      host=parts["host"], port=parts["port"], database=database_name)
+
+
+def test_credentials_with_url_special_characters_survive_the_site_fixture_url():
+    from sqlalchemy.engine import make_url
+    parts = {"user": "u@x", "password": "p@ss:w/rd#?%40", "host": "127.0.0.1", "port": 5432}
+    built = _sqlalchemy_url(parts, "vqroute_x")
+    assert (built.username, built.password, built.host, built.port, built.database) == (
+        "u@x", "p@ss:w/rd#?%40", "127.0.0.1", 5432, "vqroute_x")
+    assert make_url(built.render_as_string(hide_password=False)).password == "p@ss:w/rd#?%40"
+
+
 @pytest.fixture
 async def site(db_required, monkeypatch):
     import asyncpg
@@ -117,9 +134,7 @@ async def site(db_required, monkeypatch):
         await admin.execute(f'CREATE DATABASE "{name}"')
     finally:
         await admin.close()
-    url = (f"postgresql+asyncpg://{parts['user']}:{parts['password']}@{parts['host']}:"
-           f"{parts['port']}/{name}")
-    engine = create_async_engine(url, poolclass=NullPool)
+    engine = create_async_engine(_sqlalchemy_url(parts, name), poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.run_sync(User.__table__.create)          # so a caller can be authenticated
 
