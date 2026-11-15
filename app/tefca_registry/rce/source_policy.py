@@ -167,6 +167,18 @@ def apply_source_policy(bucket: str, rule_code: Optional[str],
         if not _applies(policy, record_facts):
             continue
         state = _state_of(sources.get(policy["source"]))
+        if policy["source"] == "sam_gov" and state not in ADVERSE_STATES:
+            # M-1 (approved 2026-11-07): attributable SAM screening is required for B1 and "the authorized
+            # official extract method is accepted, subject to source edition, scope and date limitations;
+            # candidates remain separate from confirmed exclusions". So a completed, dated EXTRACT screen
+            # satisfies the requirement when the live API did not answer - it is kept as its OWN state
+            # (`sam_extract`), never rewritten into an API success. A pending extract candidate is a review
+            # reason, never a pass.
+            extract = _state_of(sources.get("sam_extract"))
+            if extract in PENDING_REVIEW_STATES:
+                return "B3", None, "EXCLUSION_POSSIBLE_MATCH_PENDING", policy
+            if state not in ACCEPTABLE_STATES and extract in ACCEPTABLE_STATES:
+                continue
         if state in ACCEPTABLE_STATES:
             continue
         if state in PENDING_REVIEW_STATES:
