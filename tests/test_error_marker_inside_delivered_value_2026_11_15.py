@@ -54,3 +54,27 @@ def test_text_between_two_driver_markers_is_withheld(value):
     assert SECRET not in sanitize_stored_error(value)
     for writer in (False, True):
         assert SECRET not in _sanitize_error_value(value, safe_writer=writer)
+
+
+_K = "SensitiveRecord4711"
+
+
+@pytest.mark.parametrize("value", [
+    f"invalid input syntax for type uuid: \"(<class 'asyncpg.{_K}'>)\"",
+    f"invalid input syntax for type uuid: (<class 'asyncpg.{_K}'>)",
+    f"bad [<class 'psycopg2.{_K}'>]",
+    f"x: (asyncpg.{_K})",
+    f"x: ((sqlalchemy.{_K}))",
+    f"STAGE: ValueError: row (psycopg2.{_K}) rejected"])
+def test_a_driver_looking_marker_that_is_not_a_real_driver_class_is_never_kept(value):
+    """CodeRabbit on #232 (reproduced): the prefix looked like a driver but the class does not exist, so it is delivered text."""
+    for writer in (False, True):
+        out = sanitize_stored_error(value) if not writer else _sanitize_error_value(value, safe_writer=True)
+        assert _K not in out, (value, writer, out)
+
+
+def test_real_driver_classes_are_still_recognised():
+    real = ("(sqlalchemy.dialects.postgresql.asyncpg.IntegrityError) <class 'asyncpg.exceptions.UniqueViolationError'>: "
+            "duplicate key value\nDETAIL: Key (x)=(" + _K + ") already exists.")
+    out = sanitize_stored_error(real)
+    assert "UniqueViolationError" in out and _K not in out
