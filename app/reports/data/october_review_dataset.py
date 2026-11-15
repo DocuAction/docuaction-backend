@@ -217,9 +217,11 @@ def _reviewed_cell(fact: Dict[str, Any], status: str) -> str:
     reporting a disposition never releases a hold."""
     text = _s(fact.get("reviewed_disposition"))
     if status.upper() == STATUS_HELD:
-        notice = "record remains HELD; the hold is not released by this report"
-        # No determination / awaiting QA / returned: a hold-only notice, never an approval or a date.
-        return f"{text} ({notice})" if text else f"No approved disposition ({notice})"
+        notice = "record remains HELD, is reported once in B4 and its hold is not released by this report"
+        # No determination / awaiting QA / returned: a hold-only notice, never an approval or a date. An approved
+        # determination is described as what it is - never as the record's overall classification, which stays HELD.
+        return (f"QA-approved determination on the automated classification: {text[:1].lower() + text[1:]} ({notice})"
+                if text else f"No approved disposition ({notice})")
     return text
 
 
