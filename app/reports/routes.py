@@ -2153,8 +2153,10 @@ async def export_record_review(
     identity = job_identity(
         intake_id=str(intake_uuid),
         workbook_version=f"dataset {ds.DATASET_VERSION} / loader {loader.LOADER_VERSION}",
+        # The requester is part of the identity: the status route only lets the requester (or a supervising
+        # role) read a job, so a shared in-flight job would be returned to someone who then gets a 404.
         engine_version=(f"{request.format}|run={assessment.run_id}|"
-                        f"cutoff={cutoff.isoformat()}"),
+                        f"cutoff={cutoff.isoformat()}|by={generated_by.strip().lower()}"),
         classification=classification, export_type=export_type)
     before = await active_job(db, identity)
     try:

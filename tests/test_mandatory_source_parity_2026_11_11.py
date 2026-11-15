@@ -189,7 +189,7 @@ def _wire_run_review(monkeypatch, policies, sources, base_bucket="B1"):
     async def _noop(*_a, **_k):
         return None
 
-    async def _sources(_db, _eid):
+    async def _sources(_db, _eid, **_kw):
         return {k: dict(v) for k, v in sources.items()}
 
     async def _persisted(_db, _eid):

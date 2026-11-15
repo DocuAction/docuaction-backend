@@ -527,9 +527,13 @@ class BucketClassifier:
         raw = sources.get(source)
         if raw is None:
             return NOT_CHECKED
-        if isinstance(raw, str):
-            return raw
-        return raw.get("status") or NOT_CHECKED
+        if isinstance(raw, dict):
+            raw = raw.get("status")
+        if not isinstance(raw, str) or not raw.strip():
+            return NOT_CHECKED
+        # The source policy normalises (strip + lower-case) before it treats an answer as adverse; the
+        # classifier must compare the SAME value or ' Excluded ' misses the exclusion rule and classifies B1.
+        return raw.strip().lower()
 
     def _match_source(self, results: dict, cond: dict) -> bool:
         source = cond["source"]
