@@ -507,6 +507,12 @@ async def complete_upload(upload_id: uuid.UUID, db: AsyncSession = Depends(get_d
     if session.snapshot_id is not None:
         # A concurrent complete won the lock first: same answer as a repeat.
         await db.rollback()
+        # `require_role` and this route share one request-scoped session, so the rollback expired the authenticated
+        # ORM user; reading `user.email` lazily in the recursive call would raise MissingGreenlet (HTTP 500).
+        from sqlalchemy import inspect as _sa_inspect
+        _state = _sa_inspect(user, raiseerr=False)
+        if _state is not None and _state.persistent:
+            await db.refresh(user)
         return await complete_upload(upload_id, db, user)
     received = await jobs.received_chunk_indices(db, upload_id)
     missing = sorted(set(range(session.total_chunks)) - received)
