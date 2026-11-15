@@ -586,6 +586,27 @@ _BREAK_CHARS = r"\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
 _TOKEN = re.compile(rf"(?P<brk>\r\n|[{_BREAK_CHARS}])|(?P<gap>[^\S{_BREAK_CHARS}]+)|\S+")
 
 
+#: Glyphs wider than the 0.62 em average `PDF_CHAR_ADVANCE_EM` charges every character (DejaVu Sans: W about 0.99 em, M and
+#: @ about 0.86-1.0). A run of them wraps far sooner than the estimate, so a slice sized by the average could grow taller than a
+#: page (CodeRabbit Major on #232, reproduced: 400 "W" in Reasons = 40 estimated lines, ~66 real). Text whose average glyph
+#: weight reaches 1.15 (wide-glyph-heavy) is estimated with proportionally fewer characters per line; ordinary
+#: mixed text keeps the unchanged estimate.
+_WIDE_GLYPHS = frozenset("WMm@%&—…ÆŒ")
+_WIDE_WEIGHT, _WIDTH_TRIGGER = 1.6, 1.15
+
+
+def _width_adjusted_chars_per_line(text: str, chars_per_line: int) -> int:
+    total = weight = 0.0
+    for ch in text:
+        if ch.isspace():
+            continue
+        total += 1
+        weight += _WIDE_WEIGHT if ch in _WIDE_GLYPHS else 1.0
+    if not total or weight / total < _WIDTH_TRIGGER:
+        return chars_per_line
+    return max(4, int(chars_per_line / (weight / total)))
+
+
 def split_for_rows(text: str, chars_per_line: int, max_lines: int) -> List[str]:
     """`text` as consecutive slices, each estimated at no more than `max_lines`
     wrapped lines of `chars_per_line`. "".join(result) == text, always: a slice
@@ -597,6 +618,7 @@ def split_for_rows(text: str, chars_per_line: int, max_lines: int) -> List[str]:
     slice. A tab is charged `PDF_TAB_COLUMNS` columns, the most it can advance."""
     if not text:
         return [""]
+    chars_per_line = _width_adjusted_chars_per_line(text, chars_per_line)
     capacity = chars_per_line * max_lines
     slices: List[str] = []
     start = lines = col = 0
