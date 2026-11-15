@@ -92,7 +92,9 @@ async def mark_upload_complete(db, upload_id, *, snapshot_id) -> None:
     session = await db.get(IqviaUploadSession, upload_id)
     if session is None:
         return
-    session.status = IqviaUploadSession.STATUS_STAGING_QUEUED
+    # The worker may already have finished by the time linkage runs: never move a TERMINAL status back to STAGING_QUEUED.
+    if session.status not in (IqviaUploadSession.STATUS_STAGED, IqviaUploadSession.STATUS_FAILED):
+        session.status = IqviaUploadSession.STATUS_STAGING_QUEUED
     session.snapshot_id = snapshot_id
     await db.commit()
 
