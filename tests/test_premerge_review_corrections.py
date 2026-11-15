@@ -424,3 +424,50 @@ def test_startup_create_all_excludes_the_migration_owned_tables():
     assert not (captured["names"] & set(tm.MIGRATION_OWNED_TABLES))
     assert "rce_curated_records" in captured["names"]
     assert "rce_record_comments" not in captured["names"], "startup must not own the append-only comment store"
+
+
+async def test_no_request_time_create_all_can_create_a_migration_owned_table(monkeypatch):
+    """The validation module creates its own table on first use. That call must
+    go through the same exclusion as startup: an unguarded `create_all` there
+    would let the runtime role create (and own) rce_record_comments - and the
+    other append-only evidence tables - before the governed migration runs.
+    (Migration stop-point review of #212, 2026-11-14.)"""
+    import app.core.database as database
+    from app.api import validation_routes as vr
+    from app.core.database import Base
+    from app.tefca_registry.rce import traceability_models as tm
+
+    created = {}
+
+    class _Sync:
+        pass
+
+    def capture(self, bind=None, tables=None, **_kw):
+        created["names"] = ({t.name for t in tables} if tables is not None
+                            else set(self.tables))
+
+    monkeypatch.setattr(type(Base.metadata), "create_all", capture)
+
+    class _Conn:
+        async def run_sync(self, fn, *args):
+            fn(_Sync(), *args)
+
+    class _Begin:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Engine:
+        def begin(self):
+            return _Begin()
+
+    monkeypatch.setattr(database, "_get_engine", lambda: _Engine())
+    monkeypatch.setattr(vr, "_table_created", False)
+    await vr._ensure_table()
+    assert created, "the table-creation call did not run"
+    assert not (created["names"] & set(tm.MIGRATION_OWNED_TABLES)), \
+        sorted(created["names"] & set(tm.MIGRATION_OWNED_TABLES))
+    assert "rce_record_comments" not in created["names"]
+    assert vr.ValidationItem.__tablename__ in created["names"]     # its own table is still created

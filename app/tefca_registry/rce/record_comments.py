@@ -182,8 +182,17 @@ def _validate_entry(entry: Dict[str, Any], rec: Optional[Any], intake_uuid: uuid
     sha = _norm_str(src.get("file_sha256"))
     if not name or not _HEX64.match(sha):
         return {"problem": "source.file_name and a 64-hex source.file_sha256 are required"}
+    # Provenance contract (2026-11-14): the report attaches comment text only
+    # with file + sha256 + sheet + column. The same four are required HERE, so a
+    # comment the store accepts is always one the report can attribute. Rows
+    # stored before this rule are not rewritten; the report marks them.
+    sheet, column = src.get("sheet"), src.get("column")
+    if not all(isinstance(v, str) and v.strip() for v in (sheet, column)):
+        return {"problem": ("source.sheet and source.column are required (non-blank text): a "
+                            "comment must be traceable to the sheet and column it was read "
+                            "from; nothing was stored")}
     out["src"] = {"file_name": name, "file_sha256": sha.lower(),
-                  "sheet": src.get("sheet"), "column": src.get("column"),
+                  "sheet": sheet, "column": column,
                   "row": src.get("row")}
     if out["src"]["row"] is not None:
         try:

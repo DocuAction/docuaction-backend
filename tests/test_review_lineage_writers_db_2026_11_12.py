@@ -97,7 +97,7 @@ def _patch_bulk_gather(monkeypatch, entity_by_ref):
 
 def _patch_single_edges(monkeypatch):
     """Replace only the external probes of the single-record writer."""
-    async def sources(_db, _eid):
+    async def sources(_db, _eid, **_name_screen):
         return {"nppes": {"status": "verified", "label": "n"},
                 "oig_leie": {"status": "clear", "label": "l"},
                 "pecos": {"status": "verified", "label": "p"}}

@@ -343,3 +343,24 @@ def test_runner_and_status_route_share_one_content_type_table():
     from app.reports.engine.xlsx_engine import XLSX_CONTENT_TYPE
     assert set(RECORD_REVIEW_CONTENT_TYPES) == {"xlsx", "csv", "pdf"}
     assert RECORD_REVIEW_CONTENT_TYPES["xlsx"] == XLSX_CONTENT_TYPE == report_routes.XLSX_CONTENT_TYPE_LITERAL
+
+async def test_a_second_requester_never_receives_a_job_they_cannot_poll(rolled_back_db):
+    """CodeRabbit Major on #225: qalead B was handed qalead A's identical in-flight job and then got a 404 from
+    the status route. Active jobs are now per requester; the owner can poll, and so can a supervising role."""
+    from fastapi import HTTPException
+    db = rolled_back_db
+    intake_id, _run_row, _ = await _seed(db, arc="9.99.777.69")
+    A = SimpleNamespace(email="a-qalead@synthetic-test.docuaction.invalid", role="qalead")
+    B = SimpleNamespace(email="b-qalead@synthetic-test.docuaction.invalid", role="qalead")
+    PM = SimpleNamespace(email="pm@synthetic-test.docuaction.invalid", role="program_manager")
+    first = await report_routes.export_record_review(_req(intake_id, "csv"), db=db, user=A)
+    same_user_again = await report_routes.export_record_review(_req(intake_id, "csv"), db=db, user=A)
+    other = await report_routes.export_record_review(_req(intake_id, "csv"), db=db, user=B)
+    assert same_user_again["job_id"] == first["job_id"] and same_user_again["reused_existing_job"] is True
+    assert other["job_id"] != first["job_id"] and other["reused_existing_job"] is False
+    # B can poll the job B was handed; A's job is still not B's (404, no existence oracle)
+    assert (await report_routes.export_job_status(other["job_id"], db=db, user=B))["job_id"] == other["job_id"]
+    with pytest.raises(HTTPException) as exc:
+        await report_routes.export_job_status(first["job_id"], db=db, user=B)
+    assert exc.value.status_code == 404
+    assert (await report_routes.export_job_status(first["job_id"], db=db, user=PM))["job_id"] == first["job_id"]

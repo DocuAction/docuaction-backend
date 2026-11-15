@@ -296,3 +296,146 @@ def test_findings_not_included_is_stated_never_shown_as_zero():
 def test_partial_or_unverifiable_izaan_provenance_is_refused(source):
     with pytest.raises(d.DatasetRefused, match="attributable source"):
         d.build_record_row(_f(1, qa_comments_izaan="verbatim", qa_comments_izaan_source=source))
+
+
+# -- W3 (2026-11-14): one provenance contract for import and report ----------
+# A comment ALREADY STORED without its source sheet/column stays exportable,
+# verbatim, marked on that comment only and counted as a limitation. A comment
+# that is NOT from the store (caller-supplied) is still refused.
+
+_STORED_GAP = {"file": "legacy.xlsx", "sha256": "ab" * 32, "sheet": None,
+               "column": None, "stored_comment_id": "11111111-1111-1111-1111-111111111111"}
+
+
+def test_a_stored_comment_without_sheet_or_column_does_not_fail_the_delivery():
+    verbatim = "  Izaan: legacy — text,\twith tab  "
+    facts = [_f(1, qa_comments_izaan=verbatim, qa_comments_izaan_source=dict(_STORED_GAP)),
+             _f(2, qa_comments_izaan="complete",
+                qa_comments_izaan_source={"file": "f.xlsx", "sha256": "cd" * 32,
+                                          "sheet": "S1", "column": "F",
+                                          "stored_comment_id": "22222222-2222-2222-2222-222222222222"}),
+             _f(3)]
+    # Stored status is the loader's statement, passed beside the facts (round 3).
+    ds = d.build_dataset(facts, report_id="R", stored_comments={
+        "agt-1": {"izaan": "11111111-1111-1111-1111-111111111111"},
+        "agt-2": {"izaan": "22222222-2222-2222-2222-222222222222"}})
+    rows = {r[1]: r for r in ds["sheets"]["Records"]["rows"]}
+    assert _col(rows["agt-1"], d.IZAAN_COMMENTS_COLUMN) == verbatim      # byte-identical
+    assert d.PROVENANCE_INCOMPLETE in _col(rows["agt-1"], "Flag")
+    assert "sheet" in _col(rows["agt-1"], "Flag") and "column" in _col(rows["agt-1"], "Flag")
+    for other in ("agt-2", "agt-3"):                                     # that comment only
+        assert d.PROVENANCE_INCOMPLETE not in _col(rows[other], "Flag")
+    s = ds["summary"]
+    assert s["comments_with_incomplete_provenance"] == {
+        "original": 0, "izaan": 1, "clarification": 0, "total": 1}
+    assert any("1 stored comment" in x for x in s["limitations"])
+    assert "incomplete source provenance" in ds["banner"]
+    assert dict(ds["sheets"]["Summary"]["rows"])[d.PROVENANCE_SUMMARY_ROW] == "1"
+    assert d.PROVENANCE_INCOMPLETE in d.to_csv(ds).decode("utf-8-sig")
+
+
+def test_a_stored_original_comment_with_a_gap_is_marked_too():
+    f = _f(1, qa_comments="orig", qa_comments_source={**_STORED_GAP, "sheet": "S1"})
+    ds = d.build_dataset([f], report_id="R", stored_comments={
+        "agt-1": {"original": "11111111-1111-1111-1111-111111111111"}})
+    row = ds["sheets"]["Records"]["rows"][0]
+    assert _col(row, d.ORIGINAL_COMMENTS_COLUMN) == "orig"
+    assert d.PROVENANCE_INCOMPLETE in _col(row, "Flag") and "column" in _col(row, "Flag")
+    assert ds["summary"]["comments_with_incomplete_provenance"]["original"] == 1
+
+
+def test_a_complete_dataset_reports_zero_and_adds_no_marker():
+    ds = d.build_dataset(_facts(), report_id="R")
+    assert ds["summary"]["comments_with_incomplete_provenance"]["total"] == 0
+    assert ds["summary"]["limitations"] == []
+    assert "incomplete source provenance" not in ds["banner"]
+
+
+def test_a_caller_supplied_comment_with_a_gap_is_still_refused():
+    src = {"file": "f.xlsx", "sha256": "ab" * 32, "sheet": None, "column": None}
+    with pytest.raises(d.DatasetRefused, match="attributable source"):
+        d.build_dataset([_f(1, qa_comments_izaan="x", qa_comments_izaan_source=src)], report_id="R")
+
+
+# -- 2026-11-14, round 3: stored status is not something a fact can assert, and
+#    a stored REPORT_CLARIFICATION is marked and counted like the other kinds.
+
+_SID_1 = "11111111-1111-1111-1111-111111111111"
+_AWKWARD = "  lead and trail — café 中文,\r\nsecond line\ttabbed  "
+
+
+def test_a_fact_that_merely_claims_stored_status_is_treated_as_caller_supplied():
+    """Before: any fact dict whose source carried `stored_comment_id` was believed,
+    so a direct caller of build_dataset could attach Izaan text with no sheet or
+    column by adding that key."""
+    fact = _f(1, qa_comments_izaan="x", qa_comments_izaan_source=dict(_STORED_GAP))
+    with pytest.raises(d.DatasetRefused, match="attributable source"):
+        d.build_dataset([fact], report_id="R")
+    with pytest.raises(d.DatasetRefused, match="attributable source"):
+        d.build_record_row(fact)
+
+
+@pytest.mark.parametrize("registry", [
+    {"agt-1": {"izaan": "99999999-9999-9999-9999-999999999999"}},   # another comment's id
+    {"agt-2": {"izaan": _SID_1}},                                   # another record
+    {"agt-1": {"original": _SID_1}},                                # another kind
+    {"agt-1": {}}, {},
+])
+def test_stored_status_needs_the_loaders_own_entry_for_that_record_and_kind(registry):
+    fact = _f(1, qa_comments_izaan="x", qa_comments_izaan_source=dict(_STORED_GAP))
+    with pytest.raises(d.DatasetRefused, match="attributable source"):
+        d.build_dataset([fact], report_id="R", stored_comments=registry)
+
+
+def test_with_the_loaders_entry_the_stored_comment_is_exported_and_marked():
+    fact = _f(1, qa_comments_izaan=_AWKWARD, qa_comments_izaan_source=dict(_STORED_GAP))
+    ds = d.build_dataset([fact], report_id="R", stored_comments={"agt-1": {"izaan": _SID_1}})
+    row = ds["sheets"]["Records"]["rows"][0]
+    assert _col(row, d.IZAAN_COMMENTS_COLUMN) == _AWKWARD            # byte-identical
+    assert d.PROVENANCE_INCOMPLETE in _col(row, "Flag")
+    assert ds["summary"]["comments_with_incomplete_provenance"]["izaan"] == 1
+
+
+def test_a_stored_clarification_with_a_gap_is_marked_and_counted_like_the_other_kinds():
+    stored = {"agt-1": {"clarification": _SID_1}, "agt-2": {"clarification": _SID_1[:-1] + "2"}}
+    facts = [
+        _f(1, report_clarifications=_AWKWARD, report_clarifications_source=dict(_STORED_GAP)),
+        _f(2, report_clarifications="complete",
+           report_clarifications_source={"file": "f.xlsx", "sha256": "cd" * 32, "sheet": "S1",
+                                         "column": "H", "stored_comment_id": _SID_1[:-1] + "2"}),
+        _f(3, report_clarifications="generated by the report, not an import"),
+    ]
+    ds = d.build_dataset(facts, report_id="R", stored_comments=stored)
+    rows = {r[1]: r for r in ds["sheets"]["Records"]["rows"]}
+    assert _col(rows["agt-1"], d.CLARIFICATIONS_COLUMN) == _AWKWARD   # byte-identical
+    flag = _col(rows["agt-1"], "Flag")
+    assert d.PROVENANCE_INCOMPLETE in flag and d.CLARIFICATIONS_COLUMN in flag
+    assert "sheet" in flag and "column" in flag
+    for other in ("agt-2", "agt-3"):
+        assert d.PROVENANCE_INCOMPLETE not in _col(rows[other], "Flag")
+    assert _col(rows["agt-3"], d.CLARIFICATIONS_COLUMN) == "generated by the report, not an import"
+    gaps = ds["summary"]["comments_with_incomplete_provenance"]
+    assert gaps == {"original": 0, "izaan": 0, "clarification": 1, "total": 1}
+    assert any("clarification: 1" in x for x in ds["summary"]["limitations"])
+    assert dict(ds["sheets"]["Summary"]["rows"])[d.PROVENANCE_SUMMARY_ROW] == "1"
+
+
+def test_every_kind_keeps_its_text_byte_for_byte_in_the_dataset_and_the_csv():
+    src = dict(_STORED_GAP)
+    fact = _f(1, qa_comments=_AWKWARD + "o", qa_comments_source=dict(src),
+              qa_comments_izaan=_AWKWARD + "i", qa_comments_izaan_source=dict(src),
+              report_clarifications=_AWKWARD + "c", report_clarifications_source=dict(src))
+    ds = d.build_dataset([fact], report_id="R", stored_comments={
+        "agt-1": {"original": _SID_1, "izaan": _SID_1, "clarification": _SID_1}})
+    row = ds["sheets"]["Records"]["rows"][0]
+    assert _col(row, d.ORIGINAL_COMMENTS_COLUMN) == _AWKWARD + "o"
+    assert _col(row, d.IZAAN_COMMENTS_COLUMN) == _AWKWARD + "i"
+    assert _col(row, d.CLARIFICATIONS_COLUMN) == _AWKWARD + "c"
+    assert ds["summary"]["comments_with_incomplete_provenance"] == {
+        "original": 1, "izaan": 1, "clarification": 1, "total": 3}
+    parsed = list(csv.reader(io.StringIO(d.to_csv(ds).decode("utf-8-sig"), newline="")))
+    header = next(r for r in parsed if d.IZAAN_COMMENTS_COLUMN in r)
+    data = parsed[parsed.index(header) + 1]
+    for column, tail in ((d.ORIGINAL_COMMENTS_COLUMN, "o"), (d.IZAAN_COMMENTS_COLUMN, "i"),
+                         (d.CLARIFICATIONS_COLUMN, "c")):
+        assert data[header.index(column)] == _AWKWARD + tail
