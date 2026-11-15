@@ -36,7 +36,7 @@ from rce_traceability_support import SYN  # noqa: F401
 from test_iqvia_routes import (HCO_HEADER, _created_snapshot_ids,  # noqa: F401
                                _created_upload_ids, _FakeRequest,
                                _iqvia_drop_dir_is_tmp_path, _iqvia_sources,
-                               _run_one_queued_job, _User, db, write_csv)
+                               _run_one_queued_job, _User, db, write_csv)  # noqa: F401
 
 pytestmark = pytest.mark.regression
 
@@ -47,6 +47,23 @@ APPROVER = "hub-flow-approver@synthetic-test.docuaction.invalid"
 async def _hub_iqvia(db, role="reviewer"):
     out = await hub.overview(Response(), job_id=None, db=db, user=_User(role))
     return out["iqvia"]
+
+
+async def _run_job_for_snapshot(db, snapshot_id) -> str:
+    """Claim and run THIS snapshot's job, as the scheduler's tick does - never "the oldest QUEUED job": the queue is
+    shared, and a leftover QUEUED job from an interrupted run would be run instead, so every assertion after it
+    would describe the wrong job (CodeRabbit on #233). The shared queue is not cleared (other tests own state in it)."""
+    from datetime import datetime
+    job = await jobs.latest_job_for_snapshot(db, snapshot_id)
+    assert job is not None and job.state == um.IqviaImportJob.STATE_QUEUED, "this snapshot has no queued job"
+    job.state = um.IqviaImportJob.STATE_RUNNING
+    job.started_at = datetime.utcnow()
+    job.heartbeat_at = datetime.utcnow()
+    job.attempt_count = (job.attempt_count or 0) + 1
+    await db.commit()
+    await routes.run_import_job(str(job.id))
+    await db.refresh(job)
+    return job.state
 
 
 def _synthetic_file(tmp_path, rows=6, tag="flow"):
@@ -111,7 +128,7 @@ class TestTheReferenceLegEndToEnd:
         assert exc.value.status_code == 409 and exc.value.detail["code"] == "IMPORT_NOT_COMPLETE"
 
         # 5. Automatic processing, exactly as the scheduler runs it.
-        assert await _run_one_queued_job(db) == um.IqviaImportJob.STATE_SUCCEEDED
+        assert await _run_job_for_snapshot(db, snapshot_id) == um.IqviaImportJob.STATE_SUCCEEDED
         # The worker committed through its OWN session. In the application every request has a
         # fresh session; this test keeps one for the whole run, so it drops what it cached in step 4.
         db.expire_all()
@@ -207,3 +224,46 @@ class TestWhereItMustStop:
         assert exc.value.status_code == 409
         with pytest.raises(HTTPException):
             await routes.match_snapshot(snapshot_id, db=db, user=uploader)
+
+
+class TestScopedJobRun:
+    async def test_a_leftover_queued_job_of_another_snapshot_is_not_run_in_its_place(self, db, tmp_path, monkeypatch):
+        """CodeRabbit on #233 (reproduced): the oldest-QUEUED claim runs a stray job first."""
+        _iqvia_sources(monkeypatch, True)
+        stray = routes.StageRequest(
+            file_path=str(write_csv(tmp_path / "stray.csv", HCO_HEADER,
+                                    [[f"{SYN}-STRAY-{uuid.uuid4().hex[:6]}", "", "", f"{SYN} Stray", "02101"]])),
+            label=f"{SYN}-stray-{uuid.uuid4().hex[:8]}")
+        stray_result = await routes.stage_source("hco", stray, db, user=_User("reviewer", UPLOADER))
+        _created_snapshot_ids.append(uuid.UUID(stray_result["snapshot_id"]))
+        mine = routes.StageRequest(
+            file_path=str(write_csv(tmp_path / "mine.csv", HCO_HEADER,
+                                    [[f"{SYN}-MINE-{uuid.uuid4().hex[:6]}", "", "", f"{SYN} Mine", "02101"]])),
+            label=f"{SYN}-mine-{uuid.uuid4().hex[:8]}")
+        mine_result = await routes.stage_source("hco", mine, db, user=_User("reviewer", UPLOADER))
+        _created_snapshot_ids.append(uuid.UUID(mine_result["snapshot_id"]))
+
+        state = await _run_job_for_snapshot(db, uuid.UUID(mine_result["snapshot_id"]))
+
+        assert state == um.IqviaImportJob.STATE_SUCCEEDED
+        left = await jobs.latest_job_for_snapshot(db, uuid.UUID(stray_result["snapshot_id"]))
+        assert left.state == um.IqviaImportJob.STATE_QUEUED, "the other snapshot's job was left untouched"
+
+    async def test_the_oldest_queued_claim_would_have_run_the_stray_job(self, db, tmp_path, monkeypatch):
+        """Failing-before evidence, kept as a guard: the shared helper claims the OLDEST job, whoever's it is."""
+        _iqvia_sources(monkeypatch, True)
+        first = routes.StageRequest(
+            file_path=str(write_csv(tmp_path / "a.csv", HCO_HEADER,
+                                    [[f"{SYN}-A-{uuid.uuid4().hex[:6]}", "", "", f"{SYN} A", "02101"]])),
+            label=f"{SYN}-a-{uuid.uuid4().hex[:8]}")
+        a = await routes.stage_source("hco", first, db, user=_User("reviewer", UPLOADER))
+        _created_snapshot_ids.append(uuid.UUID(a["snapshot_id"]))
+        second = routes.StageRequest(
+            file_path=str(write_csv(tmp_path / "b.csv", HCO_HEADER,
+                                    [[f"{SYN}-B-{uuid.uuid4().hex[:6]}", "", "", f"{SYN} B", "02101"]])),
+            label=f"{SYN}-b-{uuid.uuid4().hex[:8]}")
+        b = await routes.stage_source("hco", second, db, user=_User("reviewer", UPLOADER))
+        _created_snapshot_ids.append(uuid.UUID(b["snapshot_id"]))
+        await _run_one_queued_job(db)
+        job_b = await jobs.latest_job_for_snapshot(db, uuid.UUID(b["snapshot_id"]))
+        assert job_b.state == um.IqviaImportJob.STATE_QUEUED, "B's job was not the one the shared helper ran"
