@@ -204,13 +204,50 @@ def _known_driver_class_names() -> frozenset:
     return frozenset(names)
 
 
+@functools.lru_cache(maxsize=1)
+def _known_path_segments() -> frozenset:
+    """The closed vocabulary of dotted-path segments a real driver/stdlib exception path can contain: the module names
+    and class qualified-name parts of the exception classes the drivers and the standard library define, plus the
+    SQLAlchemy dialect adapter classes. A delivered value cannot add a segment to it."""
+    import importlib
+    import sys
+
+    segments = {"builtins", "socket", "ssl", "asyncio", "asyncpg", "psycopg", "psycopg2", "sqlalchemy", "httpx", "httpcore",
+                "anyio", "exceptions", "errors", "exc", "dialects", "postgresql"}
+    for module in ("builtins", "socket", "ssl", "asyncio", "asyncpg.exceptions", "psycopg2", "psycopg2.errors",
+                   "sqlalchemy.exc", "sqlalchemy.dialects.postgresql.asyncpg", "sqlalchemy.dialects.postgresql.psycopg2",
+                   "sqlalchemy.dialects.postgresql.psycopg", "httpx", "httpcore", "anyio"):
+        try:
+            mod = importlib.import_module(module)
+        except Exception:  # noqa: BLE001 - an absent driver contributes nothing
+            continue
+        segments.update(module.split("."))
+        for name, obj in vars(mod).items():
+            if isinstance(obj, type) and (issubclass(obj, BaseException) or name.startswith("AsyncAdapt_")):
+                segments.add(name)
+                segments.update(getattr(obj, "__module__", "").split("."))
+                segments.update(getattr(obj, "__qualname__", name).split("."))
+    for name in list(sys.modules):
+        if name.split(".")[0] in {"asyncpg", "psycopg2", "psycopg", "sqlalchemy"} and name.count(".") <= 4:
+            segments.update(name.split("."))
+    segments.discard("")
+    return frozenset(segments)
+
+
 class _ValidatedMarker:
     """The marker regex plus the real-driver-class check, with the same search/match calls."""
 
     @staticmethod
     def _ok(m):
-        last = re.split(r"[.')]", m.group(0).rstrip("'>)").rstrip("'"))[-1] if m else ""
-        return bool(m) and last in _known_driver_class_names()
+        """Every segment of the path must be part of a real driver/stdlib path, not only the last one
+        (`asyncpg.SensitiveRecord4711.ValueError` ends in a real class but carries a delivered component)."""
+        if not m:
+            return False
+        path = re.sub(r"^(?:<class ')?\(?", "", m.group(0))
+        path = re.sub(r"(?:'>)?\)?$", "", path)
+        parts = path.split(".")
+        return (len(parts) >= 1 and parts[-1] in _known_driver_class_names()
+                and all(seg in _known_path_segments() for seg in parts[:-1]))
 
     def match(self, text, pos=0):
         m = _MARKER_SHAPE.match(text, pos)
@@ -331,13 +368,14 @@ def sanitize_stored_error(value: Any, *, failure_class: str | None = None) -> An
 #: an exception class NAME - a listed domain class, or a CamelCase word with one
 #: of the endings Python and the drivers give their exception classes - or one
 #: of the tokens this application writes itself.
-_EXCEPTION_NAME = re.compile(r"[A-Z][A-Za-z0-9]{0,120}(?:Error|Exception|Timeout|Warning)")
+#: An ending is NOT provenance (CodeRabbit on #233: `SensitiveRecord4711Error` is a delivered value): a code is shown only
+#: when it is a listed domain class, a real driver/stdlib exception class name, or a token this application writes.
 _TRUSTED_ERROR_TOKENS = frozenset({"worker_stopped_without_reporting"})
 
 
 def _is_trusted_error_code(value: str) -> bool:
     return (value in CONTROLLED_FAILURE_CLASSES or value in _TRUSTED_ERROR_TOKENS
-            or _EXCEPTION_NAME.fullmatch(value) is not None)
+            or value in _known_driver_class_names())
 #: The withheld form for ANY class, as `safe_exception_text` and this module write it.
 _ANY_WITHHELD = re.compile(
     r"(?:[A-Z][A-Z_]*(?: did not complete)?: )?[A-Za-z_][A-Za-z_0-9]{0,127} "
@@ -381,7 +419,16 @@ def _sanitize_error_value(value: str, *, safe_writer: bool = False) -> str:
     """
     masked = sanitize_stored_error(value)
     if masked != value:
-        return masked
+        if safe_writer or _MARKER.search(value) is not None:
+            return masked
+        # UNMARKED (no driver marker, no writer mark): the general rule may have kept a leading CamelCase name that came
+        # from the delivered text. Keep a name only when it is a trusted class; otherwise withhold the whole value.
+        lead = _CLASS_LEAD_IN.match(value)
+        named = (lead.group("cls") or lead.group("bare")) if lead else None
+        if named is not None and _is_trusted_error_code(named):
+            return masked
+        stage = _STAGE_PREFIX.match(value)
+        return (stage.group(0) if stage else "") + _ERROR_WITHHELD.strip()
     if safe_writer:
         # Marked by its writer as `safe_exception_text` output: that function
         # keeps a message only for a domain exception, and the class in front
