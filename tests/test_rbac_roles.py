@@ -508,6 +508,15 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # for reviewers is not made here: reviewer is already the floor for
         # delivered values on this router. Flagged on the PR for confirmation.
         "/api/tefca/rce/deliveries/{intake_id}/comments",
+        # ── Supplemental NPI research (2026-11-15) ── Same floor and the same
+        # reasoning as the comments read above: the list returns researched NPIs
+        # for NAMED delivered records with the researcher's staff email
+        # (`researcher`) and the analyst's free-text rationale - the staff-identity
+        # category LOGIN-013 keeps from a viewer. The WRITE path is `reviewer`
+        # (the analyst floor). No new access decision is made here: reviewer is
+        # already the floor for delivered values on this router. Flagged on the
+        # PR for confirmation.
+        "/api/tefca/rce/deliveries/{intake_id}/supplemental-npi-research",
         # ── IQVIA Release 1 application journey (2026-10-02) ──
         # Snapshot status/progress/reconciliation for a staged licensed
         # extract -- reviewer (4), the SAME floor `source_matching.
