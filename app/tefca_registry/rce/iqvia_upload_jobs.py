@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -89,13 +89,19 @@ async def received_chunk_indices(db, upload_id) -> set:
 
 
 async def mark_upload_complete(db, upload_id, *, snapshot_id) -> None:
-    session = await db.get(IqviaUploadSession, upload_id)
-    if session is None:
-        return
-    # The worker may already have finished by the time linkage runs: never move a TERMINAL status back to STAGING_QUEUED.
-    if session.status not in (IqviaUploadSession.STATUS_STAGED, IqviaUploadSession.STATUS_FAILED):
-        session.status = IqviaUploadSession.STATUS_STAGING_QUEUED
-    session.snapshot_id = snapshot_id
+    """Link the snapshot and queue staging - as ONE conditional statement.
+
+    The worker may already have finished (STAGED / FAILED) by the time linkage runs, and it may commit between a read
+    and a write here; so the terminal status is protected by the UPDATE itself (evaluated against the row as it is at
+    write time), never by a value read earlier. `snapshot_id` is always linked."""
+    stmt = (update(IqviaUploadSession).where(IqviaUploadSession.id == upload_id)
+            .values(snapshot_id=snapshot_id,
+                    status=case((IqviaUploadSession.status.in_([IqviaUploadSession.STATUS_STAGED,
+                                                                IqviaUploadSession.STATUS_FAILED]),
+                                 IqviaUploadSession.status),
+                                else_=IqviaUploadSession.STATUS_STAGING_QUEUED))
+            .execution_options(synchronize_session="fetch"))
+    await db.execute(stmt)
     await db.commit()
 
 
