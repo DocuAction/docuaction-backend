@@ -455,3 +455,178 @@ class TestAByteOrderMarkedFileImportsAndResumes:
         keys = (await db.execute(select(sm.IqviaHcoObservation.source_record_key).where(
             sm.IqviaHcoObservation.source_snapshot_id == snapshot.id))).scalars().all()
         assert len(set(keys)) == n
+
+
+class TestResumeAcrossTheReaderChange:
+    """Sixth pass on #216 (review finding, 2026-11-14). Before the importer
+    decoded a byte-order-marked file as the preflight does, it read it as plain
+    utf-8: the mark stayed in the FIRST column's name. Where the identity
+    column is not first (ORG_NPI,HCO_HCE_ID,...), rows were still staged - with
+    the first column missing (npi None) and a record hash of that payload. A
+    resume under the current reader skips those rows on the per-snapshot key
+    and stages the rest correctly: one snapshot holding rows from two readers.
+
+    Such a resume is refused, before anything further is staged. Rows already
+    staged are not rewritten or deleted, and the snapshot can never reconcile.
+    A file without a mark reads identically under both readers and resumes as
+    it always did."""
+
+    BOM = b"\xef\xbb\xbf"
+    #: The identity column is NOT first, so the legacy reader still staged rows.
+    HEADER = ["ORG_NPI", "HCO_HCE_ID", "ORG_CCN_ID", "BUS_NM", "PHYS_ZIP"]
+
+    def _file(self, tmp_path, n, tag, *, marked=True):
+        import hashlib
+
+        f = write_csv(tmp_path / f"reader-{tag}.csv", self.HEADER, [
+            ["1234567893", f"{SYN}-RDR-{tag}-{uuid.uuid4().hex[:6]}-{i}", "", f"{SYN} Org {i}", "02101"]
+            for i in range(n)])
+        if marked:
+            f.write_bytes(self.BOM + f.read_bytes())
+        return f, hashlib.sha256(f.read_bytes()).hexdigest()
+
+    @staticmethod
+    def _legacy_reader_rows(path):
+        """THE LEGACY READER, copied from iqvia_import._import_csv as it stood
+        before 634a1ab: the file opened as plain utf-8, so a leading mark is
+        part of the first column's name. Used only to stage what that code
+        staged."""
+        with open(path, "r", encoding="utf-8", newline="") as fh:
+            yield from enumerate(csv.DictReader(fh), start=2)
+
+    async def _snapshot_staged_by_the_legacy_reader(self, db, f, sha, *, rows):
+        """A PENDING snapshot with its first `rows` rows staged the way the
+        legacy importer staged them, and no reader mark in its metadata."""
+        from datetime import timezone
+
+        from app.tefca_registry.rce.source_matching import register_snapshot
+
+        snapshot = await register_snapshot(
+            db, source_system=sm.SOURCE_IQVIA_HCO,
+            label=f"{SYN}-reader-{uuid.uuid4().hex[:8]}", sha256=sha, record_count=0,
+            received_at=datetime.now(timezone.utc), created_by=SYN,
+            metadata={"original_path": str(f)})
+        _created_snapshot_ids.append(snapshot.id)
+        staged = []
+        for _line, row in self._legacy_reader_rows(f):
+            if len(staged) >= rows:
+                break
+            built = ii._hco_payload_and_keys(row)
+            assert built is not None, "the legacy reader did stage this row"
+            staged.append({"id": uuid.uuid4(), "source_snapshot_id": snapshot.id,
+                           "record_sha256": ii._row_sha256(row),
+                           "observed_at": datetime.now(timezone.utc),
+                           "correlation_id": "legacy", "payload": row, **built})
+        if staged:
+            await ii._stage_rows(db, snapshot_id=snapshot.id, model=sm.IqviaHcoObservation,
+                                 rows=staged)
+        await db.commit()
+        return snapshot
+
+    async def _rows(self, db, snapshot_id):
+        await db.rollback()
+        rows = (await db.execute(
+            select(sm.IqviaHcoObservation)
+            .where(sm.IqviaHcoObservation.source_snapshot_id == snapshot_id)
+            .execution_options(populate_existing=True))).scalars().all()
+        return {r.source_record_key: (r.npi, r.record_sha256, dict(r.payload)) for r in rows}
+
+    async def test_a_marked_file_partly_staged_by_the_legacy_reader_is_not_resumed(
+            self, db, tmp_path):
+        n = 6
+        f, sha = self._file(tmp_path, n, "a")
+        snapshot = await self._snapshot_staged_by_the_legacy_reader(db, f, sha, rows=2)
+        before = await self._rows(db, snapshot.id)
+        assert len(before) == 2
+        assert all(npi is None for npi, _sha, _payload in before.values()), \
+            "what the legacy reader left: the first column was lost"
+
+        with pytest.raises(ii.ReaderChangeRefused) as refused:
+            await ii.import_hco_csv(db, file_path=f, label="unused", created_by=SYN,
+                                    chunk_size=2, snapshot_id=snapshot.id)
+        message = str(refused.value)
+        assert str(snapshot.id) in message and "byte-order mark" in message
+        assert "1234567893" not in message and SYN not in message, "no row content in the reason"
+        assert len(f"{type(refused.value).__name__}: {message}") <= 300, \
+            "the job runner keeps 300 characters of the reason"
+
+        after = await self._rows(db, snapshot.id)
+        assert after == before, "nothing further staged; the staged rows are untouched"
+        refreshed = await db.get(sm.SourceSnapshot, snapshot.id)
+        await db.refresh(refreshed)
+        assert refreshed.status == sm.SNAPSHOT_PENDING
+        recorded = refreshed.metadata_["reference_reader_refused"]
+        assert recorded["code"] == "READER_CHANGED_AFTER_STAGING"
+        assert recorded["rows_already_staged"] == 2
+        assert "reference_reader" not in refreshed.metadata_
+
+        # Asked again (the job runner retries): the same refusal, still nothing staged.
+        with pytest.raises(ii.ReaderChangeRefused):
+            await ii.import_hco_csv(db, file_path=f, label="unused", created_by=SYN,
+                                    snapshot_id=snapshot.id)
+        assert await self._rows(db, snapshot.id) == before
+
+        # It can never be reconciled, so it can never be approved.
+        verdict = await ii.verify_snapshot_staged_completely(db, snapshot.id)
+        assert verdict["reconciles"] is False
+        assert any("earlier reader" in reason for reason in verdict["refusal_reasons"])
+
+    async def test_an_unmarked_snapshot_with_nothing_staged_proceeds_and_is_marked(
+            self, db, tmp_path):
+        """How every upload starts: the snapshot is registered first and the
+        importer is then called with its id. Nothing was staged by anyone."""
+        n = 4
+        f, sha = self._file(tmp_path, n, "b")
+        snapshot = await self._snapshot_staged_by_the_legacy_reader(db, f, sha, rows=0)
+        done = await ii.import_hco_csv(db, file_path=f, label="unused", created_by=SYN,
+                                       snapshot_id=snapshot.id)
+        assert (done.rows_read, done.rows_staged, done.rows_rejected) == (n, n, 0)
+        rows = await self._rows(db, snapshot.id)
+        assert all(npi == "1234567893" for npi, _sha, _payload in rows.values())
+        refreshed = await db.get(sm.SourceSnapshot, snapshot.id)
+        await db.refresh(refreshed)
+        assert refreshed.metadata_["reference_reader"] == ii.REFERENCE_READER
+        assert "reference_reader_refused" not in refreshed.metadata_
+        # Marked now: a later resume of the same marked file is not refused.
+        again = await ii.import_hco_csv(db, file_path=f, label="unused", created_by=SYN,
+                                        snapshot_id=snapshot.id)
+        assert (again.rows_staged, again.rows_already_staged) == (0, n)
+
+    async def test_a_file_without_a_mark_resumes_exactly_as_before(self, db, tmp_path):
+        n = 6
+        f, sha = self._file(tmp_path, n, "c", marked=False)
+        legacy = [(line, row, ii._row_sha256(row)) for line, row in self._legacy_reader_rows(f)]
+        current = [(line, row, ii._row_sha256(row)) for line, row in ii.iter_reference_rows(f)]
+        assert legacy == current, "both readers read an unmarked file identically"
+
+        snapshot = await self._snapshot_staged_by_the_legacy_reader(db, f, sha, rows=2)
+        before = await self._rows(db, snapshot.id)
+        resumed = await ii.import_hco_csv(db, file_path=f, label="unused", created_by=SYN,
+                                          chunk_size=2, snapshot_id=snapshot.id)
+        assert (resumed.rows_already_staged, resumed.rows_staged) == (2, n - 2)
+        after = await self._rows(db, snapshot.id)
+        assert len(after) == n and all(after[k] == v for k, v in before.items())
+        assert all(npi == "1234567893" for npi, _sha, _payload in after.values())
+        refreshed = await db.get(sm.SourceSnapshot, snapshot.id)
+        await db.refresh(refreshed)
+        assert refreshed.metadata_["reference_reader"] == ii.REFERENCE_READER
+
+    async def test_a_new_import_is_marked_when_it_is_registered(self, db, tmp_path):
+        f, _sha = self._file(tmp_path, 3, "d")
+        label = f"{SYN}-reader-d-{uuid.uuid4().hex[:8]}"
+        done = await ii.import_hco_csv(db, file_path=f, label=label, created_by=SYN)
+        _created_snapshot_ids.append(done.snapshot_id)
+        snapshot = await db.get(sm.SourceSnapshot, done.snapshot_id)
+        assert snapshot.metadata_["reference_reader"] == ii.REFERENCE_READER
+
+    async def test_rows_staged_under_a_different_recorded_reader_are_not_resumed(
+            self, db, tmp_path):
+        """The mark is what a future reader change will be checked against."""
+        f, sha = self._file(tmp_path, 4, "e", marked=False)
+        snapshot = await self._snapshot_staged_by_the_legacy_reader(db, f, sha, rows=2)
+        snapshot.metadata_ = {**snapshot.metadata_, "reference_reader": "iqvia_import/some-other"}
+        await db.commit()
+        with pytest.raises(ii.ReaderChangeRefused):
+            await ii.import_hco_csv(db, file_path=f, label="unused", created_by=SYN,
+                                    snapshot_id=snapshot.id)
+        assert len(await self._rows(db, snapshot.id)) == 2

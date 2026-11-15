@@ -139,6 +139,63 @@ def file_sha256(path: Path, *, chunk_bytes: int = 1024 * 1024) -> str:
 from app.tefca_registry.rce.reference_preflight import REFERENCE_FILE_ENCODING  # noqa: E402
 
 
+#: Which reader staged a snapshot's rows, recorded in the snapshot's metadata
+#: ("reference_reader") when staging starts. A snapshot holds the rows of ONE
+#: reader: a resume is allowed only where the recorded reader is this one, or
+#: where no reader is recorded and the earlier reader (plain "utf-8") provably
+#: read the file the same way - that is, the file has no leading byte-order
+#: mark. Change this value whenever a change to the read can change a row's
+#: keys, payload or hash.
+REFERENCE_READER = f"iqvia_import/{REFERENCE_FILE_ENCODING}"
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+
+class ReaderChangeRefused(ValueError):
+    """A resume into a snapshot whose staged rows came from a different reader.
+
+    Nothing is staged, rewritten or deleted. The snapshot stays PENDING, is
+    marked in its metadata ("reference_reader_refused") and can never
+    reconcile, so it can never be approved. This module has no way to discard
+    a PENDING snapshot's rows; what happens to it is an owner decision."""
+
+
+def _starts_with_utf8_bom(path) -> bool:
+    with open_no_follow(path, "rb") as fh:
+        return fh.read(3) == _UTF8_BOM
+
+
+async def _admit_reader(db, snapshot, *, model, path) -> None:
+    """Record this reader on the snapshot, or refuse the resume.
+
+    Decided BEFORE the preflight is recorded and before any row is staged."""
+    meta = dict(snapshot.metadata_ or {})
+    recorded = meta.get("reference_reader")
+    if recorded == REFERENCE_READER:
+        return
+    staged = int((await db.execute(
+        select(func.count()).select_from(model)
+        .where(model.source_snapshot_id == snapshot.id))).scalar() or 0)
+    # No recorded reader means the plain utf-8 reader, which differs from this
+    # one in exactly one case: a leading byte-order mark (it stayed in the
+    # first column's name, so that column was lost from every staged row).
+    differs = _starts_with_utf8_bom(path) if recorded is None else True
+    if staged and differs:
+        snapshot.metadata_ = {**meta, "reference_reader_refused": {
+            "code": "READER_CHANGED_AFTER_STAGING",
+            "rows_already_staged": staged,
+            "staged_by": recorded or "utf-8 (earlier reader, not recorded)",
+            "refused_by": REFERENCE_READER,
+            "refused_at": datetime.now(timezone.utc).isoformat()}}
+        await db.commit()
+        raise ReaderChangeRefused(
+            f"snapshot {snapshot.id}: {staged} row(s) were staged by an earlier reader that "
+            "kept a byte-order mark or read differently; resume refused, nothing staged or "
+            "changed. It cannot reconcile. No automated recovery: owner decision.")
+    meta.pop("reference_reader_refused", None)
+    snapshot.metadata_ = {**meta, "reference_reader": REFERENCE_READER}
+    await db.commit()
+
+
 def iter_reference_rows(path):
     """(line number, row) for every data row of a staged reference file - the
     ONLY reader of that file's rows in this module.
@@ -255,6 +312,11 @@ async def _import_csv(
             db, source_system=source_system, label=label, sha256=sha,
             record_count=0, received_at=datetime.now(timezone.utc),
             created_by=created_by, metadata={"original_path": str(path)})
+
+    # ONE READER PER SNAPSHOT (2026-11-14): recorded when staging starts, and a
+    # resume into rows staged by a different reader is refused here, before the
+    # preflight is recorded and before any row is staged (see REFERENCE_READER).
+    await _admit_reader(db, snapshot, model=model, path=path)
 
     # REFERENCE-SNAPSHOT PREFLIGHT (2026-10-04, Part B; reference_preflight.py).
     # Always RUN and always RECORDED on the snapshot -- the shadow record.
@@ -522,6 +584,12 @@ async def verify_snapshot_staged_completely(db, snapshot_id) -> Dict[str, Any]:
     ref_preflight = (snapshot.metadata_ or {}).get("reference_preflight") or {}
     if ref_preflight.get("gate") == "BLOCKED":
         reasons.append("reference preflight gate is BLOCKED for this snapshot")
+    # A snapshot whose resume was refused holds rows of an earlier reader and
+    # is incomplete by construction; said explicitly so the reason is not read
+    # as an ordinary interrupted import that a retry would finish.
+    if (snapshot.metadata_ or {}).get("reference_reader_refused"):
+        reasons.append("rows were staged by an earlier reader and the resume was refused "
+                       "(READER_CHANGED_AFTER_STAGING); this snapshot cannot be completed")
     return {
         "snapshot_id": str(snapshot_id), "source_system": snapshot.source_system,
         "declared_record_count": snapshot.record_count, "rows_rejected": rejected,
