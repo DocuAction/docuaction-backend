@@ -443,8 +443,12 @@ async def load_record_facts(
             else:
                 stats["review_without_bucket"] += 1
                 basis = f"latest review {rev.review_id} carries no classification"
-            if cur is not None and cur.record_status in ("HELD", "REJECTED") and not reasons:
-                reasons = _s(cur.status_reason)
+            if cur is not None and cur.record_status in ("HELD", "REJECTED"):
+                # The exact hold reason is always shown. A review rationale may also exist; the two stay
+                # distinguishable (rationale first) so a HELD record never loses why it is held.
+                hold = _s(cur.status_reason)
+                if hold and hold not in reasons:
+                    reasons = f"{reasons} | Hold reason: {hold}" if reasons else hold
 
             cells: Dict[str, str] = {}
             ev_refs: List[str] = []
