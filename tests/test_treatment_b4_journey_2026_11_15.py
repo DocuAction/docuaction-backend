@@ -14,7 +14,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.reports.data import field_level_findings as flf
 from app.reports.data import october_review_dataset as ds
@@ -57,6 +57,20 @@ async def _event(db, review_id, seq, kind, at, **kw):
     await db.flush()
 
 
+PRESERVED_TABLES = ("review_records", "review_decision_events", "rce_issues", "rce_curated_records",
+                    "rce_source_records", "tefca_dimension_evidence")
+
+
+async def _fingerprint(db, intake_id):
+    """Row count + md5 of every row's text, for the tables the report reads. Report generation is
+    read-only: the fingerprint must not change."""
+    out = {}
+    for tbl in PRESERVED_TABLES:
+        out[tbl] = (await db.execute(text(
+            f"select count(*), coalesce(md5(string_agg(t::text, '|' order by t::text)), '') from {tbl} t"))).one()
+    return out
+
+
 async def test_treatment_b4_journey_to_stephens_exports(rolled_back_db, monkeypatch, tmp_path):
     db = rolled_back_db
     rows = make_rows(3, arc="9.99.779.70", purposesofuse="T-TRTMNT,T-PH")        # combined purposes, active, Participant
@@ -94,12 +108,14 @@ async def test_treatment_b4_journey_to_stephens_exports(rolled_back_db, monkeypa
 
     import app.core.database as database
     monkeypatch.setattr(database, "async_session_maker", lambda: _Ctx(db))
+    before = await _fingerprint(db, intake_id)
     out = tmp_path / "journey"
     args = SimpleNamespace(intake=str(intake_id), cutoff="2099-01-01T00:00:00", out=str(out), run_id=None,
                            formats="xlsx,csv", baseline=None, classification="DRAFT")
     assert await pkg.build(args) == 0
     man = json.loads(next(out.glob("*.MANIFEST.json")).read_text(encoding="utf-8"))
     assert man["self_check_failures"] == [] and "INDEPENDENT QA PENDING" in man["status"]
+    assert await _fingerprint(db, intake_id) == before, "generating the reports changed stored history"
 
     # ── record-level master (grain A) ───────────────────────────────────────
     csv_path = next(p for p in out.glob("*.csv") if "field-findings" not in p.name)
