@@ -244,6 +244,38 @@ async def build(args) -> int:
                 failures.append("pdf: file does not start with %PDF-")
         files.append(entry)
 
+    # Grain B: Stephen's 18-column field-level findings, built from the issue ledger for the SAME
+    # delivery and cutoff, written beside (never inside) the record-level files.
+    field_info: Dict[str, Any] = {}
+    try:
+        from app.reports.data import field_level_findings as flf
+        async with async_session_maker() as db:
+            loaded = await loader.load_record_facts(
+                db, intake_id=args.intake, evidence_cutoff=args.cutoff, run_id=args.run_id)
+            cutoff_dt = loader._cutoff(args.cutoff)
+            from app.tefca_registry.rce import models as rce_models
+            intake_uuid = uuid.UUID(loaded["meta"]["intake_id"])
+            issues = await flf.load_issues(db, intake_uuid, cutoff_dt)
+            intake = await db.get(rce_models.RceSourceIntake, intake_uuid)
+        snap = ((intake.source_metadata or {}).get("snapshot_date") if intake is not None else "") or ""
+        field_result = flf.build_field_rows(loaded["facts"], issues, snapshot_date=str(snap))
+        for fmt, render in (("csv", flf.to_csv), ("xlsx", flf.to_xlsx)):
+            data = render(field_result)
+            fpath = os.path.join(out_dir, f"{report_id}-field-findings.{fmt}")
+            with open(fpath, "xb") as f:
+                f.write(data)
+            with open(fpath, "rb") as f:
+                on_disk = f.read()
+            if on_disk != data:
+                failures.append(f"field-findings {fmt}: bytes on disk differ from bytes rendered")
+            files.append({"format": f"field-findings-{fmt}", "file": os.path.basename(fpath),
+                          "sha256": _sha256(on_disk), "size_bytes": len(on_disk)})
+        field_info = {"reconciliation": field_result["reconciliation"],
+                      "mapping_exceptions": field_result["mapping_exceptions"],
+                      "headers_ok": field_result["headers"] == flf.FIELD_HEADERS}
+    except Exception as exc:  # noqa: BLE001 - the record-level package stands on its own
+        skipped["field-findings"] = f"Field-level export failed: {type(exc).__name__}"
+
     summary = dataset["summary"]
     reference = saved_counts.get("csv") or saved_counts.get("xlsx")
     failures += consistency_failures(saved_counts, summary)
@@ -263,12 +295,13 @@ async def build(args) -> int:
         "load_meta": dataset["load_meta"], "summary": {k: v for k, v in summary.items()
                                                        if k != "unclassified_non_held_ids"},
         "unclassified_non_held_ids": summary["unclassified_non_held_ids"],
-        "files": files, "formats_skipped": skipped,
+        "files": files, "formats_skipped": skipped, "field_findings": field_info,
         "baseline_comparison": {"baseline": baseline or None, "differences": diffs,
                                 "note": "compared, never forced"},
         "self_check_failures": failures,
         "not_done": ["PDF layout inspection (manual)", "independent QA acceptance",
-                     "field findings and IQVIA advisory results (separate reports, not in these totals)"],
+                     "IQVIA advisory results (separate report, not in these totals)",
+                     "Field_Discrepancy_Class (blank: no class is established in retained evidence)"],
     }
     mp = os.path.join(out_dir, f"{report_id}.MANIFEST.json")
     with open(mp, "x", encoding="utf-8") as f:
