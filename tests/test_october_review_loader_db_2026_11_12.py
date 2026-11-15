@@ -849,3 +849,24 @@ async def test_a_caller_comment_that_replaces_a_stored_one_loses_its_stored_stat
     with pytest.raises(ds_mod.DatasetRefused, match="attributable source"):
         await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=_cutoff_now(), report_id="R",
                               comments={str(recs[1].id): {"izaan": {"text": "x", "source": src}}})
+
+
+# ── CodeRabbit on #233 (2026-11-15, 2nd full review): a HELD record keeps its hold reason beside a review rationale ──
+
+async def test_a_held_record_with_a_review_rationale_keeps_the_exact_hold_reason(rolled_back_db):
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(2, arc="9.99.777.57"), with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    ent = await _entity(db, "hold")
+    await _curate(db, intake_id, recs[1], "HELD", entity_id=ent, reason="blocking identity issue")
+    await _curate(db, intake_id, recs[2], "REJECTED", entity_id=ent, reason="unparseable")
+    await _review(db, recs[1], ent, "REV-9957-000001", "B1", T_OLD)
+    await _review(db, recs[2], ent, "REV-9957-000002", "B1", T_OLD)
+    facts = _by_line(await _load(db, intake_id))
+    for line, hold in ((1, "blocking identity issue"), (2, "unparseable")):
+        reasons = facts[line]["reasons"]
+        assert "rationale for REV-9957-00000" in reasons          # the review rationale is still there
+        assert hold in reasons                                      # and the hold reason is no longer dropped
+        assert reasons.index("rationale for") < reasons.index(hold) # distinguishable, rationale first
+        assert facts[line]["held_reason"] == hold
