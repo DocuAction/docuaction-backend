@@ -90,7 +90,7 @@ async def test_only_qa_approved_visible_decisions_are_reported_and_nothing_else_
         assert _col(rows[i], "Bucket") == "B1" and "rationale for REV-9960" in _col(rows[i], "Reasons")
     # HELD: still HELD, still B4 in the reporting bucket, the hold is stated not released.
     assert _col(rows[6], "Status") == "HELD" and _col(rows[6], "Bucket") == "B4"
-    assert "remains HELD" in _col(rows[6], D)
+    assert "remains HELD" in _col(rows[6], D) and _col(rows[6], D).startswith("Confirmed B1")
     assert "analyst determination #1" in _col(rows[2], B)
     assert len({len(x) for x in rows.values()}) == 1 and len(rows[0]) == len(HDR)
 
@@ -140,3 +140,39 @@ async def test_sam_extract_evidence_reaches_its_own_column_and_never_relabels_th
     assert "sha256 " + "ab" * 6 in _col(rows[1], X) and "checked " in _col(rows[1], X)
     assert "No candidate match in the extract" in _col(rows[2], X)
     assert _col(rows[3], X).startswith("Not established by this loader"), "no extract row: not a pass"
+
+async def test_a_held_record_without_an_approved_disposition_still_states_the_hold(rolled_back_db):
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(2, arc="9.99.777.62"), with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    for i in (1, 2):
+        ent = await _entity(db, f"h{i}")
+        await _curate(db, intake_id, recs[i], "HELD", entity_id=ent, reason="blocking identity")
+        await _review(db, recs[i], ent, f"REV-9962-00000{i}", "B1", T_OLD)
+    await _event(db, "REV-9962-000002", 1, "ANALYST_DETERMINATION", BEFORE, determination="CONFIRM")   # awaiting QA
+    facts = _by_line(await _load(db, intake_id))
+    for i in (1, 2):
+        row = ds_mod.build_record_row(facts[i])
+        cell = _col(row, "Reviewed Disposition (QA-approved only)")
+        assert cell.startswith("No approved disposition") and "remains HELD" in cell
+        assert _col(row, "Reviewed Disposition Date") == "" and _col(row, "Status") == "HELD" and _col(row, "Bucket") == "B4"
+
+
+async def test_the_latest_qa_event_is_decisive_and_the_cutoff_moves_it(rolled_back_db):
+    """CONFIRM, then QA RETURN at 13:00, then QA APPROVE at 15:00: returned as of 14:00, approved as of 16:00."""
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(1, arc="9.99.777.63"), with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    ent = await _entity(db, "latest")
+    await _curate(db, intake_id, recs[1], "CLEAN", entity_id=ent)
+    await _review(db, recs[1], ent, "REV-9963-000001", "B1", T_OLD)
+    await _event(db, "REV-9963-000001", 1, "ANALYST_DETERMINATION", BEFORE.replace(hour=11), determination="CONFIRM")
+    await _event(db, "REV-9963-000001", 2, "QA_REVIEW", BEFORE.replace(hour=13), qa="RETURN")
+    await _event(db, "REV-9963-000001", 3, "QA_REVIEW", BEFORE.replace(hour=15), qa="APPROVE")
+    S = "Analyst/QA Status"
+    at14 = ds_mod.build_record_row(_by_line(await _load(db, intake_id, evidence_cutoff=BEFORE.replace(hour=14)))[1])
+    at16 = ds_mod.build_record_row(_by_line(await _load(db, intake_id, evidence_cutoff=BEFORE.replace(hour=16)))[1])
+    assert _col(at14, S) == rd.QA_RETURNED and _col(at14, "Reviewed Disposition (QA-approved only)") == ""
+    assert _col(at16, S) == rd.APPROVED and _col(at16, "Reviewed Disposition (QA-approved only)") == "Confirmed B1"
