@@ -201,6 +201,7 @@ jobs:
             tests/test_review_lineage_writers_db_2026_11_12.py \
             tests/test_record_name_identity_db_2026_11_14.py \
             tests/test_validation_queue_schema_gate_db_2026_11_14.py \
+            tests/test_validation_queue_routes_missing_table_db_2026_11_14.py \
             tests/test_record_comments_db_2026_11_12.py \
             tests/test_record_review_package_script_2026_11_12.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
