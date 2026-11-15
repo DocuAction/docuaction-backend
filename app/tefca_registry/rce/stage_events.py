@@ -33,6 +33,13 @@ def worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"[:128]
 
 
+#: Stored BESIDE a per-stage error value ("error_writer", "snapshot_error_writer")
+#: to say it was produced by `safe_failure_text`. This is the provenance the
+#: read-side mask needs: without it a class name in front of a stored message
+#: proves nothing, and the message is withheld (see logging_config).
+from app.core.logging_config import SAFE_ERROR_WRITER as ERROR_WRITER  # noqa: E402
+
+
 def safe_failure_text(exc: BaseException, limit: int = 2000) -> str:
     """Failure text for stage events and job detail: domain messages redacted,
     driver/library exceptions reduced to their class name. Served at viewer

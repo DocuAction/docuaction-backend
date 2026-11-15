@@ -45,8 +45,14 @@ def test_legacy_driver_text_keeps_the_stage_and_class_names_and_nothing_else():
 def test_sql_fragment_without_a_driver_class_is_still_cut():
     out = sanitize_stored_error("PROMOTION: OperationalError: connection lost "
                                 "[SQL: SELECT 1 FROM rce_curated_records] [parameters: ()]")
-    assert out == "PROMOTION: OperationalError: connection lost"
+    # Contract tightened 2026-11-14 (tests/test_stored_error_contract_2026_11_14.py):
+    # the text after a driver class that is not in the controlled vocabulary is the
+    # driver's message. It used to be returned ("... connection lost"); the stage
+    # and the class name are kept and the message is withheld.
+    assert out == ("PROMOTION: OperationalError (message withheld from evidence; "
+                   "see the server log)")
     assert "[SQL:" not in out and "[parameters:" not in out
+    assert sanitize_stored_error(out) == out
 
 
 def test_controlled_application_strings_pass_through_unchanged():

@@ -214,5 +214,6 @@ class RceDeliveryJob(Base):
             "records_received": self.records_received,
             "records_processed": self.records_processed,
             "reconciliation_passed": self.reconciliation_passed,
-            "stage_detail": sanitize_stored_error_tree(self.stage_detail or {}),
+            "stage_detail": sanitize_stored_error_tree(self.stage_detail or {},
+                                                       strict_error_keys=True),
         }

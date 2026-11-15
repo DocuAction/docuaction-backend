@@ -15,7 +15,7 @@
 
 on:
   pull_request:
-    branches: [main, 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06', 'feat/proposed-rules-v4-inactive-2026-11-07', 'test/iqvia-settings-shadowing-fix-2026-11-08']
+    branches: [main, 'feat/mandatory-source-parity-assessment-date-2026-11-11', 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06', 'feat/proposed-rules-v4-inactive-2026-11-07', 'test/iqvia-settings-shadowing-fix-2026-11-08']
   push:
     branches: [main]
 
@@ -153,7 +153,12 @@ jobs:
             tests/test_sampling_eligibility_review_required.py \
             tests/test_proposed_rules_v5_inactive_2026_11_07.py \
             tests/test_iqvia_advisory_routes_2026_11_08.py \
+            tests/test_delivery_status_error_masking_2026_11_13.py \
+            tests/test_stored_error_contract_2026_11_14.py \
             tests/test_iqvia_routes.py \
+            tests/test_review_hub_2026_11_13.py \
+            tests/test_review_hub_workflow_2026_11_13.py \
+            tests/test_iqvia_upload_ownership_2026_11_13.py \
             tests/test_iqvia_import_durability.py \
             tests/test_ex3_consistency_guard_2026_11_08.py \
             tests/test_sampling_audit_label_parity_2026_11_07.py \
@@ -200,10 +205,16 @@ jobs:
             tests/test_case_update_import_agt_2026_11_12.py \
             tests/test_review_lineage_writers_db_2026_11_12.py \
             tests/test_record_name_identity_db_2026_11_14.py \
+            tests/test_review_verification_gaps_2026_11_13.py \
             tests/test_validation_queue_schema_gate_db_2026_11_14.py \
             tests/test_validation_queue_routes_missing_table_db_2026_11_14.py \
             tests/test_record_comments_db_2026_11_12.py \
             tests/test_record_review_package_script_2026_11_12.py \
+            tests/test_record_review_download_path_db_2026_11_13.py \
+            tests/test_reviewed_disposition_report_2026_11_15.py \
+            tests/test_treatment_b4_journey_2026_11_15.py \
+            tests/test_comment_migration_downgrade_lock_2026_11_15.py \
+            tests/test_review_single_npi_read_2026_11_15.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test skip is not explicitly permitted
         # Replaces a case-sensitive `grep 'No database reachable'` that let

@@ -125,59 +125,256 @@ def safe_error(exc: BaseException) -> Dict[str, str]:
 # ── stored error text, sanitised on READ ────────────────────────────────────
 #
 # `safe_exception_text` keeps driver payloads out of the evidence tables on
-# WRITE (PR #85). Rows written before that fix still carry the raw SQLAlchemy
-# rendering — the statement, the bound parameters (delivered values) and the
-# driver's message — in `rce_delivery_jobs.error_reason` and `stage_detail`.
-# Those rows are evidence and are not rewritten; what a viewer receives is
-# masked here instead. The stage prefix and the exception class names stay,
-# because they are what an operator needs; everything after the innermost
-# driver class, and every `[SQL: ...]` / `[parameters: ...]` fragment, goes.
+# WRITE (PR #85). Rows written before that fix still carry what the driver
+# said: the SQLAlchemy rendering of the failed statement, its bound parameters
+# (delivered values) and the driver's message, or the bare driver message with
+# no SQLAlchemy wrapper at all. Those rows are evidence and are never
+# rewritten; what a viewer receives is masked here instead.
+#
+# THE CONTRACT (one function, every caller; tests/test_stored_error_contract_
+# 2026_11_14.py states it case by case):
+#
+#   1. Every `[SQL: ...]` / `[parameters: ...]` / `(Background on ...)` fragment
+#      and every PostgreSQL message field (`DETAIL:`, `HINT:`, ...) goes, to the
+#      end of the text.
+#   2. Where the text carries driver class markers, it is cut after the FIRST
+#      unbroken run of markers. Whatever follows that run is the driver's
+#      message and is withheld, including any later marker: a later marker is
+#      part of the message, not a new boundary.
+#   3. Where it carries no marker, the exception class NAME decides. The class
+#      is taken from the caller (`failure_class`, which a stage event stores
+#      beside its reason) or from the text itself: every writer this
+#      application has had put the class in front of the message
+#      ("{stage}: {Class}: ..." / "{stage} did not complete: {Class}: ...").
+#      A message is shown only when that class is in the closed domain
+#      vocabulary below AND nothing was cut under rule 1 (a removed fragment
+#      proves driver text is embedded in it); otherwise the class keeps its
+#      name and loses its message. In front of a marker run (rule 2) only the
+#      stage and one class name are kept, for the same reason.
+#   4. Text that lost a fragment or a message field and names no class at all
+#      is a driver rendering by construction, and is withheld whole.
+#   5. Anything else is one of this application's controlled strings and is
+#      returned unchanged.
+#
+# KNOWN LIMIT: a string with no marker, no fragment, no message field, no class
+# name and no `failure_class` is indistinguishable from a controlled string
+# and is returned unchanged. No writer in this repository's history produced a
+# job or stage failure reason of that shape; the per-stage `error` values inside
+# a job's `stage_detail` written by the first runner (`str(exc)`) can be.
 
 _ERROR_WITHHELD = " (message withheld from evidence; see the server log)"
 #: The SQLAlchemy statement/parameter/background fragments. Nothing useful
 #: to a viewer follows the first one, so the cut runs to the end.
 _SQL_FRAGMENT = re.compile(r"\s*\[(?:SQL|parameters):.*$", re.DOTALL)
 _BACKGROUND = re.compile(r"\s*\(Background on this error at:.*$", re.DOTALL)
+#: A PostgreSQL server message field. `DETAIL` carries the offending row
+#: values ("Key (email)=(...) already exists"); the others carry statement text.
+_PG_FIELD = re.compile(r"\s*\b(?:DETAIL|HINT|CONTEXT|QUERY|STATEMENT):\s.*$", re.DOTALL)
 #: A driver exception class as SQLAlchemy renders it: "<class 'asyncpg....X'>".
-_DRIVER_CLASS = re.compile(r"(<class '[\w.]+'>)")
+#: Only a class path that begins in a DRIVER OR STANDARD-LIBRARY package is a marker. `<class 'X'>` with any
+#: other content is part of a delivered value (CodeRabbit Major on #225) and is not kept.
+_DRIVER_PACKAGES = r"(?:asyncpg|psycopg2?|sqlalchemy|builtins|socket|ssl|httpx|httpcore|anyio|asyncio)"
+_CLASS_PATH = rf"<class '{_DRIVER_PACKAGES}(?:\.[A-Za-z_]\w*)+'>"
+_DRIVER_CLASS = re.compile(rf"({_CLASS_PATH})")
 #: A dialect wrapper as SQLAlchemy renders it: "(sqlalchemy.dialects....Error)".
 _DIALECT_CLASS = re.compile(r"(\((?:sqlalchemy|asyncpg|psycopg2?|psycopg)[\w.]*\))")
+#: Either marker, and what may stand between two markers of one run.
+_MARKER = re.compile(rf"{_CLASS_PATH}|\((?:sqlalchemy|asyncpg|psycopg2?|psycopg)[\w.]*\)")
+_MARKER_GAP = re.compile(r"[\s:]*")
+#: "{STAGE}: " or "{STAGE} did not complete: " as the runners have written it.
+_STAGE_PREFIX = re.compile(r"^[A-Z][A-Z_]*(?: did not complete)?: ")
+#: An exception class name in front of its message. After a stage prefix any
+#: identifier is a class name ("gaierror", "_RetryableProviderError"); with no
+#: stage in front, only a CamelCase word is (it has a lower-case letter, which
+#: is what tells it from a stage name or a controlled phrase).
+_CLASS_LEAD_IN = re.compile(
+    r"^(?:(?P<stage>[A-Z][A-Z_]*(?: did not complete)?: )(?P<cls>[A-Za-z_][A-Za-z_0-9]*)"
+    r"|(?P<bare>[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*)): ?")
+#: What may stand in front of the first marker: the stage and one class name.
+#: Any other text there is part of the message and is withheld with it.
+_MARKER_PREFIX = re.compile(
+    r"^(?:[A-Z][A-Z_]*(?: did not complete)?: )?(?:[A-Za-z_][A-Za-z_0-9]*: )?")
+_CLASS_NAME = re.compile(r"[A-Za-z_][A-Za-z_0-9]{0,127}")
+
+#: The closed vocabulary of exception classes whose stored message is ours to
+#: show: the builtin domain errors and the delivery pipeline's own refusals.
+#: A class that is not listed keeps its name and loses its message (fail
+#: closed); listing a class here is a reviewed decision, checked by a test.
+CONTROLLED_FAILURE_CLASSES = frozenset({
+    "ValueError", "LookupError", "KeyError", "IndexError",
+    "IntakeError", "LineCountMismatch", "NotADelimitedFile",
+    "CorrectionRefused", "ReconciliationFailure", "SnapshotRefused",
+    "ApprovalRefused", "DeliveryJobConflict",
+})
 
 
-def sanitize_stored_error(value: Any) -> Any:
-    """Mask driver payloads in an error string persisted before PR #85.
+def _writer_withheld(text: str, cls: str) -> bool:
+    """True when `text` is exactly the withheld form a writer or this function
+    produces for `cls` - a payload merely containing the phrase is not."""
+    return re.fullmatch(
+        rf"(?:[A-Z][A-Z_]*(?: did not complete)?: )?{re.escape(cls)} "
+        r"\(message withheld from evidence; see the server log"
+        r"(?: for correlation id [A-Za-z0-9_.:-]{1,64})?\)", text) is not None
 
-    Pure, idempotent, and a no-op on the controlled strings this application
+
+def sanitize_stored_error(value: Any, *, failure_class: str | None = None) -> Any:
+    """Mask driver payloads in stored error text on the way to a viewer.
+
+    Pure and idempotent; a no-op on the controlled strings this application
     writes ("worker_stopped_without_reporting", "CURATION: ValueError: ...").
-    Non-strings are returned unchanged.
+    Non-strings are returned unchanged. `failure_class` is the exception class
+    name stored beside the text, where the caller has one. The contract is
+    stated in the comment block above.
     """
     if not isinstance(value, str) or not value:
         return value
-    text = _SQL_FRAGMENT.sub("", value)
-    text = _BACKGROUND.sub("", text)
-    withheld = False
-    match = None
-    for m in _DRIVER_CLASS.finditer(text):
-        match = m  # the innermost (last) driver class
-    if match is None:
-        for m in _DIALECT_CLASS.finditer(text):
-            match = m
-    if match is not None:
-        rest = text[match.end():]
-        text = text[:match.end()]
-        withheld = bool(rest.strip(" :\n\t"))
-    if withheld:
-        text = text.rstrip() + _ERROR_WITHHELD
-    return text if text != value else value
+    text = _BACKGROUND.sub("", _SQL_FRAGMENT.sub("", value))
+    text = _PG_FIELD.sub("", text)
+    cut = text != value
+
+    first = _MARKER.search(text)
+    if first is not None:
+        end = first.end()
+        while True:                      # the unbroken run of markers only
+            following = _MARKER.match(text, _MARKER_GAP.match(text, end).end())
+            if following is None:
+                break
+            end = following.end()
+        rest = text[end:]
+        before = text[:first.start()]
+        kept = _MARKER_PREFIX.match(before).group(0)
+        dropped = bool(before[len(kept):].strip(" :\n\t"))
+        if dropped and before.rstrip()[-1:] in ('"', "'"):
+            # Discarded text AND the marker sits inside a quoted value: it is part of the delivered value.
+            return (kept.rstrip(": ").rstrip() or "Error") + _ERROR_WITHHELD
+        text = kept + text[first.start():end]
+        if cut or dropped or rest.strip(" :\n\t"):
+            text = text.rstrip() + _ERROR_WITHHELD
+        return text if text != value else value
+
+    if "<class '" in text:
+        # A class-marker shape that is NOT a driver class path (not recognised above) is a delivered value that
+        # looks like one; it is never kept.
+        stage = _STAGE_PREFIX.match(text)
+        return (stage.group(0) if stage else "") + "Error" + _ERROR_WITHHELD
+
+    lead = _CLASS_LEAD_IN.match(text)
+    named = (lead.group("cls") or lead.group("bare")) if lead else None
+    if failure_class:
+        if not cut and _writer_withheld(text, failure_class):
+            return value
+        if not cut and named == failure_class and named in CONTROLLED_FAILURE_CLASSES:
+            return value
+        name = failure_class if _CLASS_NAME.fullmatch(failure_class) else "Error"
+        return name + _ERROR_WITHHELD
+    if named is not None:
+        if not cut and named in CONTROLLED_FAILURE_CLASSES:
+            return value
+        return (lead.group("stage") or "") + named + _ERROR_WITHHELD
+    if cut:
+        stage = _STAGE_PREFIX.match(text)
+        return (stage.group(0) if stage else "") + "Error" + _ERROR_WITHHELD
+    return value
 
 
-def sanitize_stored_error_tree(value: Any) -> Any:
-    """`sanitize_stored_error` applied to every string in a nested structure
-    (a job's `stage_detail`). Dicts and lists are copied; nothing is mutated."""
+#: A bare code as a writer stores it under an error key. NOT any identifier: a
+#: delivered value can be one token too (review finding 2026-11-14). A code is
+#: an exception class NAME - a listed domain class, or a CamelCase word with one
+#: of the endings Python and the drivers give their exception classes - or one
+#: of the tokens this application writes itself.
+_EXCEPTION_NAME = re.compile(r"[A-Z][A-Za-z0-9]{0,120}(?:Error|Exception|Timeout|Warning)")
+_TRUSTED_ERROR_TOKENS = frozenset({"worker_stopped_without_reporting"})
+
+
+def _is_trusted_error_code(value: str) -> bool:
+    return (value in CONTROLLED_FAILURE_CLASSES or value in _TRUSTED_ERROR_TOKENS
+            or _EXCEPTION_NAME.fullmatch(value) is not None)
+#: The withheld form for ANY class, as `safe_exception_text` and this module write it.
+_ANY_WITHHELD = re.compile(
+    r"(?:[A-Z][A-Z_]*(?: did not complete)?: )?[A-Za-z_][A-Za-z_0-9]{0,127} "
+    r"\(message withheld from evidence; see the server log"
+    r"(?: for correlation id [A-Za-z0-9_.:\-]{1,64})?\)")
+
+
+#: The value a writer stores beside an error value, under "<key>_writer", to
+#: say the value came from `safe_exception_text`. Only server code writes
+#: `stage_detail` and stage-event `detail`; no request body reaches them.
+SAFE_ERROR_WRITER = "safe_exception_text/1"
+
+
+def _is_error_key(key: Any) -> bool:
+    name = str(key).lower()
+    return name == "error" or name.endswith("_error")
+
+
+def _sanitize_error_value(value: str, *, safe_writer: bool = False) -> str:
+    """A string stored under an error key (`stage_detail[stage]["error"]`,
+    `snapshot_error`, a stage event's `detail["error"]`).
+
+    The first runner stored `str(exc)` there: a bare message with no class
+    beside it, which `sanitize_stored_error` cannot tell from a controlled
+    string. So here the rule is turned round - only what a writer of this
+    application produces is shown:
+
+      * the withheld form ("Class (message withheld ...)");
+      * a bare code: an exception class name ("TimeoutError") or a token this
+        application writes ("worker_stopped_without_reporting").
+
+    Anything else is withheld. A message with a class name in front keeps the
+    name and loses the message, for every class, UNLESS the mark of its writer
+    is stored beside it ("<key>_writer" == SAFE_ERROR_WRITER, which the
+    delivery runner writes with every per-stage error since 2026-11-14). Rows
+    written before that carry no mark: their per-stage message is withheld,
+    and the domain message is still shown where its class has provenance - the
+    job's `error_reason` (the class there was always written from
+    `type(exc).__name__`) and a stage event's `failure_reason` (which has
+    `failure_class` beside it).
+    """
+    masked = sanitize_stored_error(value)
+    if masked != value:
+        return masked
+    if safe_writer:
+        # Marked by its writer as `safe_exception_text` output: that function
+        # keeps a message only for a domain exception, and the class in front
+        # was written from the exception itself. The general rule above has
+        # been applied; nothing more is withheld.
+        return value
+    if _ANY_WITHHELD.fullmatch(value) or _is_trusted_error_code(value):
+        return value
+    lead = _CLASS_LEAD_IN.match(value)
+    if lead:
+        # A class name in FRONT of the message is not provenance by itself: a
+        # legacy str(exc) can begin "ValueError: ...". Without the mark of its
+        # writer beside the value the name is kept and the message is withheld,
+        # for every class, listed or not.
+        return ((lead.group("stage") or "") + (lead.group("cls") or lead.group("bare"))
+                + _ERROR_WITHHELD)
+    return _ERROR_WITHHELD.strip()
+
+
+def sanitize_stored_error_tree(value: Any, *, strict_error_keys: bool = False,
+                               _under_error_key: bool = False,
+                               _safe_writer: bool = False) -> Any:
+    """`sanitize_stored_error` applied to every string in a nested structure.
+    Dicts and lists are copied; nothing is mutated.
+
+    `strict_error_keys=True` is for structures whose error keys were written by
+    the delivery runner (a job's `stage_detail`, a stage event's `detail`):
+    a string under a key named `error` or `*_error` is shown only in a shape a
+    writer produces (see `_sanitize_error_value`). Other keys, and every caller
+    that does not ask, keep the general rule."""
     if isinstance(value, dict):
-        return {k: sanitize_stored_error_tree(v) for k, v in value.items()}
+        return {k: sanitize_stored_error_tree(
+                    v, strict_error_keys=strict_error_keys,
+                    _under_error_key=strict_error_keys and _is_error_key(k),
+                    _safe_writer=value.get(f"{k}_writer") == SAFE_ERROR_WRITER)
+                for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [sanitize_stored_error_tree(v) for v in value]
+        return [sanitize_stored_error_tree(v, strict_error_keys=strict_error_keys,
+                                           _under_error_key=_under_error_key)
+                for v in value]
+    if _under_error_key and isinstance(value, str) and value:
+        return _sanitize_error_value(value, safe_writer=_safe_writer)
     return sanitize_stored_error(value)
 
 
