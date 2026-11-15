@@ -402,6 +402,44 @@ def _proposed_name_major_below() -> Optional[float]:
     return value
 
 
+#: Evidence whose key is an ORGANISATION NAME (not an identifier): the LEIE name screen is written
+#: `org=<name>`, the SAM.gov name search `legal_name=<name>`.
+_NAME_SCREEN_PREFIXES = ("org=", "legal_name=")
+
+
+def withhold_unestablished_name_screens(evidence: Dict[str, Any], *, delivered_name: Any,
+                                        entity_name: Any):
+    """Bulk-path counterpart of the single-record rule (W4, owner decision 2026-11-14).
+
+    An NPI-less delivered record is screened BY NAME, and the screen ran on the registry ENTITY's name.
+    Unless the record's delivered name is established to be the entity's name (NFC + casefold + collapsed
+    whitespace; punctuation, order and suffixes preserved; no fuzzy match), that result describes another
+    organisation and must not be classified or stored under this record. The name-keyed items are removed
+    (the source then reads NOT_CHECKED and the mandatory-source policy fails closed) and the dimension they
+    sat in is marked UNAVAILABLE. NPI-keyed evidence is untouched. Returns (evidence, withheld).
+    """
+    from app.tefca_registry.review_service import names_establish_one_identity
+
+    if names_establish_one_identity(delivered_name, entity_name):
+        return evidence, []
+    import copy
+    out = copy.deepcopy(evidence)
+    withheld: List[Dict[str, str]] = []
+    for dimension in out.get("dimensions", []):
+        kept = []
+        for item in dimension.get("evidence", []):
+            q = str(item.get("query_identifier") or "").strip().lower()
+            if q.startswith(_NAME_SCREEN_PREFIXES):
+                withheld.append({"source": str(item.get("source")), "dimension": str(dimension.get("dimension")),
+                                 "reason": "the delivered name is not established to be the registry entity's name"})
+            else:
+                kept.append(item)
+        if len(kept) != len(dimension.get("evidence", [])):
+            dimension["evidence"] = kept
+            dimension["disposition"] = "UNAVAILABLE"
+    return out, withheld
+
+
 def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, Any]:
     """Translate assembled D1-D6 evidence into the classifier's input shape.
 
@@ -944,6 +982,11 @@ async def verify_and_classify(
                     "reason": "submitted NPI differs from the identifier used by source probes; no record classification written"})
                 continue
 
+            name_screens_withheld: List[Dict[str, str]] = []
+            if selected is not None and not submitted_npi:
+                evidence, name_screens_withheld = withhold_unestablished_name_screens(
+                    evidence, delivered_name=delivered.get("name"), entity_name=entity.get("name"))
+
             if persist_evidence:
                 rows = evidence_rows_for_persistence(
                     str(entity_uuid or entity.get("id")), None, evidence)
@@ -952,6 +995,8 @@ async def verify_and_classify(
                     db.add(TEFCADimensionEvidence(**row))
 
             verification_results = dimensions_to_verification_results(evidence)
+            if name_screens_withheld:
+                verification_results.setdefault("record_context", {})["name_screens_withheld"] = name_screens_withheld
             # Treatment FIELD signals — ONE shared producer for both
             # classification paths (review finding 2026-11-10, PR #210): the
             # v4/owner-adopted/ONC-scope signals, the RULE-007 applicability

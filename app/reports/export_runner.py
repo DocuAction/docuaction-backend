@@ -229,6 +229,13 @@ async def run_report_generation_job(db, job) -> str:
     return ReportExportJob.STATE_SUCCEEDED
 
 
+def record_review_report_id(job_id) -> str:
+    """The FULL job UUID. An eight-character prefix let two jobs share a report_id, so the second rendering
+    became the next artifact_version of the first and the first job's link could return it. 'RECORD-REVIEW-'
+    plus a 36-character UUID is 50 characters; report_id columns are String(64)."""
+    return f"RECORD-REVIEW-{str(job_id).upper()}"
+
+
 async def run_record_review_export_job(db, job) -> str:
     """Take a RUNNING record-review export job to SUCCEEDED or FAILED.
 
@@ -269,7 +276,7 @@ async def run_record_review_export_job(db, job) -> str:
             raise loader.LoaderRefused(
                 f"unsupported format {fmt!r}; expected one of {sorted(renderers)}")
         await export_jobs.heartbeat(db, job_id, phase=PHASE_PREPARING)
-        report_id = f"RECORD-REVIEW-{str(job_id)[:8].upper()}"
+        report_id = record_review_report_id(job_id)
         dataset = await loader.load_dataset(
             db, intake_id=job.source_intake_id,
             evidence_cutoff=params.get("evidence_cutoff"),
