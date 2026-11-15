@@ -227,6 +227,15 @@ async def load_issues(db, intake_id, cutoff) -> List[Any]:
         .order_by(I.source_record_id, I.created_at, I.issue_code))).scalars().all())
 
 
+#: Excel's hard limit for one cell. openpyxl silently shortens a longer string, which would make the file differ from the
+#: dataset it claims to be, so a longer value is REFUSED (the CSV carries the full text).
+XLSX_CELL_LIMIT = 32_767
+
+
+class FieldExportRefused(ValueError):
+    """The field-level file could not be written faithfully in this format."""
+
+
 def to_xlsx(result: Dict[str, Any]) -> bytes:
     """One sheet, every cell TEXT (identifiers and postal codes are never numerically converted)."""
     from openpyxl import Workbook
@@ -235,7 +244,12 @@ def to_xlsx(result: Dict[str, Any]) -> bytes:
     ws = wb.active
     ws.title = "Field_Findings"
     ws.append(list(result["headers"]))
-    for r in result["rows"]:
+    for n, r in enumerate(result["rows"], start=1):
+        for header, v in zip(result["headers"], r):
+            if len(str(v)) > XLSX_CELL_LIMIT:
+                raise FieldExportRefused(
+                    f"row {n}, {header}: {len(str(v))} characters exceeds Excel's {XLSX_CELL_LIMIT}-character cell limit; "
+                    f"use the CSV for the full text")
         ws.append([str(v) for v in r])
     for row in ws.iter_rows(min_row=2):
         for c in row:

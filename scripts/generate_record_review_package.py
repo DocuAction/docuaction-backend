@@ -250,8 +250,13 @@ async def build(args) -> int:
     try:
         from app.reports.data import field_level_findings as flf
         async with async_session_maker() as db:
+            # PINNED to the run the record-level export used: without --run-id each load would pick "the current
+            # run" separately, and a run completing in between would give the two grains different runs.
+            pinned_run = args.run_id or (dataset.get("load_meta") or {}).get("assessment_run_id")
             loaded = await loader.load_record_facts(
-                db, intake_id=args.intake, evidence_cutoff=args.cutoff, run_id=args.run_id)
+                db, intake_id=args.intake, evidence_cutoff=args.cutoff, run_id=pinned_run)
+            if pinned_run is not None and str(loaded["meta"].get("assessment_run_id")) != str(pinned_run):
+                raise RuntimeError("field-level load used a different run than the record-level export")
             cutoff_dt = loader._cutoff(args.cutoff)
             from app.tefca_registry.rce import models as rce_models
             intake_uuid = uuid.UUID(loaded["meta"]["intake_id"])
@@ -261,7 +266,11 @@ async def build(args) -> int:
         field_result = flf.build_field_rows(loaded["facts"], issues, snapshot_date=str(snap),
                                             run_id=loaded["meta"].get("assessment_run_id"))
         for fmt, render in (("csv", flf.to_csv), ("xlsx", flf.to_xlsx)):
-            data = render(field_result)
+            try:
+                data = render(field_result)
+            except flf.FieldExportRefused as exc:
+                skipped[f"field-findings-{fmt}"] = f"refused: {exc}"      # the CSV still carries the full text
+                continue
             fpath = os.path.join(out_dir, f"{report_id}-field-findings.{fmt}")
             with open(fpath, "xb") as f:
                 f.write(data)
