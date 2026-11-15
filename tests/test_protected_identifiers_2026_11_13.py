@@ -168,6 +168,15 @@ class TestTheTefcaAiGatewayRefuses:
         out = await gateway._call_provider(gateway.primary_provider, self.DIRTY,
                                            "standard", "entity_match", 0.0)
         assert out is None and gateway.sent == []
+
+    @pytest.mark.parametrize("count", [65, 1_000, 100_000])
+    async def test_a_padded_label_does_not_get_a_bare_value_dispatched(self, gateway, count):
+        """1.2.0: more than 64 separators inside the label used to pass the guard."""
+        prompt = f"Compare SYNTHETIC ORG, tax{'_' * count}id {SYN_EIN_BARE}, with SYNTHETIC ORG LLC"
+        assert await gateway.call(prompt) is None
+        out = await gateway._call_provider(gateway.primary_provider, prompt,
+                                           "standard", "entity_match", 0.0)
+        assert out is None and gateway.sent == []
         assert not gateway._breakers[gateway.primary_provider].is_open
 
     async def test_a_refusal_does_not_log_the_value_or_the_prompt(self, gateway, caplog):
@@ -428,32 +437,103 @@ class TestASingleTokenFollowedByAnIdentifierWord:
         assert pi.find_in_text(text) == [], text
 
 
-class TestTheSeparatorRunInsideALabelIsBounded:
-    """Review item W8 (2026-11-14). The run of separators inside a label
-    (`TAX___ID`, `tax - payer   id`) was `[\s_\-]*`: unbounded. It is now at most
-    `LABEL_SEPARATOR_MAX` characters and is matched without backtracking.
+class TestALongSeparatorRunInsideALabelIsNotABypass:
+    """Owner instruction 2026-11-14: labels with more than 64 separators must
+    not bypass the guard.
 
-    THE STATED LIMIT: a label whose words are more than that many separators
-    apart is not read as a label, so a bare value after it is not found by the
-    label rule (the written NN-NNNNNNN shape is still found by its own rule)."""
+    The run of separators inside a label (`TAX___ID`, `tax - payer   id`) was
+    bounded at 64 in version 1.1.0, and "more than 64 apart is not a label" was
+    pinned as an accepted limit. It was a way round the guard: pad the label and
+    a bare nine-digit value passed `find_in_text`, `redact_text` and
+    `assert_safe_for_ai`. The run is now of ANY length and is still matched
+    without backtracking (possessive), so no input is slow.
 
-    def test_the_bound_is_what_the_pattern_uses(self):
-        assert pi.LABEL_SEPARATOR_MAX == 64
-        assert "*" not in pi._SEP and "{0,64}" in pi._SEP
+    What is unchanged, and still a stated limit: the gap between a label and its
+    VALUE (`_GAP`, at most 16 characters of punctuation / joining words)."""
 
-    @pytest.mark.parametrize("sep", ["_", " ", "-", " _-"])
-    def test_a_label_at_the_bound_is_still_found_and_redacted(self, sep):
-        run = (sep * pi.LABEL_SEPARATOR_MAX)[:pi.LABEL_SEPARATOR_MAX]
-        text = f"tax{run}id: {SYN_EIN_BARE}"
+    RUNS = [65, 66, 1_000, 100_000]
+
+    def test_the_run_is_unbounded_and_possessive(self):
+        assert not hasattr(pi, "LABEL_SEPARATOR_MAX")
+        assert pi._SEP.endswith("*+") and "{0," not in pi._SEP
+        assert pi.PROTECTED_IDENTIFIERS_VERSION == "1.2.0"
+
+    @pytest.mark.parametrize("count", RUNS)
+    @pytest.mark.parametrize("sep", ["_", " ", "-", " _-", "\t", "\r\n", " \n\t_-\r"])
+    def test_found_redacted_and_refused_whatever_the_run(self, sep, count):
+        run = (sep * count)[:count]
+        text = f"before tax{run}id: {SYN_EIN_BARE} after"
         assert pi.find_in_text(text) == ["labelled_tax_identifier"]
-        assert SYN_EIN_BARE not in pi.redact_text(text)
+        redacted = pi.redact_text(text)
+        assert SYN_EIN_BARE not in redacted
+        # Nothing but the value is replaced: the label, its whole run and the
+        # text on both sides are still there.
+        assert redacted == f"before tax{run}id: {pi.REDACTED} after"
+        assert pi.redact_text(redacted) == redacted            # idempotent
+        assert pi.find_in_text(redacted) == []
+        with pytest.raises(pi.ProtectedIdentifierEgressRefused) as refused:
+            pi.assert_safe_for_ai(text, where="synthetic")
+        assert SYN_EIN_BARE not in str(refused.value)
 
-    def test_one_past_the_bound_is_the_documented_limit(self):
-        run = "_" * (pi.LABEL_SEPARATOR_MAX + 1)
-        assert pi.find_in_text(f"tax{run}id: {SYN_EIN_BARE}") == []          # the limit, stated
-        assert pi.find_in_text(f"tax{run}id: {SYN_EIN}") == ["ein_shaped_value"]   # shape rule unaffected
+    @pytest.mark.parametrize("count", RUNS)
+    @pytest.mark.parametrize("template", [
+        '{{"tax{run}id": "{value}"}}',                         # JSON-ish
+        '{{"org": {{"tax{run}payer{run}id": "{value}"}}}}',    # nested, three-word label
+        "tax{run}id={value}",                                  # key=value
+        "TAX{run}IDENTIFICATION{run}NUMBER = {value}",
+        "employer{run}identification{run}number: {value}",
+        "ein{run}number: {value}",
+        "the IRS{run}number is {value} for this organisation", # prose, joining word
+        "orgTax{run}Id: {value}",                              # camelCase start
+    ])
+    def test_every_form_of_label_and_serialization(self, template, count):
+        text = template.format(run="_" * count, value=SYN_EIN_BARE)
+        assert "labelled_tax_identifier" in pi.find_in_text(text), template
+        redacted = pi.redact_text(text)
+        assert SYN_EIN_BARE not in redacted and pi.REDACTED in redacted
+        assert len(redacted) == len(text) - len(SYN_EIN_BARE) + len(pi.REDACTED)
+        with pytest.raises(pi.ProtectedIdentifierEgressRefused):
+            pi.assert_safe_for_ai(text)
+
+    @pytest.mark.parametrize("value", ["00-0000000", "00 0000000", "000000000", "900-70-0000"])
+    def test_every_written_form_of_the_value_after_a_padded_label(self, value):
+        text = "tax" + "_" * 5_000 + "id: " + value
+        assert "labelled_tax_identifier" in pi.find_in_text(text)
+        assert not any(ch.isdigit() for ch in pi.redact_text(text))
+
+    @pytest.mark.parametrize("text", [
+        # Long runs and nine digits, but no label: not newly flagged.
+        "_" * 5_000 + " 000000000",
+        "section " + "-" * 5_000 + " 000000000 " + "_" * 5_000,
+        "tax" + "_" * 5_000 + "onomy 000000000",              # not an identifier word
+        "taxation" + " " * 5_000 + "id: 000000000",           # runs on into another word
+        "syntax" + "_" * 5_000 + "id: 000000000",
+        "routing" + "_" * 5_000 + "number: 000000000",
+        "id" + "_" * 5_000 + "tax: 000000000",                # wrong order
+        # A padded label with the value far away: the label-to-value gap is
+        # still at most 16 characters (unchanged, stated limit).
+        "tax" + "_" * 5_000 + "id" + " " * 17 + "000000000",
+        "tax" + "_" * 5_000 + "id was not supplied; the count was 000000000",
+    ])
+    def test_long_runs_without_a_label_or_far_from_the_value_are_not_flagged(self, text):
+        assert pi.find_in_text(text) == [], text[:40]
+        assert pi.redact_text(text) == text
+
+    def test_what_is_newly_flagged_is_stated(self):
+        """The false-positive behaviour, precisely: the words of a label may now
+        be ANY number of spaces, tabs, line breaks, underscores or hyphens apart
+        (and nothing else). So prose in which `tax` ends one paragraph and `ID`
+        opens a later one, with only blank lines between and nine digits right
+        after, is read as a labelled value. One other character in between and
+        it is not."""
+        blank = "\n" * 200
+        assert pi.find_in_text(f"we discussed tax{blank}ID 000000000") == ["labelled_tax_identifier"]
+        assert pi.find_in_text(f"we discussed tax.{blank}ID 000000000") == []
+        assert pi.find_in_text(f"we discussed tax{blank}Notes. ID 000000000") == []
 
     def test_long_separator_input_finishes_well_inside_a_fixed_budget(self):
+        # CPU seconds of this process, not wall-clock: a busy or paging runner
+        # must not fail a test about the amount of work done.
         import time
 
         hostile = [
@@ -465,9 +545,44 @@ class TestTheSeparatorRunInsideALabelIsBounded:
             ("tax_id" + "_" * 70 + "x ") * 3_000,
             "-" * 400_000,
         ]
-        started = time.perf_counter()
+        started = time.process_time()
         for text in hostile:
             assert pi.find_in_text(text) == []
             assert pi.redact_text(text) == text
-        seconds = time.perf_counter() - started
-        assert seconds < 5.0, f"{seconds:.2f}s for {sum(map(len, hostile)):,} characters"
+        seconds = time.process_time() - started
+        assert seconds < 5.0, f"{seconds:.2f} CPU s for {sum(map(len, hostile)):,} characters"
+
+    def test_the_unbounded_run_is_linear_on_inputs_built_against_it(self):
+        """Inputs aimed at the new path: every label start is followed by a long
+        run that ends in something that is NOT the next label word, so a
+        backtracking matcher would retry each run from every shorter length.
+        Four times the input must stay far below sixteen times the time."""
+        import time
+
+        def build(n):
+            return [
+                ("tax" + "_" * 2_000 + "payer" + "_" * 2_000 + "x ") * n,
+                ("tax" + " " * 2_000 + "id" + " " * 2_000 + "id" + " " * 2_000 + "x ") * n,
+                ("employer" + "-" * 2_000 + "identification" + "-" * 2_000 + "x ") * n,
+                ("ein" + "\n" * 2_000 + "number" + "\n" * 2_000 + "0000 ") * n,
+                ("irs" + "_" * 2_000) * (2 * n),
+                "tax" + "_" * (4_000 * n) + "id" + "_" * (4_000 * n) + "number" + "_" * (4_000 * n),
+            ]
+
+        def run(texts):
+            best = float("inf")
+            for _ in range(3):                       # best of three: a loaded runner is noisy
+                started = time.process_time()
+                for text in texts:
+                    assert pi.find_in_text(text) == []
+                    assert pi.redact_text(text) == text
+                best = min(best, time.process_time() - started)
+            return best
+
+        small, large = build(10), build(40)          # four times the input
+        t_small, t_large = run(small), run(large)
+        total = sum(map(len, large))
+        assert total > 1_300_000
+        assert t_large < 5.0, f"{t_large:.2f} CPU s for {total:,} characters"
+        # Linear work is 4x; quadratic would be 16x.
+        assert t_large < 9 * t_small + 0.3, (t_small, t_large)

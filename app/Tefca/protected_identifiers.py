@@ -50,7 +50,7 @@ from typing import Any, Iterable, List
 
 from app.Tefca.identifier_boundary import GOVERNMENT_RESTRICTED
 
-PROTECTED_IDENTIFIERS_VERSION = "1.1.0"
+PROTECTED_IDENTIFIERS_VERSION = "1.2.0"
 
 #: What replaces a protected value. Deliberately not a mask of the value: a
 #: partial tax identifier is still part of a tax identifier.
@@ -76,16 +76,24 @@ _SPLIT = re.compile(r"[^A-Za-z0-9]+")
 #: not a label in text. Whatever names a protected column now also labels a
 #: value in text; a test compares the two for every combination.
 #:
-#: THE SEPARATOR RUN IS BOUNDED (2026-11-14). The words of a label may be up to
-#: `LABEL_SEPARATOR_MAX` separator characters apart (`TAX___ID`, a padded column
-#: heading); the run is matched possessively, so a failed match never re-tries
-#: shorter runs. What follows a run always starts with a letter, which is not a
-#: separator, so within the bound the possessive form matches exactly what the
-#: backtracking form did. STATED LIMIT: words further apart than the bound are
-#: not read as one label, and a bare value after them is not found by the label
-#: rule (the written NN-NNNNNNN shape still is, by its own rule).
-LABEL_SEPARATOR_MAX = 64
-_SEP = rf"[\s_\-]{{0,{LABEL_SEPARATOR_MAX}}}+"
+#: THE SEPARATOR RUN IS OF ANY LENGTH, AND POSSESSIVE (1.2.0, 2026-11-14).
+#: The words of a label may be any number of separator characters apart
+#: (`TAX___ID`, a padded column heading, a label broken across lines). Version
+#: 1.1.0 bounded the run at 64; words further apart were then not read as one
+#: label, and padding a label was a way round the guard for a bare value. The
+#: bound is gone.
+#:
+#: Matching stays linear because the run is POSSESSIVE (`*+`): once taken it is
+#: never given back, so a failed match is not retried with shorter runs. That
+#: loses no match, because whatever follows a run in this pattern starts with a
+#: letter, which is not a separator - a shorter run could only be followed by
+#: another separator. A label can only START at a letter, so a position inside
+#: a run fails at once, and each run is read by the few alternatives of the
+#: one label start in front of it. Two timing tests hold this.
+#:
+#: STILL A STATED LIMIT, and unchanged: the gap between a label and its VALUE
+#: (`_GAP`) is at most 16 characters of punctuation and joining words.
+_SEP = r"[\s_\-]*+"
 _SUFFIX = "(?:" + "|".join(sorted((re.escape(x) for x in _ID_SUFFIXES), key=len, reverse=True)) + ")"
 _SINGLE = "(?:" + "|".join(sorted((re.escape(x) for x in _SINGLE_TOKENS), key=len, reverse=True)) + ")"
 _LABEL = (
