@@ -252,6 +252,8 @@ CONTROLLED_FAILURE_CLASSES = frozenset({
     "IntakeError", "LineCountMismatch", "NotADelimitedFile",
     "CorrectionRefused", "ReconciliationFailure", "SnapshotRefused",
     "ApprovalRefused", "DeliveryJobConflict",
+    # GATE_BLOCKED: the message holds only the intake id and run id (delivery_runner.py), never delivered values.
+    "PreflightBlockedError",
 })
 
 
