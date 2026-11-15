@@ -351,6 +351,8 @@ async def load_record_facts(
             .order_by(reg.ReviewRecord.source_record_id,
                       reg.ReviewRecord.created_at.desc(),
                       reg.ReviewRecord.id.desc()))).scalars().all()}
+        from app.tefca_registry.rce import supplemental_research as _sr
+        research = await _sr.current_by_record(db, intake_uuid, ids)     # {} until the migration is applied
         decisions = await rd.load_for_reviews(
             db, [r.review_id for r in reviews.values()], cutoff)
         stats["records_with_multiple_reviews"] += len((await db.execute(
@@ -470,7 +472,10 @@ async def load_record_facts(
             if ann.get("flag"):
                 flag_parts.append(_s(ann["flag"]))
 
-            supplemental = _s(ann.get("supplemental_npi"))
+            stored_research = research.get(rec.id) or {}
+            # A caller annotation still wins (history); otherwise the STORED research, which never touches the
+            # submitted NPI above and is shown only as supplemental evidence.
+            supplemental = _s(ann.get("supplemental_npi")) or _s(stored_research.get("researched_npi"))
             if supplemental:
                 stats["with_supplemental_npi"] += 1
 
@@ -486,6 +491,12 @@ async def load_record_facts(
                 "purpose_of_use": _s(parsed.get("purposesofuse")),
                 "submitted_npi": submitted,
                 "supplemental_npi": supplemental,
+                "supplemental_research": (
+                    f"researched NPI {stored_research['researched_npi']} | NPPES reference: "
+                    f"{stored_research['nppes_reference']} | research date {stored_research['nppes_check_date']} | "
+                    f"researcher {stored_research['researcher']} | entered {stored_research['entered_at']} | "
+                    f"rationale: {stored_research['match_rationale']} | entry {stored_research['id']}"
+                    if stored_research else ""),
                 "bucket": bucket, "status": status, "bucket_basis": basis,
                 "held_reason": _s(cur.status_reason) if cur is not None else "",
                 "flag": "; ".join(flag_parts),
