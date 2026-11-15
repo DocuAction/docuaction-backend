@@ -64,6 +64,7 @@ DRAFT_BANNER = ("CURRENT REVIEW / DRAFT / NOT FINAL - INDEPENDENT QA PENDING. "
 #: Wording removed by the 2026-11-11 report corrections; refused in PECOS cells.
 PROHIBITED_PECOS_PHRASES = ("lost-identifier/outage family",)
 
+SAM_EXTRACT_COLUMN = "SAM Public Extract (supplementary; candidate only)"
 RECORD_COLUMNS = [
     "Source_Line", "AGT_Record_ID", "QHIN Number", "HCID", "Tefca Id",
     "Organization", "Participation Level",
@@ -80,6 +81,7 @@ RECORD_COLUMNS = [
     # Analyst/QA disposition, reported SEPARATELY from the automated Bucket above.
     "Reviewed Disposition (QA-approved only)", "Reviewed Disposition Date",
     "Analyst/QA Status", "Reviewed Disposition Basis",
+    SAM_EXTRACT_COLUMN,
 ]
 TEXT_COLUMNS = list(range(len(RECORD_COLUMNS)))   # identifiers stay text
 #: Compact subset for the PDF; the full column set is in the Excel/CSV.
@@ -267,6 +269,7 @@ def build_record_row(fact: Dict[str, Any],
         _reviewed_cell(fact, status), _s(fact.get("reviewed_date")),
         _s(fact.get("reviewed_qa_status")) or "No analyst determination recorded",
         _s(fact.get("reviewed_basis")),
+        _s(fact.get("sam_extract")) or NOT_ESTABLISHED,
     ]
 
 
