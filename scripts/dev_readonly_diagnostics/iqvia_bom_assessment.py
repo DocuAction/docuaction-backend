@@ -65,7 +65,7 @@ select s.id::text as snapshot_id, s.source_system, s.status, s.record_count,
        (s.metadata ? 'reference_preflight') as preflight_recorded,
        s.metadata->'reference_preflight'->>'gate' as preflight_gate,
        s.metadata->'reference_preflight'->>'preflight_version' as preflight_version,
-       ((s.metadata->'reference_preflight'->'findings') @> '[{"code":"REF-SCH-010"}]'::jsonb) as preflight_bom,
+       ((s.metadata->'reference_preflight'->'findings') @> jsonb_build_array(jsonb_build_object('code', 'REF-SCH-010'))) as preflight_bom,
        (s.metadata ? 'durable_original') as durable_original_recorded,
        s.created_at::date::text as created_on
 from source_snapshot s
@@ -102,7 +102,7 @@ def q_staged(source: str) -> str:
 def q_key_sample(source: str) -> str:
     # Key NAMES of one staged row (the header as read). No value is selected.
     return (  # noqa: S608 - fixed table mapping
-        "select bool_or(left(k, 1) = E'\\ufeff') as has_bom_key, count(*) as key_count "  # noqa: S608
+        "select bool_or(left(k, 1) = chr(65279)) as has_bom_key, count(*) as key_count "  # noqa: S608
         f"from (select payload from {OBSERVATION_TABLE[source]} where source_snapshot_id = %(id)s limit 1) r "
         "cross join lateral jsonb_object_keys(r.payload) k")
 
@@ -116,7 +116,7 @@ def q_downstream(table: str, column: str) -> str:
     if not (_IDENT.match(table) and _IDENT.match(column)):
         raise ValueError("unexpected identifier from the catalog")
     # Both identifiers were validated against _IDENT above (they come from the catalog).
-    return f'select count(*) from "{table}" where "{column}" = any(%(ids)s::uuid[])'  # noqa: S608
+    return f"select count(*) from {table} where {column} = any(%(ids)s::uuid[])"  # noqa: S608
 
 
 def all_queries() -> List[str]:

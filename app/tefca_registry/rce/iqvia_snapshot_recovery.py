@@ -273,6 +273,20 @@ async def enforce_assessment_before_approval(db, received, *, approver: str) -> 
 
 # ── recovery ─────────────────────────────────────────────────────────────────
 
+async def _require_real_executor(db, requested_by: str) -> None:
+    """`requested_by` must be an existing, active user who may execute a recovery. Free text
+    would let a QA lead name any other string and then execute the recovery themselves."""
+    from app.models.database import User
+
+    email = str(requested_by or "").strip()
+    found = None
+    if email:
+        found = (await db.execute(select(User).where(func.lower(User.email) == email.lower()))).scalar_one_or_none()
+    if found is None or found.is_active is False or not role_at_least(found, EXECUTOR_ROLE):
+        raise RecoveryRefused("REQUESTER_NOT_A_USER",
+                              f"the requester must be an existing active user with {EXECUTOR_ROLE} or above")
+
+
 async def authorize_recovery(db, original_id, *, user, requested_by: str, action: str, approval_ref: str,
                              valid_for_hours: int = DEFAULT_AUTHORIZATION_HOURS,
                              commit: bool = True) -> uuid.UUID:
@@ -285,7 +299,7 @@ async def authorize_recovery(db, original_id, *, user, requested_by: str, action
         raise PermissionError(f"authorizing a recovery requires {AUTHORIZER_ROLE} or above")
     if not approval_ref or not str(approval_ref).strip():
         raise RecoveryRefused("APPROVAL_REF_REQUIRED", "the authorization must cite the owner's written reference")
-    if _actor(user) == requested_by:
+    if _actor(user).strip().lower() == str(requested_by or "").strip().lower():
         raise RecoveryRefused("SEGREGATION_OF_DUTIES", "the authorizer cannot be the requester")
     original = await db.get(sm.SourceSnapshot, original_id)
     if original is None or original.source_system not in IQVIA_SOURCES:
@@ -298,6 +312,7 @@ async def authorize_recovery(db, original_id, *, user, requested_by: str, action
             "a decided snapshot is not recovered by this path; it needs an impact assessment first")
     if await recovery_replacement_of(db, original.id):
         raise RecoveryRefused("ALREADY_RECOVERED", "this snapshot already has a recovery replacement")
+    await _require_real_executor(db, requested_by)
     row = _audit_row(
         db, user, action=AUDIT_AUTHORIZED, outcome="success", resource_id=original.id,
         details={"permitted_action": action, "snapshot_ids": [str(original.id)],
@@ -389,7 +404,10 @@ async def register_recovery_snapshot(db, *, authorization_id, file_path, user,
     if file_sha256(path) != original.sha256 or (auth["sha256"] and auth["sha256"] != original.sha256):
         raise RecoveryRefused("BYTES_DIFFER", "the file is not byte-identical to the original; a different "
                               "file is a new upload, not a recovery")
-    label = f"{original.snapshot_label} [recovery of {original.id.hex[:8]}]"[:200]
+    suffix = f" [recovery of {original.id.hex[:8]}]"
+    # Truncate the ORIGINAL's label, never the suffix: a 200-character original would otherwise
+    # lose the suffix and collide with itself on (source, sha256, label).
+    label = f"{original.snapshot_label[:200 - len(suffix)]}{suffix}"
     replacement = await register_snapshot(
         db, source_system=original.source_system, label=label, sha256=original.sha256, record_count=0,
         received_at=datetime.now(timezone.utc), created_by=actor,

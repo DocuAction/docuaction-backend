@@ -230,7 +230,9 @@ async def approve_snapshot(db, snapshot_id, *, user, approval_ref: str,
     the reconciliation gates.)"""
     if not role_at_least(user, SNAPSHOT_APPROVAL_ROLE):
         raise PermissionError(f"snapshot approval requires {SNAPSHOT_APPROVAL_ROLE} or above")
-    received = await db.get(sm.SourceSnapshot, snapshot_id)
+    # Locked until this transaction ends, so the assessment guard below and the APPROVED insert see
+    # one state of the snapshot: a concurrent change to its inputs waits instead of slipping between them.
+    received = await db.get(sm.SourceSnapshot, snapshot_id, with_for_update=True)
     if received is None:
         raise ValueError(f"no snapshot {snapshot_id}")
     if received.status != sm.SNAPSHOT_PENDING:

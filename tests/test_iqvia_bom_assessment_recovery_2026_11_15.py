@@ -39,7 +39,7 @@ from urllib.parse import unquote, urlparse
 # ruff: noqa: F811  (pytest fixtures imported by name, as in the other IQVIA test files)
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.tefca_registry.rce import iqvia_import as ii
 from app.tefca_registry.rce import iqvia_reader_assessment as ra
@@ -390,10 +390,36 @@ async def test_T7_without_a_mark_both_readers_agree_and_nothing_new_is_required(
 
 # ── T8 / T9 / T10: recovery ──────────────────────────────────────────────────
 
+_synthetic_user_emails: list = []
+
+
+async def _real_user(db, user, **over):
+    """A real `users` row for a synthetic person: the requester of a recovery must exist."""
+    from app.models.database import User
+    db.add(User(email=user.email, password_hash="x", role=over.get("role", user.role),
+                is_active=over.get("is_active", True)))
+    await db.commit()
+    _synthetic_user_emails.append(user.email)
+
+
+@pytest.fixture(autouse=True)
+async def _remove_synthetic_users(db_required):
+    _synthetic_user_emails.clear()
+    yield
+    if _synthetic_user_emails:
+        from sqlalchemy import delete as _delete
+        from app.core.database import async_session_maker
+        from app.models.database import User
+        async with async_session_maker() as cleanup:
+            await cleanup.execute(_delete(User).where(User.email.in_(list(_synthetic_user_emails))))
+            await cleanup.commit()
+
+
 async def _original_and_authorization(db, tmp_path, tag, **auth):
     f = _file(tmp_path, tag, n=4, identity_first=False)
     original = await _legacy_import(db, f)
     requester, authorizer = _User("reviewer", f"{tag}-req"), qa(f"{tag}-auth")
+    await _real_user(db, requester)
     kwargs = dict(user=authorizer, requested_by=requester.email, action=rec.ACTION_RETRY_IDENTICAL_BYTES,
                   approval_ref="SYN-OWNER-AUTH")
     kwargs.update(auth)
@@ -501,6 +527,55 @@ async def test_T9_a_decided_snapshot_is_not_recovered_by_this_path(db, tmp_path,
     assert (await _decision(db, original.id))[1] == sm.SNAPSHOT_APPROVED, "its status was not changed"
 
 
+async def test_T9_the_requester_must_be_a_real_user_who_can_execute(db, tmp_path):
+    f = _file(tmp_path, "t9r", n=3, identity_first=False)
+    original = await _legacy_import(db, f)
+    authorizer = qa("t9r-auth")
+
+    async def refused(requested_by):
+        with pytest.raises(rec.RecoveryRefused) as exc:
+            await rec.authorize_recovery(db, original.id, user=authorizer, requested_by=requested_by,
+                                         action=rec.ACTION_RETRY_IDENTICAL_BYTES, approval_ref="SYN")
+        assert exc.value.code == "REQUESTER_NOT_A_USER"
+
+    await refused("made-up-name")                                        # free text names nobody
+    await refused("someone@synthetic-test.docuaction.invalid")           # well-formed, but no such user
+    inactive = _User("reviewer", "t9r-inactive")
+    await _real_user(db, inactive, is_active=False)
+    await refused(inactive.email)
+    too_low = _User("viewer", "t9r-low")
+    await _real_user(db, too_low)
+    await refused(too_low.email)
+    with pytest.raises(rec.RecoveryRefused) as same:                      # the authorizer is not a second person
+        await rec.authorize_recovery(db, original.id, user=authorizer, requested_by=authorizer.email.upper(),
+                                     action=rec.ACTION_RETRY_IDENTICAL_BYTES, approval_ref="SYN")
+    assert same.value.code == "SEGREGATION_OF_DUTIES", "the comparison ignores case"
+    good = _User("reviewer", "t9r-good")
+    await _real_user(db, good)
+    assert await rec.authorize_recovery(db, original.id, user=authorizer, requested_by=good.email,
+                                        action=rec.ACTION_RETRY_IDENTICAL_BYTES, approval_ref="SYN")
+
+
+async def test_T10_a_200_character_label_still_gets_a_distinguishing_suffix(db, tmp_path, guard_on):
+    f = _file(tmp_path, "t10l", n=3, identity_first=False)
+    original = await _legacy_import(db, f)
+    await db.rollback()
+    long_label = "L" * 200
+    from sqlalchemy import update
+    await db.execute(text("SET LOCAL session_replication_role = replica"))
+    await db.execute(update(sm.SourceSnapshot).where(sm.SourceSnapshot.id == original.id)
+                     .values(snapshot_label=long_label))
+    await db.commit()
+    requester, authorizer = _User("reviewer", "t10l-req"), qa("t10l-auth")
+    await _real_user(db, requester)
+    auth_id = await rec.authorize_recovery(db, original.id, user=authorizer, requested_by=requester.email,
+                                           action=rec.ACTION_RETRY_IDENTICAL_BYTES, approval_ref="SYN")
+    replacement = _plain(await rec.register_recovery_snapshot(db, authorization_id=auth_id, file_path=f, user=requester))
+    _created_snapshot_ids.append(replacement.id)
+    assert replacement.snapshot_label != long_label and len(replacement.snapshot_label) <= 200
+    assert replacement.snapshot_label.endswith(f"[recovery of {original.id.hex[:8]}]")
+
+
 async def test_T10_an_authorized_identical_byte_retry_is_linked_and_duplicate_protection_still_holds(
         db, tmp_path, guard_on):
     f, original, requester, _auth, auth_id = await _original_and_authorization(db, tmp_path, "t10")
@@ -604,7 +679,10 @@ def test_T12_the_inspector_refuses_everything_but_a_single_select():
                 "delete from source_snapshot", "select 1; select 2", "select pg_read_file('x')",
                 "create table t (a int)", "select nextval('s')", "select set_config('a','b',false)",
                 "select * from source_snapshot for update", "select 1 -- x", "copy source_snapshot to stdout",
-                "set role postgres", "select pg_sleep(1)", "select lo_import('/etc/passwd')", ""]:
+                "set role postgres", "select pg_sleep(1)", "select lo_import('/etc/passwd')", "",
+                # forms PostgreSQL lexes differently from the plain-string mask (CodeRabbit, #226)
+                "select E'\\'' || pg_read_file('x') || E'\\''", "select $a$'$a$, pg_sleep(100), $a$'$a$",
+                'select "pg_sleep"(100)', "select pg_catalog.\"pg_read_file\"('x')"]:
         with pytest.raises(ra.ReadOnlySqlRefused):
             ra.inspect_readonly_sql(sql)
     for _sql in _script().all_queries():

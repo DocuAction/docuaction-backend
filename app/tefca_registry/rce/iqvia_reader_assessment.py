@@ -331,7 +331,7 @@ _FORBIDDEN = frozenset("""
 _ALLOWED_FUNCTIONS = frozenset("""
     count sum min max avg bool_or bool_and coalesce nullif left right length lower upper substr
     jsonb_object_keys jsonb_typeof jsonb_array_length unnest cardinality array_length
-    to_regclass has_table_privilege pg_has_role date_trunc round greatest least abs
+    to_regclass has_table_privilege pg_has_role date_trunc round greatest least abs chr jsonb_build_array jsonb_build_object
 """.split())
 
 #: Words that may stand in front of "(" without being a function call.
@@ -358,8 +358,12 @@ def inspect_readonly_sql(sql: str) -> str:
     text = sql.strip()
     if text.endswith(";"):
         text = text[:-1].rstrip()
-    if "--" in text or "/*" in text or "$$" in text:
+    if "--" in text or "/*" in text or "$" in text:
         raise ReadOnlySqlRefused("comments and dollar quoting are not allowed")
+    # PostgreSQL's E'..' strings, "quoted" identifiers and \ escapes lex differently from the
+    # plain-string mask below, so a call could hide from the allowlist. Refuse them outright.
+    if '"' in text or "\\" in text:
+        raise ReadOnlySqlRefused("quoted identifiers and backslash escapes are not allowed")
     bare = _STRING.sub("''", text)
     if ";" in bare:
         raise ReadOnlySqlRefused("more than one statement")
