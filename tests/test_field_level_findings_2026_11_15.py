@@ -164,12 +164,32 @@ def test_internal_normalisation_labels_are_not_reference_sources():
 
 
 def test_a_fixed_field_id_is_not_used_when_the_finding_concerns_another_column():
-    r = build([fact(1)], [issue(1, "DOA_NOT_AN_OID", "doa", original_value="not-an-oid")])
+    """A fixed Field_ID is still withheld when the finding names an unrelated delivered column."""
+    r = build([fact(1)], [issue(1, "DUPLICATE_HCID", "name", original_value="dup")])
     row = r["rows"][0]
-    assert col(row, "Field_ID") == "" and "concerns 'doa', not partof" in col(row, "Field_Reason")
-    assert col(row, "Submitted_Value") == "not-an-oid" and len(r["mapping_exceptions"]) == 1
+    assert col(row, "Field_ID") == "" and "concerns 'name', not HCID" in col(row, "Field_Reason")
+    assert col(row, "Submitted_Value") == "dup" and len(r["mapping_exceptions"]) == 1
     ok = build([fact(1)], [issue(1, "DOA_NOT_AN_OID", "partOf")])["rows"][0]
     assert col(ok, "Field_ID") == "partof"
+
+
+def test_doa_not_an_oid_follows_the_f33_field_id_and_keeps_the_delivered_source_column_traceable():
+    """F3.3 maps DOA_NOT_AN_OID to Field_ID `partof`; the finding originates in the delivered `doa` column.
+    Field_ID follows F3.3 (not blank), Submitted_Value stays the delivered doa value, the source column and the
+    pending confirmation are stated in Field_Reason, and a separate (non-contract) exception records it."""
+    r = build([fact(1)], [issue(1, "DOA_NOT_AN_OID", "doa", original_value="not-an-oid")])
+    row = r["rows"][0]
+    assert len(row) == 18 and r["headers"] == HEADERS_F31
+    assert col(row, "Field_ID") == "partof"
+    assert col(row, "Submitted_Value") == "not-an-oid"
+    reason = col(row, "Field_Reason")
+    assert "Source column: doa" in reason and "F3.3" in reason and "confirmation" in reason
+    assert r["reconciliation"]["field_id_blank"] == 0 and r["reconciliation"]["field_id_source_column_differs"] == 1
+    assert [e["kind"] for e in r["mapping_exceptions"]] == ["source_column_differs"]
+    assert r["mapping_exceptions"][0]["source_column"] == "doa" and r["mapping_exceptions"][0]["field_id"] == "partof"
+    # the finding already on partof carries no such note
+    plain = build([fact(1)], [issue(1, "DOA_NOT_AN_OID", "partOf")])
+    assert "Source column" not in col(plain["rows"][0], "Field_Reason") and plain["mapping_exceptions"] == []
 
 
 # ── CodeRabbit on #231 (32b67c2): XLSX truncation and run pinning ────────────────────────────────────────────
