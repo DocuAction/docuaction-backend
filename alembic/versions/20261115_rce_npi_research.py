@@ -91,7 +91,8 @@ def upgrade() -> None:
         sa.CheckConstraint("entry_action IN ('RECORD','AMEND','WITHDRAW')", name="ck_rce_npi_research_action"),
         sa.CheckConstraint("non_decision = true", name="ck_rce_npi_research_not_a_decision"),
         sa.CheckConstraint(
-            "entry_action = 'WITHDRAW' OR (researched_npi ~ '^[0-9]{10}$' AND nppes_reference IS NOT NULL "
+            "entry_action = 'WITHDRAW' OR (researched_npi IS NOT NULL AND researched_npi ~ '^[0-9]{10}$' "
+            "AND nppes_reference IS NOT NULL "
             "AND btrim(nppes_reference) <> '' AND nppes_check_date IS NOT NULL "
             "AND match_rationale IS NOT NULL AND char_length(btrim(match_rationale)) >= 20)",
             name="ck_rce_npi_research_complete"),

@@ -1014,7 +1014,8 @@ class SupplementalNpiResearchRequest(BaseModel):
     change_reason: Optional[str] = Field(default=None, description="Required for AMEND and WITHDRAW.")
 
 
-async def _research_call(coro):
+async def _research_call(coro, db=None):
+    from sqlalchemy.exc import IntegrityError
     from app.tefca_registry.rce import supplemental_research as sr
     try:
         return await coro
@@ -1022,6 +1023,15 @@ async def _research_call(coro):
         raise HTTPException(409, str(exc))
     except sr.ResearchRefused as exc:
         raise HTTPException(409, str(exc))
+    except IntegrityError as exc:
+        # Two identical first entries can both pass the pre-checks; the loser fails at flush on the database's own
+        # uniqueness. That is an expected conflict, not a server error: clear the failed transaction and say so.
+        if "uq_rce_npi_research_" not in str(exc):
+            raise
+        if db is not None:
+            await db.rollback()
+        raise HTTPException(409, "an identical or conflicting research entry for this record was saved "
+                                 "at the same moment; reload the record's research history and retry if needed")
 
 
 @router.post("/deliveries/{intake_id}/records/{source_record_id}/supplemental-npi-research",
@@ -1040,7 +1050,7 @@ async def enter_supplemental_npi_research(
     result = await _research_call(sr.record_entry(
         db, intake_id=intake_id, source_record_id=source_record_id, expected=body.expected,
         entry=body.model_dump(exclude={"expected"}), actor_email=actor,
-        actor_user_id=getattr(user, "id", None), commit=False))
+        actor_user_id=getattr(user, "id", None), commit=False), db=db)
     actor_id, actor_email = reg_audit.actor_of(user)
     reg_audit.record(db, "supplemental_npi_research_entered", None, actor_id=actor_id, actor_email=actor_email,
                      metadata={"intake_id": intake_id, "source_record_id": source_record_id,

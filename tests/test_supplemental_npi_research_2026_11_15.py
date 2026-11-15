@@ -192,16 +192,15 @@ async def test_the_database_itself_enforces_linkage_snapshot_and_append_only(rol
                 researched_npi=GOOD_NPI, nppes_reference="r", nppes_check_date=TODAY, match_rationale=RATIONALE,
                 researcher="x@synthetic-test.docuaction.invalid", idempotency_key=uuid.uuid4().hex + uuid.uuid4().hex)
     from app.tefca_registry.rce.supplemental_research_models import RceSupplementalNpiResearch as R
-    for bad in (dict(original_submitted_npi="1111111112"),          # snapshot differs from the delivered value
-                dict(source_line=rec.line_number + 5),              # linkage mismatch
-                dict(non_decision=False),                           # not a decision
-                dict(researched_npi="12AB"),                         # not 10 digits
-                dict(supersedes_id=None, source_record_id=rec.id)): # a second root for the record
-        sp = await db.begin_nested()
-        with pytest.raises(Exception):
-            db.add(R(**{**base, "id": uuid.uuid4(), "idempotency_key": uuid.uuid4().hex + uuid.uuid4().hex, **bad}))
-            await db.flush()
-        await sp.rollback()
+    # The record already has a root, so the ONLY thing this insert can trip is the unique-root index. The other
+    # constraints (snapshot, linkage, non-decision, NPI shape, change reason) are each exercised on an unused
+    # record, with the constraint/trigger name asserted, in test_npi_research_review_fixes_2026_11_15.py.
+    sp = await db.begin_nested()
+    with pytest.raises(Exception) as exc:
+        db.add(R(**{**base, "id": uuid.uuid4(), "idempotency_key": uuid.uuid4().hex + uuid.uuid4().hex}))
+        await db.flush()
+    assert "uq_rce_npi_research_root" in str(exc.value)
+    await sp.rollback()
     for stmt in ("update rce_supplemental_npi_research set researcher = 'z'", "delete from rce_supplemental_npi_research"):
         sp = await db.begin_nested()
         with pytest.raises(Exception) as exc:

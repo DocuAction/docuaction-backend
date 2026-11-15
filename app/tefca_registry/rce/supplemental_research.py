@@ -23,7 +23,8 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, select, text
+from sqlalchemy import exists, func, select, text
+from sqlalchemy.orm import aliased
 
 from app.tefca_registry.rce import models as m
 from app.tefca_registry.rce.supplemental_research_models import RceSupplementalNpiResearch as R
@@ -145,6 +146,17 @@ async def record_entry(db, *, intake_id: Any, source_record_id: Any, expected: D
             or _s(record.tefcaid) != _s(expected["tefca_id"])):
         raise ResearchRefused("source_line / hcid / tefca_id do not match the record: nothing was written")
     clean = _validate(entry, today=today or datetime.now(timezone.utc).date())
+    key = idempotency_key(record.id, clean["action"], clean.get("researched_npi", ""),
+                          clean.get("nppes_reference", ""), str(clean.get("nppes_check_date", "")),
+                          clean["supersedes_id"])
+    # An exact replay of a committed entry is answered BEFORE the chain-state refusals, so a retried RECORD/AMEND
+    # (lost response, double click) is "already_present" rather than "research already exists".
+    # Only while that entry is still the latest in its chain: replaying an entry that has since been amended or
+    # withdrawn must not tell the client the research "stands", so it falls through to the chain-state refusals.
+    duplicate = (await db.execute(select(R).where(R.idempotency_key == key))).scalars().first()
+    if (duplicate is not None and duplicate.source_record_id == record.id
+            and (await db.execute(select(R.id).where(R.supersedes_id == duplicate.id))).first() is None):
+        return {"status": "already_present", "entry": _row(duplicate)}
     if clean["supersedes_id"] is not None:
         prev = await db.get(R, clean["supersedes_id"])
         if prev is None or prev.source_record_id != record.id:
@@ -160,12 +172,6 @@ async def record_entry(db, *, intake_id: Any, source_record_id: Any, expected: D
                                                              R.supersedes_id.is_(None)))).first()
         if existing_root is not None:
             raise ResearchRefused("research already exists for this record; amend or withdraw the latest entry")
-    key = idempotency_key(record.id, clean["action"], clean.get("researched_npi", ""),
-                          clean.get("nppes_reference", ""), str(clean.get("nppes_check_date", "")),
-                          clean["supersedes_id"])
-    duplicate = (await db.execute(select(R).where(R.idempotency_key == key))).scalars().first()
-    if duplicate is not None:
-        return {"status": "already_present", "entry": _row(duplicate)}
     row = R(id=uuid.uuid4(), source_intake_id=intake_uuid, source_record_id=record.id,
             source_line=record.line_number, hcid=record.hcid, tefca_id=record.tefcaid,
             original_submitted_npi=delivered_npi(record), entry_action=clean["action"],
@@ -206,20 +212,28 @@ async def list_entries(db, *, intake_id: Any, source_record_id: Any = None, curr
         if rid is None:
             raise ResearchRefused("source_record_id is not a UUID")
         q = q.where(R.source_record_id == rid)
+    if current_only:
+        # Filter in SQL BEFORE the limit: a truncated window must never show a superseded or withdrawn row as current.
+        later = aliased(R)
+        q = q.where(R.entry_action != ACTION_WITHDRAW,
+                    ~exists().where(later.supersedes_id == R.id))
     rows = (await db.execute(q.order_by(R.source_record_id, R.entered_at, R.id).limit(max(1, min(limit, 500))))).scalars().all()
-    if not current_only:
-        return [_row(r) for r in rows]
-    superseded = {r.supersedes_id for r in rows if r.supersedes_id}
-    return [_row(r) for r in rows if r.id not in superseded and r.entry_action != ACTION_WITHDRAW]
+    return [_row(r) for r in rows]
 
 
-async def current_by_record(db, intake_id: Any, record_ids: List[Any]) -> Dict[Any, Dict[str, Any]]:
+async def current_by_record(db, intake_id: Any, record_ids: List[Any],
+                            cutoff: Optional[datetime] = None) -> Dict[Any, Dict[str, Any]]:
     """The standing research per source record for the report: the latest non-superseded, non-withdrawn entry.
     Returns {} when the store is not applied (the report then shows no research and says nothing is stored)."""
     if not record_ids:
         return {}
     if (await db.execute(text("SELECT to_regclass('public.rce_supplemental_npi_research')"))).scalar() is None:
         return {}
-    rows = (await db.execute(select(R).where(R.source_record_id.in_(record_ids)))).scalars().all()
+    q = select(R).where(R.source_record_id.in_(record_ids))
+    if cutoff is not None:
+        # Nothing newer than the evidence cutoff: an amendment or withdrawal recorded after it does not exist yet
+        # for a historical report, so it neither hides nor replaces the earlier research.
+        q = q.where(R.entered_at <= (cutoff.replace(tzinfo=timezone.utc) if cutoff.tzinfo is None else cutoff))
+    rows = (await db.execute(q)).scalars().all()
     superseded = {r.supersedes_id for r in rows if r.supersedes_id}
     return {r.source_record_id: _row(r) for r in rows if r.id not in superseded and r.entry_action != ACTION_WITHDRAW}
