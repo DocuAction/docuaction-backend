@@ -60,3 +60,33 @@ async def test_the_gateway_does_not_dispatch_dotted_slashed_or_trailing_token_na
 def test_a_value_attached_to_a_label_is_never_swallowed_by_the_trailing_tokens(text):
     assert "labelled_tax_identifier" in pi.find_in_text(text) or "ein_shaped_value" in pi.find_in_text(text), text
     assert "3456789" not in pi.redact_text(text) and "000000001" not in pi.redact_text(text) and "123456789" not in pi.redact_text(text)
+
+
+# ── CodeRabbit on c888a89: a four-digit index, and a quadratic scan (both reproduced before the fix) ──────────────
+
+@pytest.mark.parametrize("name", ["EIN_2026", "EIN_PRIMARY_2026", "TAX_ID_2026", "tin.2025", "FEIN-2024-backup"])
+def test_a_short_year_style_index_after_a_protected_name_is_still_a_label(name):
+    assert pi.is_protected_field(name), name
+    text = f'{{"{name}": "{VALUE}"}}'
+    assert "labelled_tax_identifier" in pi.find_in_text(text) and VALUE not in pi.redact_text(text), text
+
+
+def test_a_long_run_of_label_starts_is_scanned_in_linear_time():
+    """`("ein_" * n) + "x"`: every `ein` starts a candidate label. n=8000 took ~5 s and n=32000 ~94 s before the trailing run was bounded."""
+    import time
+    times = {}
+    for n in (4000, 16000, 64000):
+        text = ("ein_" * n) + "x"
+        t0 = time.process_time()
+        pi.find_in_text(text)
+        pi.redact_text(text)
+        times[n] = time.process_time() - t0
+    assert times[64000] < 5.0, times
+    assert times[64000] < 40 * max(times[4000], 0.01), f"super-linear growth: {times}"
+
+
+def test_more_than_eight_trailing_tokens_is_the_documented_limit():
+    name = "EIN" + "_x" * 9
+    assert pi.is_protected_field(name)
+    assert pi.find_in_text(f"{name}: {VALUE}") == [], "stated limit of the bounded trailing run"
+    assert "labelled_tax_identifier" in pi.find_in_text("EIN" + "_x" * 8 + f": {VALUE}")
