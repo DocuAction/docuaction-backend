@@ -65,6 +65,7 @@ DRAFT_BANNER = ("CURRENT REVIEW / DRAFT / NOT FINAL - INDEPENDENT QA PENDING. "
 #: Wording removed by the 2026-11-11 report corrections; refused in PECOS cells.
 PROHIBITED_PECOS_PHRASES = ("lost-identifier/outage family",)
 
+SAM_EXTRACT_COLUMN = "SAM Public Extract (supplementary; candidate only)"
 RECORD_COLUMNS = [
     "Source_Line", "AGT_Record_ID", "QHIN Number", "HCID", "Tefca Id",
     "Organization", "Participation Level",
@@ -78,6 +79,10 @@ RECORD_COLUMNS = [
     "Reasons", "Issue Type", "Issue Severity", "Recommendation",
     ORIGINAL_COMMENTS_COLUMN, IZAAN_COMMENTS_COLUMN,
     "Report Clarifications", "Evidence Reference",
+    # Analyst/QA disposition, reported SEPARATELY from the automated Bucket above.
+    "Reviewed Disposition (QA-approved only)", "Reviewed Disposition Date",
+    "Analyst/QA Status", "Reviewed Disposition Basis",
+    SAM_EXTRACT_COLUMN,
 ]
 TEXT_COLUMNS = list(range(len(RECORD_COLUMNS)))   # identifiers stay text
 #: Compact subset for the PDF's main table; the full column set is in the Excel/CSV.
@@ -279,6 +284,15 @@ def _provenance_marks(fact: Dict[str, Any],
     return marks
 
 
+def _reviewed_cell(fact: Dict[str, Any], status: str) -> str:
+    """Approved reviewed disposition only. A HELD record keeps its HELD status:
+    reporting a disposition never releases a hold."""
+    text = _s(fact.get("reviewed_disposition"))
+    if text and status.upper() == STATUS_HELD:
+        text += " (record remains HELD; the hold is not released by this report)"
+    return text
+
+
 def build_record_row(fact: Dict[str, Any],
                      stored: Optional[Dict[str, Any]] = None) -> List[str]:
     stored = stored or {}
@@ -324,6 +338,10 @@ def build_record_row(fact: Dict[str, Any],
         _s(fact.get("qa_comments")), izaan,
         _s(fact.get("report_clarifications")),
         _s(fact.get("evidence_reference")) or NOT_ESTABLISHED,
+        _reviewed_cell(fact, status), _s(fact.get("reviewed_date")),
+        _s(fact.get("reviewed_qa_status")) or "No analyst determination recorded",
+        _s(fact.get("reviewed_basis")),
+        _s(fact.get("sam_extract")) or NOT_ESTABLISHED,
     ]
 
 
