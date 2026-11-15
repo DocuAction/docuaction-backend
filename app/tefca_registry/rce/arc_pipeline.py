@@ -75,6 +75,8 @@ UNMATCHED_RULE_VERSION = 0
 #: The classifier speaks a source vocabulary because its rules are about
 #: sources. Feeding it dimension roll-ups discards exactly the per-source
 #: detail the rules need.
+#: The GSA public-extract screen's evidence source (supplementary to the live SAM API; see source_policy M-1).
+EXTRACT_EVIDENCE_SOURCE = "SAM_EXTRACT_SUPPLEMENTARY"
 _EVIDENCE_SOURCE_TO_RULE_SOURCE = {
     "NPPES": "nppes",
     "OIG_LEIE": "oig_leie",
@@ -458,6 +460,18 @@ def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, An
         }
         for item in dimension.get("evidence", []):
             if name not in _SOURCE_STATE_DIMENSIONS:
+                continue
+            if item.get("source") == EXTRACT_EVIDENCE_SOURCE:
+                # The dated public-extract screen is its OWN source state (`sam_extract`), never folded into the
+                # live API's `sam_gov`: PASS -> clear, a candidate (REVIEW) -> possible_match (never a confirmed
+                # exclusion), anything else -> unavailable.
+                ext_state = {"PASS": EXCLUSION_CLEAN_SCREEN_STATE, "REVIEW": EXCLUSION_POSSIBLE_MATCH_STATE
+                             }.get(str(item.get("disposition")).upper(), "unavailable")
+                if name == "EXCLUSION_REVOCATION":
+                    cur = sources.get("sam_extract", {}).get("status")
+                    if cur is None or _STATE_PRECEDENCE.index(ext_state) < _STATE_PRECEDENCE.index(cur):
+                        sources["sam_extract"] = {"status": ext_state, "disposition": item.get("disposition"),
+                                                  "dimension": name, "rule_applied": item.get("rule_applied")}
                 continue
             key = _EVIDENCE_SOURCE_TO_RULE_SOURCE.get(item.get("source"))
             if not key:
