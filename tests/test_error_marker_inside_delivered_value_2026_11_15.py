@@ -38,3 +38,19 @@ def test_a_driver_marker_that_leads_the_text_is_still_kept_with_its_class_only()
 def test_a_class_marker_with_no_driver_package_is_not_kept_even_when_it_leads():
     out = sanitize_stored_error(f"<class '{SECRET}'>: bad")
     assert SECRET not in out
+
+
+_DM = "<class 'asyncpg.exceptions.UniqueViolationError'>"
+
+
+@pytest.mark.parametrize("value", [
+    f"{_DM}: duplicate key {SECRET} {_DM}",
+    f"(sqlalchemy.dialects.postgresql.asyncpg.IntegrityError) {_DM}: duplicate key {SECRET} {_DM}",
+    f"{_DM} {SECRET} (sqlalchemy.dialects.postgresql.asyncpg.Error)",
+    f"STAGE: RuntimeError: {_DM}: key {SECRET} {_DM}"])
+def test_text_between_two_driver_markers_is_withheld(value):
+    """CodeRabbit on #221 (against an older commit): a later marker must not let the text between two markers through.
+    Not reproducible on the current head; kept as a guard."""
+    assert SECRET not in sanitize_stored_error(value)
+    for writer in (False, True):
+        assert SECRET not in _sanitize_error_value(value, safe_writer=writer)
