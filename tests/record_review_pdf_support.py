@@ -533,7 +533,11 @@ def merge_continuations(rows: List[List[str]], id_col: int) -> List[List[str]]:
         named, _, tail = row[id_col].partition(CONTINUED)
         if not out:
             raise AssertionError(f"continuation row for {named!r} has no record before it")
-        if not named or not out[-1][id_col].startswith(named):
+        previous = out[-1][id_col]
+        # The WHOLE identity must match: `named` may be followed in the previous cell only by nothing or by the detail table's
+        # annotation ("line ..."). `startswith` alone accepted a continuation named "A" into a record "AB".
+        remainder = previous[len(named):] if previous.startswith(named) else None
+        if not named or remainder is None or not (remainder == "" or remainder.startswith("line")):
             raise AssertionError(
                 f"continuation row names {named!r} but follows record {out[-1][id_col][:60]!r}")
         part = re.match(r"(\d+)of(\d+)\)", tail)
