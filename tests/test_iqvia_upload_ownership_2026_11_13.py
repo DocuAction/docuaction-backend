@@ -572,3 +572,61 @@ async def test_linkage_after_the_worker_finished_never_moves_a_terminal_upload_b
     fresh = await _start(db, monkeypatch)
     await jobs.mark_upload_complete(db, fresh, snapshot_id=None)
     assert (await db.get(jobs.IqviaUploadSession, fresh, populate_existing=True)).status == jobs.IqviaUploadSession.STATUS_STAGING_QUEUED
+
+
+# ── CodeRabbit on #233 (5e857216) for #218 ───────────────────────────────────────────────────────────────────────────
+
+async def test_a_terminal_status_committed_between_the_read_and_the_linkage_write_is_not_overwritten(db, monkeypatch):
+    """Reproduces the interleaving: this session READ the row as COMPLETE (identity map), then a worker committed STAGED
+    before linkage wrote. A read-then-write ORM update overwrote STAGED with STAGING_QUEUED; the write is now one
+    conditional statement evaluated against the row as it is at write time."""
+    from sqlalchemy import text
+    upload_id = await _start(db, monkeypatch)
+    cached = await db.get(jobs.IqviaUploadSession, upload_id)
+    cached.status = jobs.IqviaUploadSession.STATUS_COMPLETE          # what linkage had read
+    await db.flush()
+    await db.execute(text("update iqvia_upload_session set status = 'STAGED' where id = :i"), {"i": upload_id})
+    await jobs.mark_upload_complete(db, upload_id, snapshot_id=None)
+    got = await db.get(jobs.IqviaUploadSession, upload_id, populate_existing=True)
+    assert got.status == jobs.IqviaUploadSession.STATUS_STAGED, got.status
+
+
+async def test_a_concurrent_completion_retry_reloads_the_authenticated_user_after_the_rollback(db, monkeypatch):
+    """`require_role` and the route share one session, so the authenticated ORM user is expired by the rollback in the
+    concurrent-completion branch; the recursive call then read `user.email` lazily and raised MissingGreenlet (HTTP 500)."""
+    from types import SimpleNamespace
+    from sqlalchemy import delete
+    from app.core.security import hash_password
+    from app.models.database import User
+    email = f"upload-owner-{uuid.uuid4().hex[:8]}@synthetic-test.docuaction.invalid"
+    db.add(User(email=email, password_hash=hash_password("Synthetic-Pw-1!"), full_name="SYNTHETIC upload owner",
+                role="reviewer", is_active=True, is_verified=True, status="active"))
+    await db.commit()
+    try:
+        unique = uuid.uuid4().hex.encode()                                    # content nobody registered before
+        parts = (unique[:10], unique[10:20])
+        upload_id = await _start(db, monkeypatch, owner=email, payload=unique[:20])
+        for index, part in enumerate(parts):
+            await routes.upload_chunk(upload_id, index, _FakeRequest(part), db, user=_User("reviewer", email))
+        winner = await routes.complete_upload(upload_id, db, user=_User("reviewer", email))
+        _created_snapshot_ids.append(uuid.UUID(winner["snapshot_id"]))      # the fixture removes its queued import job
+        real_get = jobs.get_upload_session
+        calls = {"n": 0}
+
+        async def first_read_sees_an_unfinished_upload(_db, uid):
+            calls["n"] += 1
+            real = await real_get(_db, uid)
+            if calls["n"] == 1:                                   # the loser read before the winner committed
+                return SimpleNamespace(created_by=real.created_by, snapshot_id=None, status="UPLOADING")
+            return real
+
+        monkeypatch.setattr(jobs, "get_upload_session", first_read_sees_an_unfinished_upload)
+        user = (await db.execute(__import__("sqlalchemy").select(User).where(User.email == email))).scalar_one()
+        result = await routes.complete_upload(upload_id, db, user=user)     # a real, session-bound ORM user
+        assert result["already_completed"] is True and result["snapshot_id"] == winner["snapshot_id"]
+    finally:
+        await db.rollback()
+        from sqlalchemy import text as _text
+        await db.execute(_text("delete from audit_logs where user_id in (select id from users where email = :e)"), {"e": email})
+        await db.execute(delete(User).where(User.email == email))
+        await db.commit()
