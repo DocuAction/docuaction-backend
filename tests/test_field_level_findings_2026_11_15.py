@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import pytest
 import io
 from datetime import datetime
 from types import SimpleNamespace as NS
@@ -169,3 +170,69 @@ def test_a_fixed_field_id_is_not_used_when_the_finding_concerns_another_column()
     assert col(row, "Submitted_Value") == "not-an-oid" and len(r["mapping_exceptions"]) == 1
     ok = build([fact(1)], [issue(1, "DOA_NOT_AN_OID", "partOf")])["rows"][0]
     assert col(ok, "Field_ID") == "partof"
+
+
+# ── CodeRabbit on #231 (32b67c2): XLSX truncation and run pinning ────────────────────────────────────────────
+
+def test_an_xlsx_cell_over_excels_limit_is_refused_not_silently_shortened():
+    from openpyxl import load_workbook
+    import io as _io
+    long = "x" * (fl.XLSX_CELL_LIMIT + 5)
+    out = build([fact(1)], [issue(1, "NPI_REQUIRED", "NPI", original_value=long)])
+    with pytest.raises(fl.FieldExportRefused) as exc:
+        fl.to_xlsx(out)
+    assert "Submitted_Value" in str(exc.value) and "CSV" in str(exc.value)
+    csv_text = fl.to_csv(out).decode("utf-8-sig")
+    assert long in csv_text, "the CSV carries the full text"
+    ok = build([fact(1)], [issue(1, "NPI_REQUIRED", "NPI", original_value="y" * fl.XLSX_CELL_LIMIT)])
+    ws = load_workbook(_io.BytesIO(fl.to_xlsx(ok))).active
+    assert len(ws.cell(row=2, column=fl.FIELD_HEADERS.index("Submitted_Value") + 1).value) == fl.XLSX_CELL_LIMIT
+
+
+def test_the_field_export_is_pinned_to_the_run_the_record_level_export_used(monkeypatch, tmp_path):
+    """A run completing between the two loads must not give the field-level file a different run."""
+    import asyncio, uuid
+    from types import SimpleNamespace as NS2
+    from scripts import generate_record_review_package as pkg
+    from app.reports.data import october_review_loader as loader
+    seen = {}
+
+    class _Ctx2:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_a):
+            return False
+
+    async def fake_load_dataset(db, **kw):
+        return {"report_id": kw["report_id"], "sheets": {"Records": {"columns": [], "rows": []}}, "summary": {"complete": True, "unique_records": 0, "buckets": {"B1": 0, "B2": 0, "B3": 0, "B4": 0}, "held_inside_b4": 0, "unclassified_non_held_count": 0, "unclassified_non_held_ids": []},
+                "load_meta": {"assessment_run_id": "RUN-A"}, "banner": "b"}
+
+    async def fake_load_facts(db, **kw):
+        seen["run_id"] = kw.get("run_id")
+        return {"facts": [], "meta": {"intake_id": str(uuid.uuid4()), "assessment_run_id": kw.get("run_id") or "RUN-B-A-LATER-RUN"}}
+
+    async def fake_issues(*_a, **_k):
+        return []
+
+    import app.core.database as database
+    monkeypatch.setattr(database, "async_session_maker", lambda: _Ctx2())
+    monkeypatch.setattr(loader, "load_dataset", fake_load_dataset)
+    monkeypatch.setattr(loader, "load_record_facts", fake_load_facts)
+    monkeypatch.setattr(fl, "load_issues", fake_issues)
+    monkeypatch.setattr(loader, "_cutoff", lambda v: datetime(2099, 1, 1))
+
+    async def no_intake(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(_Ctx2, "__aenter__", lambda self: _async_obj())
+    args = NS2(intake=str(uuid.uuid4()), cutoff="2099-01-01T00:00:00", out=str(tmp_path / "o"), run_id=None, formats="csv", baseline=None, classification="DRAFT")
+    asyncio.run(pkg.build(args))
+    assert seen["run_id"] == "RUN-A", seen
+
+
+async def _async_obj():
+    class _D:
+        async def get(self, *_a, **_k):
+            return None
+    return _D()
