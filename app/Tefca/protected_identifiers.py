@@ -50,7 +50,7 @@ from typing import Any, Iterable, List
 
 from app.Tefca.identifier_boundary import GOVERNMENT_RESTRICTED
 
-PROTECTED_IDENTIFIERS_VERSION = "1.4.1"
+PROTECTED_IDENTIFIERS_VERSION = "1.5.0"
 
 #: What replaces a protected value. Deliberately not a mask of the value: a
 #: partial tax identifier is still part of a tax identifier.
@@ -141,6 +141,21 @@ _LABELLED = re.compile(f"({_LABEL}{_GAP})({_VALUE})", re.IGNORECASE)
 _EIN_SHAPE = re.compile(r"(?<![\d\-])\d{2}-\d{7}(?![\d\-])")
 
 
+#: A QUOTED serialized key (JSON/YAML-style) followed by its value: `"EIN PRIMARY": "000000001"`. A key with spaces is a field
+#: NAME only when it is quoted, so the whole quoted name is judged by `is_protected_field` (any whole protected token); running
+#: prose with an unquoted `EIN primary contact 000000001` is NOT treated as a label (stated limit). Bounded: the key is at most
+#: 80 characters, so the scan stays linear.
+_QUOTED_KEY_VALUE = re.compile(
+    rf"""(?P<pre>["'](?P<key>[^"'\
+]{{1,80}})["']\s*[:=]\s*["']?)(?P<val>{_VALUE})""")
+
+
+def _quoted_key_hits(text: str):
+    for m in _QUOTED_KEY_VALUE.finditer(text):
+        if is_protected_field(m.group("key")):
+            yield m
+
+
 class ProtectedIdentifierEgressRefused(RuntimeError):
     """Text bound for an AI transport carried a tax identifier. Never retried."""
 
@@ -185,7 +200,12 @@ def redact_mapping(obj: Any) -> Any:
         out = {}
         for key, value in obj.items():
             if is_protected_field(key):
-                out[key] = REDACTED if value not in (None, "", [], {}) else value
+                if value in (None, "", [], {}):
+                    # "no value was delivered" stays visible - but as a FRESH empty container, never the caller's own
+                    # (appending to the returned list would otherwise write into the source).
+                    out[key] = type(value)() if isinstance(value, (list, dict)) else value
+                else:
+                    out[key] = REDACTED
             else:
                 out[key] = redact_mapping(value)
         return out
@@ -202,7 +222,7 @@ def find_in_text(text: Any) -> List[str]:
     if not isinstance(text, str) or not text:
         return []
     reasons = []
-    if _LABELLED.search(text):
+    if _LABELLED.search(text) or any(True for _ in _quoted_key_hits(text)):
         reasons.append("labelled_tax_identifier")
     if _EIN_SHAPE.search(text):
         reasons.append("ein_shaped_value")
@@ -214,7 +234,11 @@ def redact_text(text: str) -> str:
     if not isinstance(text, str) or not text:
         return text
     # The label stays (it says what was withheld); only the value is replaced.
-    return _EIN_SHAPE.sub(REDACTED, _LABELLED.sub(lambda m: m.group(1) + REDACTED, text))
+    text = _LABELLED.sub(lambda m: m.group(1) + REDACTED, text)
+    spans = [(m.start("val"), m.end("val")) for m in _quoted_key_hits(text)]
+    for start, end in reversed(spans):
+        text = text[:start] + REDACTED + text[end:]
+    return _EIN_SHAPE.sub(REDACTED, text)
 
 
 def assert_safe_for_ai(text: Any, *, where: str = "ai") -> None:
