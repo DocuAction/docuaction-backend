@@ -68,14 +68,29 @@ def _render():
 
 
 def test_rendered_pdf_shows_the_reviewed_disposition_and_the_extract_evidence():
+    """Read back COLUMN BY COLUMN, per record: a phrase that wraps inside its cell is rebuilt in reading order
+    (a flat run of the page's words interleaves neighbouring columns and cannot be compared)."""
     pdf, pages = _render()
     assert pdf.startswith(b"%PDF-")
-    text = s.squash(" ".join(w["text"] for page in pages for w in page["words"]))
-    for needle in ("Reviewed dispositions and SAM public-extract results", "ConfirmedB2", "ApprovedbyQA",
-                   "ReturnedbyQA;notapproved", "awaitingQA", "CANDIDATEMATCH(2)", "NOTaconfirmedexclusion",
-                   "2026-11-05", "SAM_Exclusions_Public_Extract_V2_26309.CSV", "abababababab", "checked2026-11-06",
-                   "Extractscreenunavailable"):
-        assert s.squash(needle) in text, f"missing from the PDF: {needle}"
+    widths = [w for _c, w in d.PDF_REVIEW_COLUMNS]
+    table = s.reconstruct(pages, s.table_words(pages)["review"], widths, 0)
+    assert not table["outside"], table["outside"][:6]
+    rows = {s.squash(cols[0])[:14]: cols for cols in table["rows"]}
+    facts = {f["agt_record_id"]: f for f in _facts()}
+    expected = {rid: f for rid, f in facts.items() if f.get("reviewed_qa_status") or f.get("sam_extract")}
+    listed = {rid: f for rid, f in expected.items()
+              if f.get("reviewed_qa_status", "No analyst determination recorded") != "No analyst determination recorded"
+              or (f.get("sam_extract") and not f["sam_extract"].startswith("No candidate"))}
+    assert len(table["rows"]) == len(listed) == 3, (len(table["rows"]), sorted(listed))
+    for rid, f in listed.items():
+        cols = next(c for c in table["rows"] if s.squash(c[0]).startswith(s.squash(rid)))
+        want = [f.get("reviewed_qa_status", "No analyst determination recorded"), f.get("reviewed_disposition", ""),
+                f.get("reviewed_date", ""), f.get("reviewed_basis", ""), f.get("sam_extract") or ""]
+        for got, expect in zip(cols[1:], want):
+            if expect:
+                assert s.squash(expect) in s.squash(got), (rid, expect[:50], got[:80])
+    assert any("NOTaconfirmedexclusion" in s.squash(c[5]) for c in table["rows"])
+    assert any("CANDIDATEMATCH(2)" in s.squash(c[5]) and "2026-11-05" in s.squash(c[5]) for c in table["rows"])
 
 
 def test_rendered_review_table_has_no_clipped_stacked_or_unreadably_small_text_and_repeats_its_headings():
