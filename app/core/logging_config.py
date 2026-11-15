@@ -171,11 +171,15 @@ _BACKGROUND = re.compile(r"\s*\(Background on this error at:.*$", re.DOTALL)
 #: values ("Key (email)=(...) already exists"); the others carry statement text.
 _PG_FIELD = re.compile(r"\s*\b(?:DETAIL|HINT|CONTEXT|QUERY|STATEMENT):\s.*$", re.DOTALL)
 #: A driver exception class as SQLAlchemy renders it: "<class 'asyncpg....X'>".
-_DRIVER_CLASS = re.compile(r"(<class '[\w.]+'>)")
+#: Only a class path that begins in a DRIVER OR STANDARD-LIBRARY package is a marker. `<class 'X'>` with any
+#: other content is part of a delivered value (CodeRabbit Major on #225) and is not kept.
+_DRIVER_PACKAGES = r"(?:asyncpg|psycopg2?|sqlalchemy|builtins|socket|ssl|httpx|httpcore|anyio|asyncio)"
+_CLASS_PATH = rf"<class '{_DRIVER_PACKAGES}(?:\.[A-Za-z_]\w*)+'>"
+_DRIVER_CLASS = re.compile(rf"({_CLASS_PATH})")
 #: A dialect wrapper as SQLAlchemy renders it: "(sqlalchemy.dialects....Error)".
 _DIALECT_CLASS = re.compile(r"(\((?:sqlalchemy|asyncpg|psycopg2?|psycopg)[\w.]*\))")
 #: Either marker, and what may stand between two markers of one run.
-_MARKER = re.compile(r"<class '[\w.]+'>|\((?:sqlalchemy|asyncpg|psycopg2?|psycopg)[\w.]*\)")
+_MARKER = re.compile(rf"{_CLASS_PATH}|\((?:sqlalchemy|asyncpg|psycopg2?|psycopg)[\w.]*\)")
 _MARKER_GAP = re.compile(r"[\s:]*")
 #: "{STAGE}: " or "{STAGE} did not complete: " as the runners have written it.
 _STAGE_PREFIX = re.compile(r"^[A-Z][A-Z_]*(?: did not complete)?: ")
@@ -240,10 +244,19 @@ def sanitize_stored_error(value: Any, *, failure_class: str | None = None) -> An
         before = text[:first.start()]
         kept = _MARKER_PREFIX.match(before).group(0)
         dropped = bool(before[len(kept):].strip(" :\n\t"))
+        if dropped and before.rstrip()[-1:] in ('"', "'"):
+            # Discarded text AND the marker sits inside a quoted value: it is part of the delivered value.
+            return (kept.rstrip(": ").rstrip() or "Error") + _ERROR_WITHHELD
         text = kept + text[first.start():end]
         if cut or dropped or rest.strip(" :\n\t"):
             text = text.rstrip() + _ERROR_WITHHELD
         return text if text != value else value
+
+    if "<class '" in text:
+        # A class-marker shape that is NOT a driver class path (not recognised above) is a delivered value that
+        # looks like one; it is never kept.
+        stage = _STAGE_PREFIX.match(text)
+        return (stage.group(0) if stage else "") + "Error" + _ERROR_WITHHELD
 
     lead = _CLASS_LEAD_IN.match(text)
     named = (lead.group("cls") or lead.group("bare")) if lead else None
