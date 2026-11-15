@@ -38,3 +38,43 @@ def test_a_driver_marker_that_leads_the_text_is_still_kept_with_its_class_only()
 def test_a_class_marker_with_no_driver_package_is_not_kept_even_when_it_leads():
     out = sanitize_stored_error(f"<class '{SECRET}'>: bad")
     assert SECRET not in out
+
+
+_DM = "<class 'asyncpg.exceptions.UniqueViolationError'>"
+
+
+@pytest.mark.parametrize("value", [
+    f"{_DM}: duplicate key {SECRET} {_DM}",
+    f"(sqlalchemy.dialects.postgresql.asyncpg.IntegrityError) {_DM}: duplicate key {SECRET} {_DM}",
+    f"{_DM} {SECRET} (sqlalchemy.dialects.postgresql.asyncpg.Error)",
+    f"STAGE: RuntimeError: {_DM}: key {SECRET} {_DM}"])
+def test_text_between_two_driver_markers_is_withheld(value):
+    """CodeRabbit on #221 (against an older commit): a later marker must not let the text between two markers through.
+    Not reproducible on the current head; kept as a guard."""
+    assert SECRET not in sanitize_stored_error(value)
+    for writer in (False, True):
+        assert SECRET not in _sanitize_error_value(value, safe_writer=writer)
+
+
+_K = "SensitiveRecord4711"
+
+
+@pytest.mark.parametrize("value", [
+    f"invalid input syntax for type uuid: \"(<class 'asyncpg.{_K}'>)\"",
+    f"invalid input syntax for type uuid: (<class 'asyncpg.{_K}'>)",
+    f"bad [<class 'psycopg2.{_K}'>]",
+    f"x: (asyncpg.{_K})",
+    f"x: ((sqlalchemy.{_K}))",
+    f"STAGE: ValueError: row (psycopg2.{_K}) rejected"])
+def test_a_driver_looking_marker_that_is_not_a_real_driver_class_is_never_kept(value):
+    """CodeRabbit on #232 (reproduced): the prefix looked like a driver but the class does not exist, so it is delivered text."""
+    for writer in (False, True):
+        out = sanitize_stored_error(value) if not writer else _sanitize_error_value(value, safe_writer=True)
+        assert _K not in out, (value, writer, out)
+
+
+def test_real_driver_classes_are_still_recognised():
+    real = ("(sqlalchemy.dialects.postgresql.asyncpg.IntegrityError) <class 'asyncpg.exceptions.UniqueViolationError'>: "
+            "duplicate key value\nDETAIL: Key (x)=(" + _K + ") already exists.")
+    out = sanitize_stored_error(real)
+    assert "UniqueViolationError" in out and _K not in out
