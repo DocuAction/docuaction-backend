@@ -164,7 +164,8 @@ async def test_incomplete_or_mismatched_entries_are_refused_and_write_nothing(ro
     with pytest.raises(HTTPException) as exc:
         await _enter(db, intake_id, rec, **over)
     assert exc.value.status_code == 409 and needle in exc.value.detail
-    assert (await db.execute(text("select count(*) from rce_supplemental_npi_research"))).scalar() == 0
+    assert (await db.execute(text("select count(*) from rce_supplemental_npi_research where source_intake_id = :i"),
+                             {"i": intake_id})).scalar() == 0
 
 
 async def test_there_is_no_entity_only_or_cross_delivery_fallback(rolled_back_db):
@@ -239,6 +240,8 @@ async def test_pilot_research_does_not_overwrite_the_blank_remove_b4_or_release_
     review_id = REVIEW_IDS[intake_id]
     ghania, izaan, bilal = analyst("ghania"), analyst("izaan"), qa_user("bilal")
 
+    audit_before = {a.id for a in (await db.execute(select(reg.TefcaRegAuditLog).where(
+        reg.TefcaRegAuditLog.action == "supplemental_npi_research_entered"))).scalars().all()}
     # 1. entry for the B4 record and for the HELD record (separate entries, explicit linkage)
     e1 = (await _enter(db, intake_id, clean, user=ghania))["entry"]
     e2 = (await _enter(db, intake_id, held, user=ghania, researched_npi="1245319599"))["entry"]
@@ -246,7 +249,8 @@ async def test_pilot_research_does_not_overwrite_the_blank_remove_b4_or_release_
     db.expire_all()
     back = (await rce_routes.read_supplemental_npi_research(str(intake_id), source_record_id=None, current_only=False, limit=50, db=db, user=izaan))["entries"]
     assert {b["id"] for b in back} == {e1["id"], e2["id"]}
-    audit = (await db.execute(select(reg.TefcaRegAuditLog).where(reg.TefcaRegAuditLog.action == "supplemental_npi_research_entered"))).scalars().all()
+    audit = [a for a in (await db.execute(select(reg.TefcaRegAuditLog).where(
+        reg.TefcaRegAuditLog.action == "supplemental_npi_research_entered"))).scalars().all() if a.id not in audit_before]
     assert len(audit) == 2 and {a.actor_email for a in audit} == {ghania.email}
     # 3. analyst determination (Izaan), then a SEPARATE QA action (Bilal). The same person cannot do both.
     await qa_gate.record_analyst_determination(db, review_id, user=izaan, determination="CONFIRM",

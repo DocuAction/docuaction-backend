@@ -154,9 +154,16 @@ async def record_entry(db, *, intake_id: Any, source_record_id: Any, expected: D
     # Only while that entry is still the latest in its chain: replaying an entry that has since been amended or
     # withdrawn must not tell the client the research "stands", so it falls through to the chain-state refusals.
     duplicate = (await db.execute(select(R).where(R.idempotency_key == key))).scalars().first()
-    if (duplicate is not None and duplicate.source_record_id == record.id
-            and (await db.execute(select(R.id).where(R.supersedes_id == duplicate.id))).first() is None):
-        return {"status": "already_present", "entry": _row(duplicate)}
+    if duplicate is not None and duplicate.source_record_id == record.id:
+        # The key does not cover the free text, so an "exact replay" must also match it: a request that changed only the
+        # rationale / change reason is a DIFFERENT payload and is refused, never answered with the old row.
+        if (duplicate.match_rationale != clean.get("match_rationale")
+                or duplicate.change_reason != clean.get("change_reason")):
+            raise ResearchRefused("an entry with the same NPI, reference, date and chain already exists with a "
+                                  "different rationale or change reason; nothing was written - amend the entry "
+                                  "instead of repeating the request with different text")
+        if (await db.execute(select(R.id).where(R.supersedes_id == duplicate.id))).first() is None:
+            return {"status": "already_present", "entry": _row(duplicate)}
     if clean["supersedes_id"] is not None:
         prev = await db.get(R, clean["supersedes_id"])
         if prev is None or prev.source_record_id != record.id:
