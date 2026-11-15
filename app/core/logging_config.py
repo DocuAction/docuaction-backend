@@ -21,6 +21,7 @@ import json
 import logging
 import logging.config
 import os
+import functools
 import re
 import traceback
 from datetime import datetime, timezone
@@ -179,7 +180,53 @@ _DRIVER_CLASS = re.compile(rf"({_CLASS_PATH})")
 #: A dialect wrapper as SQLAlchemy renders it: "(sqlalchemy.dialects....Error)".
 _DIALECT_CLASS = re.compile(r"(\((?:sqlalchemy|asyncpg|psycopg2?|psycopg)[\w.]*\))")
 #: Either marker, and what may stand between two markers of one run.
-_MARKER = re.compile(rf"{_CLASS_PATH}|\((?:sqlalchemy|asyncpg|psycopg2?|psycopg)[\w.]*\)")
+_MARKER_SHAPE = re.compile(rf"{_CLASS_PATH}|\((?:sqlalchemy|asyncpg|psycopg2?|psycopg)[\w.]*\)")
+
+
+@functools.lru_cache(maxsize=1)
+def _known_driver_class_names() -> frozenset:
+    """Names of the exception classes the drivers and the standard library really define. A marker is kept ONLY when its last
+    path segment is one of them: `<class 'asyncpg.SensitiveRecord4711'>` has a driver-looking prefix but is not a driver class,
+    so it is part of a delivered value and is never kept (CodeRabbit on #232, reproduced)."""
+    import importlib
+
+    names = set()
+    for module in ("builtins", "socket", "ssl", "asyncio", "asyncpg.exceptions", "psycopg2", "psycopg2.errors",
+                   "sqlalchemy.exc", "httpx", "httpcore", "anyio"):
+        try:
+            mod = importlib.import_module(module)
+        except Exception:  # noqa: BLE001 - an absent driver contributes nothing
+            continue
+        for name, obj in vars(mod).items():
+            if isinstance(obj, type) and issubclass(obj, BaseException):
+                names.add(name)
+    names.update({"Error", "DBAPIError", "IntegrityError", "ProgrammingError", "OperationalError", "DataError", "InterfaceError"})
+    return frozenset(names)
+
+
+class _ValidatedMarker:
+    """The marker regex plus the real-driver-class check, with the same search/match calls."""
+
+    @staticmethod
+    def _ok(m):
+        last = re.split(r"[.')]", m.group(0).rstrip("'>)").rstrip("'"))[-1] if m else ""
+        return bool(m) and last in _known_driver_class_names()
+
+    def match(self, text, pos=0):
+        m = _MARKER_SHAPE.match(text, pos)
+        return m if self._ok(m) else None
+
+    def search(self, text, pos=0):
+        while True:
+            m = _MARKER_SHAPE.search(text, pos)
+            if m is None:
+                return None
+            if self._ok(m):
+                return m
+            pos = m.start() + 1
+
+
+_MARKER = _ValidatedMarker()
 _MARKER_GAP = re.compile(r"[\s:]*")
 #: "{STAGE}: " or "{STAGE} did not complete: " as the runners have written it.
 _STAGE_PREFIX = re.compile(r"^[A-Z][A-Z_]*(?: did not complete)?: ")
@@ -252,7 +299,7 @@ def sanitize_stored_error(value: Any, *, failure_class: str | None = None) -> An
             text = text.rstrip() + _ERROR_WITHHELD
         return text if text != value else value
 
-    if "<class '" in text:
+    if "<class '" in text or _MARKER_SHAPE.search(text):
         # A class-marker shape that is NOT a driver class path (not recognised above) is a delivered value that
         # looks like one; it is never kept.
         stage = _STAGE_PREFIX.match(text)
