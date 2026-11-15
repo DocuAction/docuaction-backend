@@ -36,6 +36,30 @@ def _admin_parts():
             "database": (parsed.path or "/postgres").lstrip("/")}
 
 
+def _sqlalchemy_url(parts, database_name):
+    """A URL OBJECT, never an interpolated string: a decoded password such as 'p@ss:w/rd' must stay a password
+    (CodeRabbit Major on #225)."""
+    from sqlalchemy.engine import URL
+    return URL.create("postgresql+asyncpg", username=parts["user"] or None, password=parts["password"] or None,
+                      host=parts["host"], port=parts["port"], database=database_name)
+
+
+def test_credentials_with_url_special_characters_survive_the_url_construction():
+    from sqlalchemy.engine import make_url
+    parts = {"user": "u@x", "password": "p@ss:w/rd#?%40", "host": "127.0.0.1", "port": 5432}
+    built = _sqlalchemy_url(parts, "gate_db")
+    assert (built.username, built.password, built.host, built.port, built.database) == (
+        "u@x", "p@ss:w/rd#?%40", "127.0.0.1", 5432, "gate_db")
+    rendered = built.render_as_string(hide_password=False)          # the string form round-trips too
+    assert make_url(rendered).password == "p@ss:w/rd#?%40"
+    old_style = f"postgresql+asyncpg://{parts['user']}:{parts['password']}@{parts['host']}:{parts['port']}/gate_db"
+    try:
+        wrong = make_url(old_style).password != parts["password"]
+    except ValueError:
+        wrong = True                                   # the replaced interpolation did not even parse
+    assert wrong, "the replaced string interpolation was wrong"
+
+
 @pytest.fixture
 async def empty_database(db_required, monkeypatch):
     """A new, empty database; `_ensure_table` is pointed at it and nowhere else."""
@@ -48,9 +72,7 @@ async def empty_database(db_required, monkeypatch):
         await admin.execute(f'CREATE DATABASE "{name}"')
     finally:
         await admin.close()
-    url = (f"postgresql+asyncpg://{parts['user']}:{parts['password']}@{parts['host']}:"
-           f"{parts['port']}/{name}")
-    engine = create_async_engine(url, poolclass=NullPool)
+    engine = create_async_engine(_sqlalchemy_url(parts, name), poolclass=NullPool)
     monkeypatch.setattr(database, "_get_engine", lambda: engine)
     monkeypatch.setattr(vr, "_table_created", False)
     monkeypatch.setattr(vr, "_table_present", False, raising=False)
