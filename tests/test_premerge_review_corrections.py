@@ -424,6 +424,7 @@ def test_startup_create_all_excludes_the_migration_owned_tables():
     assert not (captured["names"] & set(tm.MIGRATION_OWNED_TABLES))
     assert "rce_curated_records" in captured["names"]
     assert "rce_record_comments" not in captured["names"], "startup must not own the append-only comment store"
+    assert "rce_supplemental_npi_research" not in captured["names"], "startup must not own the append-only research store"
 
 
 async def test_no_request_time_create_all_can_create_a_migration_owned_table(monkeypatch):

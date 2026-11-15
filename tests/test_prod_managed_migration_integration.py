@@ -113,7 +113,9 @@ AREA1_FINAL = AREA1_PRESENT + ["rce_delivery_jobs"] + TRACEABILITY + [
     "iqvia_advisory_comparison_outcome",
     # 20261112_rce_record_comments: append-only, non-decision record comments —
     # trigger + app SELECT/INSERT only, owner-owned for the same reason.
-    "rce_record_comments"]
+    "rce_record_comments",
+    # 20261115_rce_npi_research: append-only supplemental research - trigger + app SELECT/INSERT only, owner-owned.
+    "rce_supplemental_npi_research"]
 ENTRA_ADMIN = "entra_admin"
 CK = "ck_review_record_has_subject"
 
