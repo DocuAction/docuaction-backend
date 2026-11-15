@@ -452,3 +452,14 @@ def test_csv_reconciliation_line_balances_when_a_record_is_unclassified():
     terms = [int(t.rsplit(" ", 1)[1]) for t in m.group(1).split(", ")]
     assert sum(terms) == int(m.group(2)) == ds["summary"]["unique_records"], line
     assert "Not classified 1" in line
+
+
+def test_a_report_with_held_or_rejected_records_states_that_curated_status_is_read_at_generation_time():
+    """CodeRabbit on #233: RceCuratedRecord is one mutable row with no status history, so the status/hold reason shown
+    is the one at generation, not at the evidence cutoff; the report must say so (it never claims otherwise)."""
+    ds = d.build_dataset(_facts(), report_id="R", findings_count=0)
+    assert "generation" in ds["banner"] and "evidence cutoff" in ds["banner"] and "CURATED STATUS" in ds["banner"]
+    assert ds["summary"]["curated_status_basis"] == "generation_time"
+    assert ds["summary"]["limitations"] == []                      # provenance limitations are a different list
+    plain = d.build_dataset([_f(1, "B1"), _f(2, "B2")], report_id="R", findings_count=0)
+    assert "CURATED STATUS" not in plain["banner"] and plain["summary"]["curated_status_basis"] == "not_applicable"

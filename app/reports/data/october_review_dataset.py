@@ -336,6 +336,13 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
             f"verbatim and marked \"{PROVENANCE_INCOMPLETE}\" in the Flag column of its "
             f"record; the comment text was not altered.")
         banner += " LIMITATION: " + limitations[0]
+    held_or_rejected = any(str(f.get("status") or "").strip().upper() in ("HELD", "REJECTED") for f in facts)
+    if held_or_rejected:
+        # RceCuratedRecord is one mutable row with no status history, so the loader cannot bind curated status
+        # to the evidence cutoff. The report says so (banner, every rendering) instead of implying a cutoff-time
+        # status; it is not a provenance limitation, so it stays out of `limitations`.
+        banner += (" CURATED STATUS: status and hold reasons are read as of report generation, not as of the "
+                   "evidence cutoff (no curated-status history is stored).")
     comment_sources: Dict[str, List[str]] = {"original": [], "izaan": []}
     for f in facts:
         for kind, key in (("original", "qa_comments_source"),
@@ -361,6 +368,7 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
         "comment_sources": comment_sources,
         "comments_with_incomplete_provenance": gaps,
         "limitations": limitations,
+        "curated_status_basis": "generation_time" if held_or_rejected else "not_applicable",
     }
     summary_rows = ([[b, str(counts[b])] for b in BUCKETS]
                     + [["Total (unique records)", str(len(rows))],
