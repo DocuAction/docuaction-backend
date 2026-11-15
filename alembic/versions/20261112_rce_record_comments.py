@@ -159,7 +159,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Stored comments are evidence: never drop a populated table.
+    # Stored comments are evidence: never drop a populated table. The emptiness decision is only valid if no
+    # importer can commit a row between the check and the drop, so take the strongest lock FIRST and hold it
+    # (it is released with the migration's transaction) through the drop.
+    op.execute(f"LOCK TABLE {TABLE} IN ACCESS EXCLUSIVE MODE")
     populated = op.get_bind().execute(sa.text(
         f"SELECT EXISTS (SELECT 1 FROM {TABLE} LIMIT 1)")).scalar()
     if populated:
