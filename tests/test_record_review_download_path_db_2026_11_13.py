@@ -201,7 +201,7 @@ def _assert_download(resp, status, fmt):
     assert resp.status_code == 200, resp.text[:300]
     assert resp.headers["content-type"].split(";")[0] == CONTENT_TYPES[fmt]
     report_id = status["report_id"]
-    assert report_id == f"RECORD-REVIEW-{status['job_id'][:8].upper()}"
+    assert report_id == f"RECORD-REVIEW-{status['job_id'].upper()}"      # the FULL job UUID (CodeRabbit Major on #225)
     assert resp.headers["content-disposition"] == (
         f'attachment; filename="{report_id}-v{status["artifact_version"]}.{fmt}"')
     assert resp.headers["x-content-type-options"] == "nosniff"
