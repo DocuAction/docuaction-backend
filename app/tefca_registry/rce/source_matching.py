@@ -230,7 +230,9 @@ async def approve_snapshot(db, snapshot_id, *, user, approval_ref: str,
     the reconciliation gates.)"""
     if not role_at_least(user, SNAPSHOT_APPROVAL_ROLE):
         raise PermissionError(f"snapshot approval requires {SNAPSHOT_APPROVAL_ROLE} or above")
-    received = await db.get(sm.SourceSnapshot, snapshot_id)
+    # Locked until this transaction ends, so the assessment guard below and the APPROVED insert see
+    # one state of the snapshot: a concurrent change to its inputs waits instead of slipping between them.
+    received = await db.get(sm.SourceSnapshot, snapshot_id, with_for_update=True, populate_existing=True)
     if received is None:
         raise ValueError(f"no snapshot {snapshot_id}")
     if received.status != sm.SNAPSHOT_PENDING:
@@ -244,6 +246,11 @@ async def approve_snapshot(db, snapshot_id, *, user, approval_ref: str,
     actor = getattr(user, "email", None) or "UNKNOWN"
     if actor == received.created_by:
         raise PermissionError("maker/checker: the registrant cannot approve their own snapshot")
+    # PROPOSED protection against approving an IQVIA snapshot staged by an earlier reader
+    # (iqvia_snapshot_recovery). Lives here, in the shared service, so a direct call cannot
+    # bypass the route. A no-op unless IQVIA_BOM_APPROVAL_GUARD is on; raises ValueError.
+    from app.tefca_registry.rce import iqvia_snapshot_recovery as _recovery
+    await _recovery.enforce_assessment_before_approval(db, received, approver=actor)
     now = datetime.now(timezone.utc)
     row = sm.SourceSnapshot(
         id=uuid.uuid4(), source_system=received.source_system,

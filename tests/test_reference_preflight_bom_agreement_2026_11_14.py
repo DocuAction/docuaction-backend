@@ -4,8 +4,12 @@ disagreement so preflight and importer handle the same file consistently").
 
 Before: the gate removed a leading mark before matching the first column
 (REF-SCH-010, informational, decided 2026-10-04) and answered CLEAR, while the
-importer opened the same file as `utf-8`, kept the mark in the first column's
-name, found no identity column in any row and rejected every one.
+importer opened the same file as `utf-8` and could keep the mark in the first
+column's name. If that column carried the row's identity, the identity field was
+not found and the row was rejected (a synthetic file in this test reads 5 rows and
+rejects 5: that establishes that one test case, not any real snapshot). If the
+identity columns were elsewhere, rows could stage with the first field mis-keyed.
+The effect on a real snapshot requires assessment (iqvia_reader_assessment).
 
 After: the 2026-10-04 decision stands and the IMPORTER agrees with it. Both
 sides decode with the one encoding `reference_preflight.REFERENCE_FILE_ENCODING`
