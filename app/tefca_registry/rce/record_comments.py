@@ -27,7 +27,9 @@ BOUNDED AND RESUMABLE
     At most MAX_BATCH entries per call. Re-sending a batch (or its tail) is safe:
     duplicates are `already_present`; the unique key also makes a concurrent
     double-send safe. The default batch identity is derived from its ordered
-    payload. Reuse an explicit batch_id unchanged on retry. To deliberately revert
+    payload. Reuse an explicit batch_id unchanged on retry. A re-sent tail whose entries were all
+    imported is `already_present`; a tail that also holds never-imported entries is refused with
+    nothing written - re-send the whole batch. To deliberately revert
     to historical text, supply the current supersedes_comment_id and a new batch. `dry_run=True` classifies without writing anything.
 
 Until the 20261112_rce_record_comments migration is applied through the governed
@@ -291,7 +293,17 @@ async def import_comments(db, *, intake_id: Any, entries: List[Dict[str, Any]], 
         replay = replayed.get(entry_key)
         if replay is not None:
             if (replay.source_record_id, replay.comment_kind, replay.text_sha256) != (rid, kind, thash):
-                done(i, REJECTED, "batch entry identity was reused with different content", replay.id)
+                # Re-sending only the TAIL of a committed batch shifts every entry's position, so this entry's
+                # position key can belong to an earlier entry. The entry is the same one when the batch already
+                # holds exactly this content; anything else under a reused batch id is still refused (review
+                # finding, #233, 2026-11-15). A tail that also carries entries the batch never imported is
+                # refused here, loudly and with nothing written: re-send the whole batch, which is idempotent.
+                same = next((r for r in replayed.values()
+                             if (r.source_record_id, r.comment_kind, r.text_sha256) == (rid, kind, thash)), None)
+                if same is not None:
+                    done(i, ALREADY_PRESENT, "this batch entry was already imported", same.id)
+                else:
+                    done(i, REJECTED, "batch entry identity was reused with different content", replay.id)
             else:
                 done(i, ALREADY_PRESENT, "this batch entry was already imported", replay.id)
             continue

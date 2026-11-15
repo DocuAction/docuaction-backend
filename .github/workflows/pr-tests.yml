@@ -197,6 +197,7 @@ jobs:
             tests/test_recheck_enrollment_scope_2026_11_04.py \
             tests/test_october_review_loader_db_2026_11_12.py \
             tests/test_october_review_export_db_2026_11_12.py \
+            tests/test_report_export_session_failure_2026_11_15.py \
             tests/test_case_update_import_agt_2026_11_12.py \
             tests/test_review_lineage_writers_db_2026_11_12.py \
             tests/test_record_name_identity_db_2026_11_14.py \
