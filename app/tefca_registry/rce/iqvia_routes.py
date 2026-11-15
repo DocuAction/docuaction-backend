@@ -199,7 +199,13 @@ async def _register_and_enqueue(
     admin — see `stage_source`): resolved and confined to the configured
     IQVIA drop directory or the server's own chunked-upload temp directory,
     never opened outside either (CodeQL py/path-injection)."""
-    path = safe_existing_path(file_path, settings.IQVIA_IMPORT_DIR, _UPLOAD_DIR)
+    # The chunked-upload temp directory is reachable ONLY through `/uploads/{id}/complete` (`upload_id` set), which
+    # enforces creator-only ownership and the row-lock close protocol. The server-local stage route (no upload_id)
+    # is confined to the operator drop directory, so a reviewer who knows another upload's id cannot register its
+    # `<id>.part` file under their own identity (review finding, #233, 2026-11-15).
+    allowed_dirs = ((settings.IQVIA_IMPORT_DIR, _UPLOAD_DIR) if upload_id is not None
+                    else (settings.IQVIA_IMPORT_DIR,))
+    path = safe_existing_path(file_path, *allowed_dirs)
 
     file_sha = ii.file_sha256(path)
     # Duplicate submission: the SAME bytes under the SAME label for the SAME
