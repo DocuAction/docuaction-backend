@@ -50,7 +50,7 @@ from typing import Any, Iterable, List
 
 from app.Tefca.identifier_boundary import GOVERNMENT_RESTRICTED
 
-PROTECTED_IDENTIFIERS_VERSION = "1.3.0"
+PROTECTED_IDENTIFIERS_VERSION = "1.4.0"
 
 #: What replaces a protected value. Deliberately not a mask of the value: a
 #: partial tax identifier is still part of a tax identifier.
@@ -93,7 +93,18 @@ _SPLIT = re.compile(r"[^A-Za-z0-9]+")
 #:
 #: The gap between a label and its VALUE (`_GAP`) allows at most 16 punctuation
 #: marks and joining words; padding between them is free (see `_PAD`).
-_SEP = r"[\s_\-]*+"
+#: 1.4.0: the separators are the ones the FIELD rule's tokeniser accepts for names (`tax.id`, `tax/id`):
+#: whitespace, underscore, hyphen, dot and slash.
+_SEP = r"[\s_\-./]*+"
+#: 1.4.0: trailing NAME tokens. `is_protected_field` protects a name when any WHOLE token is protected
+#: (`EIN_PRIMARY`, `ein.primary`, `einPrimary`), so the text label consumes them too. Joined only by
+#: `_ - . /` (never whitespace: running prose is not a field name) or by a camel-case boundary, and each
+#: token is a whole word - `einstein`, `protein` and `taxonomy` are still not labels.
+#: A trailing index (`EIN_PRIMARY_2`) is a short digit token that is NOT the start of the value
+#: (`EIN_12-3456789` keeps its value).
+_TRAIL = (r"(?:[_\-./]++[A-Za-z][A-Za-z0-9]*+"
+          r"|[_\-./]++[0-9]{1,3}(?![0-9])(?![\-\s]?[0-9]{2,})"
+          r"|(?-i:(?<=[a-z0-9])[A-Z][a-z0-9]*+))*+")
 _SUFFIX = "(?:" + "|".join(sorted((re.escape(x) for x in _ID_SUFFIXES), key=len, reverse=True)) + ")"
 _SINGLE = "(?:" + "|".join(sorted((re.escape(x) for x in _SINGLE_TOKENS), key=len, reverse=True)) + ")"
 _LABEL = (
@@ -102,7 +113,7 @@ _LABEL = (
     + rf"(?:tax{_SEP}payer|tax|irs){_SEP}{_SUFFIX}(?:{_SEP}{_SUFFIX})?"
     + rf"|employer{_SEP}identification(?:{_SEP}{_SUFFIX})?"
     + rf"|{_SINGLE}(?:{_SEP}{_SUFFIX})?"
-    + r")(?![A-Za-z])")
+    + r")(?:(?![A-Za-z])|(?-i:(?<=[a-z0-9])(?=[A-Z])))" + _TRAIL + r"(?![A-Za-z])")
 #: What may stand between a label and its value: punctuation of any
 #: serialization (quotes, colon, equals, brackets, spaces) and a joining word.
 #: PADDING IS NOT CONTENT (2026-11-14): a run of horizontal white space,
