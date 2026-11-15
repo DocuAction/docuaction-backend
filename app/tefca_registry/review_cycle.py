@@ -65,6 +65,7 @@ what was wrong before.
 from __future__ import annotations
 
 import logging
+import sys
 import uuid
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -426,7 +427,15 @@ async def _create_review_cycle(
         try:
             # A failed statement must be rolled back before unlocking; otherwise
             # the failed transaction rejects the unlock and the pool retains it.
-            await db.rollback()
+            # ONLY when a failure is propagating: on a normal exit the work is
+            # already committed, and an unconditional rollback here ends the
+            # CALLER's outer transaction when the session is bound to a
+            # connection that already holds one (SQLAlchemy "rollback_only"
+            # join mode), discarding their uncommitted work while the call
+            # reports success. After a failure that rollback is unavoidable: a
+            # failed statement poisons the transaction it ran in.
+            if sys.exc_info()[0] is not None:
+                await db.rollback()
             await db.execute(text("select pg_advisory_unlock(hashtext(:k))"),
                              {"k": lock_key})
             await db.commit()
