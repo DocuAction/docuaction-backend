@@ -312,6 +312,10 @@ async def run_record_review_export_job(db, job) -> str:
         return ReportExportJob.STATE_FAILED
     except Exception as exc:  # noqa: BLE001
         logger.exception("record-review export job %s failed", job_id)
+        # A failed statement leaves the transaction aborted; the terminal write below would raise on it, leaving
+        # the job RUNNING with its export slot held and no reason (review finding, #233, 2026-11-15). `job_id`
+        # was captured before the failure, so the rollback does not touch what is passed on.
+        await db.rollback()
         await export_jobs.finish_failed(
             db, job_id,
             f"The record review could not be produced ({type(exc).__name__}). "
