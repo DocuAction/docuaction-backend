@@ -571,3 +571,7 @@ class RceSourcePolicy(Base):
 # the traceability import above: registered on the shared Base wherever the
 # RCE models are imported (app, Alembic env, create_all).
 import app.tefca_registry.rce.preflight_shadow_models  # noqa: E402,F401
+
+# Append-only, non-decision record comments (2026-11-12). Registered on the shared
+# Base wherever the RCE models are imported (app, Alembic env, create_all).
+import app.tefca_registry.rce.record_comment_models  # noqa: E402,F401

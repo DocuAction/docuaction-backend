@@ -110,7 +110,10 @@ AREA1_FINAL = AREA1_PRESENT + ["rce_delivery_jobs"] + TRACEABILITY + [
     # 20261108_iqvia_advisory_outcome: D-10 retained advisory outcomes —
     # append-only trigger + app SELECT/INSERT only, owner-owned like
     # iqvia_advisory_assessment (an owning app could bypass its own trigger).
-    "iqvia_advisory_comparison_outcome"]
+    "iqvia_advisory_comparison_outcome",
+    # 20261112_rce_record_comments: append-only, non-decision record comments —
+    # trigger + app SELECT/INSERT only, owner-owned for the same reason.
+    "rce_record_comments"]
 ENTRA_ADMIN = "entra_admin"
 CK = "ck_review_record_has_subject"
 

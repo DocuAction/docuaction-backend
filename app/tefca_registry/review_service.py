@@ -74,11 +74,109 @@ SOURCE_SUBTITLES = {
 }
 
 
-async def probe_sources(db, entity_id) -> Dict[str, dict]:
+#: The ONE rule that decides a delivered record and a registry entity carry the
+#: same organisation name. Owner decision 2026-11-14 (COR decision register,
+#: "interim name identity control"): Unicode NFC, collapsed whitespace,
+#: casefold. Punctuation, word order and legal suffixes are PRESERVED. No fuzzy,
+#: phonetic, transliteration or substring matching. Stated in every review that
+#: used it.
+NAME_IDENTITY_RULE = ("NFC + collapsed whitespace + casefold; punctuation, word order "
+                      "and legal suffixes preserved")
+
+#: How a NAME query is written into `tefca_dimension_evidence.query_identifier`
+#: by the bulk path (`evidence_assembly`): one explicit prefix per source.
+NAME_EVIDENCE_PREFIXES = {"OIG_LEIE": "org=", "SAM_GOV": "legal_name="}
+
+
+def record_name_identity(value) -> str:
+    """The comparison form of an organisation name, or "" when there is none.
+
+    Used by BOTH the live name-screen eligibility and the persisted
+    name-evidence filter of a record-specific review, so the two can never
+    decide on different identities."""
+    import unicodedata
+    text_ = unicodedata.normalize("NFC", value) if isinstance(value, str) else ""
+    return " ".join(text_.split()).casefold()
+
+
+def names_establish_one_identity(a, b) -> bool:
+    """True only when both names are non-blank and equal under
+    `record_name_identity`. A blank name never establishes identity."""
+    left, right = record_name_identity(a), record_name_identity(b)
+    return bool(left) and left == right
+
+
+def evidence_query_name(source: str, query_identifier) -> Optional[str]:
+    """The organisation NAME a persisted evidence row was queried by, or None.
+
+    The source's own prefix is parsed explicitly ("org=" for OIG LEIE,
+    "legal_name=" for SAM.gov). A bare value (no `key=` prefix) is a name as
+    stored by older rows. Another source's prefix, or any other key
+    (`uei=...`), is not a name for this source."""
+    import re
+    value = str(query_identifier or "").strip()
+    if not value:
+        return None
+    prefix = NAME_EVIDENCE_PREFIXES.get(source)
+    if prefix and value.startswith(prefix):
+        return value[len(prefix):].strip() or None
+    if re.match(r"^[A-Za-z_]+=", value):
+        return None
+    return value
+
+
+def evidence_query_npi(query_identifier) -> Optional[str]:
+    """The NPI a persisted evidence row was queried by, or None. The bulk path
+    stores it as "npi=<value>" (evidence_assembly); older rows store the bare
+    value. Any other key ("uei=", "org=", ...) is not an NPI."""
+    value = str(query_identifier or "").strip()
+    if value.casefold().startswith("npi="):
+        return value[4:].strip() or None
+    if not value or "=" in value:
+        return None
+    return value
+
+
+def persisted_evidence_is_for_record(source: str, query_identifier, *, submitted_npi: str,
+                                     record_identity: str, names_usable: bool) -> bool:
+    """Is this persisted evidence row keyed by an identifier THIS record carries?
+
+    NPI evidence: the record's own submitted NPI, exactly, bare or with the
+    bulk path's "npi=" prefix. NAME evidence: the source's own name prefix
+    parsed explicitly and compared under `record_name_identity`, and only when
+    names are usable for this record. Evidence keyed by anything the record
+    does not carry (a UEI, another name, another NPI) is not this record's."""
+    submitted = str(submitted_npi or "").strip()
+    queried_npi = evidence_query_npi(query_identifier)
+    if submitted and queried_npi and queried_npi.casefold() == submitted.casefold():
+        return True
+    queried_name = evidence_query_name(source, query_identifier)
+    return bool(names_usable and queried_name and record_identity
+                and record_name_identity(queried_name) == record_identity)
+
+
+def _name_screen_refused() -> dict:
+    return {"status": NOT_CHECKED, "matched_by": None,
+            "label": SOURCE_LABELS.get("oig_leie"),
+            "subtitle": SOURCE_SUBTITLES.get("oig_leie"),
+            "reason": ("record-specific name screen refused: the selected record has no "
+                       "NPI and its delivered name is not established to be the entity's "
+                       f"name ({NAME_IDENTITY_RULE}). No exclusion screening was performed "
+                       "for this record -- this is NOT a clearance; analyst determination "
+                       "required")}
+
+
+async def probe_sources(db, entity_id, *, name_screen: Optional[dict] = None) -> Dict[str, dict]:
     """Query each connector for this entity's NPI, in five-state form.
 
     Never raises. A verification that returns partial results is far more useful
     than one that 500s because a third-party API had a bad minute.
+
+    `name_screen` is given only by a record-specific review of an NPI-less
+    record: {"established": bool, "name": delivered name or None}. Established
+    -> the organisation-name screen runs on the RECORD's delivered name. Not
+    established -> no name screen runs at all (fail closed, NOT_CHECKED): the
+    entity's result is never produced for, or stored under, that record.
     """
     from sqlalchemy import select
 
@@ -105,7 +203,12 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
         # and the delivery path already does that (`evidence_service.
         # gather_sources`, `leie_org`). Before this, a manual review of an
         # NPI-less entity never screened the exclusion list at all.
-        out["oig_leie"] = await _leie_org_name_screen(db, entity_id)
+        if name_screen is None:
+            out["oig_leie"] = await _leie_org_name_screen(db, entity_id)
+        elif name_screen.get("established") and name_screen.get("name"):
+            out["oig_leie"] = await _leie_org_name_screen(db, entity_id, name=name_screen["name"])
+        else:
+            out["oig_leie"] = _name_screen_refused()
         return out
 
     # Centralised gate (Fix 1), ahead of the connector loop: a present but
@@ -225,8 +328,12 @@ async def probe_sources(db, entity_id) -> Dict[str, dict]:
 MATCHED_BY_ORG_NAME = "organisation_name"
 
 
-async def _leie_org_name_screen(db, entity_id) -> dict:
+async def _leie_org_name_screen(db, entity_id, *, name: Optional[str] = None) -> dict:
     """OIG LEIE screened by organisation name for an entity with no NPI.
+
+    `name` (record-specific review only) is the selected record's delivered
+    name, already established to be this entity's name; without it the entity's
+    registered name is used (entity-level review, unchanged).
 
     Uses the SAME two classifier states the delivery path produces for the
     same evidence (`arc_pipeline.evidence_item_state` on the exclusion
@@ -244,9 +351,11 @@ async def _leie_org_name_screen(db, entity_id) -> dict:
 
     base = {"label": SOURCE_LABELS.get("oig_leie"), "subtitle": SOURCE_SUBTITLES.get("oig_leie"),
             "matched_by": MATCHED_BY_ORG_NAME}
-    name = ((await db.execute(
-        select(reg.TefcaRegEntity.name).where(reg.TefcaRegEntity.id == entity_id))
-    ).scalar_one_or_none() or "").strip()
+    if name is None:
+        name = (await db.execute(
+            select(reg.TefcaRegEntity.name).where(reg.TefcaRegEntity.id == entity_id))
+        ).scalar_one_or_none()
+    name = (name or "").strip()
     if not name:
         return {**base, "status": NOT_CHECKED, "matched_by": None,
                 "reason": ("entity has neither an NPI nor an organisation name; no "
@@ -324,10 +433,15 @@ def _precedence(status: Optional[str]) -> int:
     return _PERSISTED_PRECEDENCE.get(status, len(_PERSISTED_PRECEDENCE))
 
 
-async def latest_persisted_exclusion_evidence(db, entity_id) -> Dict[str, Any]:
+async def latest_persisted_exclusion_evidence(db, entity_id, *, accept=None) -> Dict[str, Any]:
     """Most recent `tefca_dimension_evidence` row per source for the
     EXCLUSION_REVOCATION dimension. Rows are append-only, so the newest
-    `created_at` is the newest generation."""
+    `created_at` is the newest generation.
+
+    `accept(source, row)` restricts WHICH rows may be chosen, and it is applied
+    BEFORE the newest is taken: a record-specific review wants the newest row
+    keyed by an identifier that record carries, and a newer row keyed by
+    something else must not hide it (review finding 2026-11-14)."""
     from sqlalchemy import select
     from app.Tefca.models import TEFCADimensionEvidence as DE
 
@@ -338,6 +452,8 @@ async def latest_persisted_exclusion_evidence(db, entity_id) -> Dict[str, Any]:
         .order_by(DE.created_at.desc(), DE.generation_timestamp.desc()))).scalars().all()
     latest: Dict[str, Any] = {}
     for row in rows:
+        if accept is not None and not accept(row.source, row):
+            continue
         latest.setdefault(row.source, row)
     return latest
 
@@ -550,31 +666,53 @@ async def _treatment_field_signals(db, entity) -> dict:
     when non-blank), and never the identifier table (which deliberately
     omits malformed and delivery-shared NPIs, so a missing identifier row is
     NOT a submitted-blank fact). The assessment date is the UTC date,
-    matching the codebase's run rows and D-12 gates. Signals stay inert
-    until their consuming rule component is activated.
+    matching the codebase's run rows and D-12 gates (that is the labelled
+    FALLBACK only: when the source record's intake has a completed run, the
+    assessment date is that run's recorded date - see
+    rce/assessment_context.py). Signals stay inert until their consuming rule
+    component is activated.
 
     A promoted entity with no readable source record is a refusal, never a
     silent clean classification: this raises, and run_review fails loudly —
     classification inputs are never silently dropped."""
-    from datetime import datetime as _dt, timezone as _tz
+    signals, _assessment = await _treatment_signals_and_assessment(db, entity)
+    return signals
+
+
+async def _treatment_signals_and_assessment(db, entity, selected=None):
+    """(signals, assessment_as_of dict or None). The date is validated against
+    the source record's OWN intake, so a review of an October record is
+    assessed as of the October run's date, never an unrelated run's.
+
+    `selected` is the VALIDATED record an explicit record review is about. When
+    given it is the ONLY source of the delivered Treatment fields and of the
+    intake/run that pins the date - `entity.source_record_id` (whichever record
+    first created a shared entity) is not consulted, so reviewing delivery B's
+    record is never classified on delivery A's purposes, NPI or assessment date.
+    Without it (entity-only reviews) behaviour is unchanged."""
     from app.tefca_registry.rce import models as rce_m
     from app.tefca_registry.rce import npi_applicability as _npa
+    from app.tefca_registry.rce.assessment_context import resolve_assessment_date
     from app.tefca_registry.rce.quality_rules import BR_NPI_TRTMNT_EFFECTIVE
-    if entity.source_record_id is None:
+    if selected is not None:
+        row = selected
+    elif entity.source_record_id is None:
         # Entities that predate RCE deliveries carry no delivered purposes at
         # all: there is no Treatment-lane evidence to produce, which is a
         # fact, not a dropped input.
-        return {}
-    row = await db.get(rce_m.RceSourceRecord, entity.source_record_id)
+        return {}, None
+    else:
+        row = await db.get(rce_m.RceSourceRecord, entity.source_record_id)
     if row is None:
         raise RuntimeError(
             f"entity {entity.id} names source record "
             f"{entity.source_record_id}, which does not exist — refusing to "
             f"classify without its delivered values (a wrong bucket is worse "
             f"than a failed review).")
-    return _npa.treatment_signals_from_parsed(
-        row.parsed, assessment_date=_dt.now(_tz.utc).date(),
-        requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
+    assessment = await resolve_assessment_date(db, row.source_intake_id)
+    return (_npa.treatment_signals_from_parsed(
+        row.parsed, assessment_date=assessment.value,
+        requirement_effective=BR_NPI_TRTMNT_EFFECTIVE), assessment.as_dict())
 
 
 def _derived_fields(sources: Dict[str, dict], npi_flagged: bool) -> dict:
@@ -768,12 +906,78 @@ async def _compare_addresses(entity, sources: Dict[str, dict]) -> dict:
     return payload
 
 
+async def _validated_source_record(db, entity, source_record_id):
+    """The delivered RECORD (an RceSourceRecord row) a single-entity review is
+    ABOUT, or None.
+
+    Only an EXPLICIT id from a caller that knows the delivery context is used,
+    and only after it is confirmed to be linked to THIS entity through its
+    curated record. It is never taken from `entity.source_record_id` (an entity
+    can be promoted by several deliveries; that column names whichever record
+    created it) and never guessed. A record that is not this entity's, or is
+    unknown, is a refusal - a review wrongly anchored to another delivery's
+    record would silently attach one delivery's result to another."""
+    if source_record_id is None:
+        return None
+    import uuid as _uuidlib
+    from sqlalchemy import select
+    from app.tefca_registry.rce import models as rce_m
+    try:
+        sid = (source_record_id if isinstance(source_record_id, _uuidlib.UUID)
+               else _uuidlib.UUID(str(source_record_id)))
+    except (ValueError, TypeError):
+        raise ValueError(f"source_record_id {source_record_id!r} is not a UUID")
+    row = (await db.execute(
+        select(rce_m.RceCuratedRecord.canonical_entity_id)
+        .where(rce_m.RceCuratedRecord.source_record_id == sid))).first()
+    if row is None:
+        raise ValueError(f"source record {sid} has no curated record, so its link "
+                         f"to entity {entity.id} cannot be confirmed")
+    if row[0] is None or str(row[0]) != str(entity.id):
+        raise ValueError(
+            f"source record {sid} is not linked to entity {entity.id}; refusing "
+            f"to attach this review to another delivery's record")
+    record = await db.get(rce_m.RceSourceRecord, sid)
+    if record is None:                       # the curated row names a record that is gone
+        raise ValueError(f"source record {sid} does not exist")
+    return record
+
+
 async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
-                     sample_id=None, trigger: str = "manual") -> dict:
-    """Verify, classify, persist a ReviewRecord, return the response envelope."""
+                     sample_id=None, trigger: str = "manual",
+                     source_record_id=None) -> dict:
+    """Verify, classify, persist a ReviewRecord, return the response envelope.
+
+    `source_record_id` (optional, validated) anchors the review to the delivered
+    record it is about. The entity-only entry points (priority review, entity
+    verify) pass none: their reviews are entity-level and stay UNANCHORED, which
+    the reporting loader states explicitly instead of attaching them."""
     from app.services.npi_validator import validate_npi
     from sqlalchemy import select
     from app.tefca_registry.review_routes import generate_review_id
+
+    selected = await _validated_source_record(db, entity, source_record_id)
+    source_record_id = selected.id if selected is not None else None
+    if selected is not None:
+        registered = set((await db.execute(select(reg.TefcaEntityIdentifier.identifier_value).where(
+            reg.TefcaEntityIdentifier.entity_id == entity.id,
+            reg.TefcaEntityIdentifier.identifier_type == "npi"))).scalars().all())
+        submitted = str((selected.parsed or {}).get("NPI", selected.npi) or "").strip()
+        if registered != ({submitted} if submitted else set()):
+            raise ValueError("selected record's submitted NPI does not match the registered "
+                             "source-probe identifier; refusing a record-specific classification "
+                             "using another identifier's evidence")
+
+    # NPI-less record (W4, 2026-11-14): the only live exclusion screen left is a
+    # NAME screen. It may run for this record only when the record's delivered
+    # name is established to be the entity's name; otherwise it is refused and
+    # the source stays NOT_CHECKED. Decided BEFORE any probe or write.
+    name_identity: Optional[dict] = None
+    if selected is not None and not submitted:
+        delivered_name = (selected.parsed or {}).get("name")
+        established = names_establish_one_identity(delivered_name, entity.name)
+        name_identity = {"established": established,
+                         "name": str(delivered_name).strip() if established else None}
 
     await ensure_seed_rules(db)
     # v2 wires SAM.gov into classification. Every SAM condition fires only
@@ -804,7 +1008,10 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
                      actor_id=actor_id, actor_email=actor_email,
                      ip_address=ip_address, metadata={"trigger": trigger})
 
-    sources = await probe_sources(db, entity.id)
+    if name_identity is None:
+        sources = await probe_sources(db, entity.id)
+    else:
+        sources = await probe_sources(db, entity.id, name_screen=name_identity)
 
     # Persisted exclusion/revocation evidence from the bulk path (2026-10-03).
     # Read-only, no network; see PERSISTED_EVIDENCE_SOURCES. A query failure
@@ -812,7 +1019,32 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     # the stub stays NOT_CHECKED and the failure is logged, never "clear".
     persisted_used: List[dict] = []
     try:
-        persisted_rows = await latest_persisted_exclusion_evidence(db, entity.id)
+        persisted_rows = {}
+        if selected is None:
+            persisted_rows = await latest_persisted_exclusion_evidence(db, entity.id)
+        else:
+            # An entity may have historical evidence for an older identifier.
+            # Reuse only an explicit query identifier carried by THIS record.
+            # NPI evidence: the record's own submitted NPI, exactly. NAME
+            # evidence: the source's prefix parsed explicitly (W5) and the name
+            # compared under the SAME identity rule as the live screen (W4);
+            # for an NPI-less record it is used only when that identity is
+            # established - never another record's or another name's result.
+            record_identity = record_name_identity((selected.parsed or {}).get("name"))
+            names_usable = bool(record_identity) and (
+                name_identity is None or name_identity["established"])
+
+            def _is_this_records(source, row) -> bool:
+                return persisted_evidence_is_for_record(
+                    source, row.query_identifier, submitted_npi=submitted,
+                    record_identity=record_identity, names_usable=names_usable)
+
+            # Filtered inside the read (newest ACCEPTED row per source), and
+            # again here so a reader that ignores `accept` cannot widen it.
+            persisted_rows = await latest_persisted_exclusion_evidence(
+                db, entity.id, accept=_is_this_records)
+            persisted_rows = {source: row for source, row in persisted_rows.items()
+                              if _is_this_records(source, row)}
         persisted_used = apply_persisted_exclusion_evidence(sources, persisted_rows)
     except Exception as exc:  # noqa: BLE001 — evidence read must not sink the review
         logger.error("Persisted exclusion evidence not consumed for %s: %s",
@@ -833,7 +1065,17 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
             reg.TefcaEntityIdentifier.entity_id == entity.id,
             reg.TefcaEntityIdentifier.identifier_type == "npi").limit(1))
     ).scalar_one_or_none()
-    npi_flagged = bool(npi) and not validate_npi(npi)[0]
+    # The NPI behind the applicability fact and NPI validation. For an explicit
+    # record review this is the SELECTED record's delivered NPI (blank stays
+    # blank): the entity's registered identifier belongs to the entity and may
+    # differ between deliveries (or be omitted as malformed/shared).
+    if selected is not None:
+        _delivered = (selected.parsed or {}).get("NPI") \
+            if "NPI" in (selected.parsed or {}) else selected.npi
+        record_npi = (str(_delivered).strip() if _delivered is not None else "") or None
+    else:
+        record_npi = npi
+    npi_flagged = bool(record_npi) and not validate_npi(record_npi)[0]
 
     results = {"sources": sources, "fields": _derived_fields(sources, npi_flagged),
                "confidence_score": None,
@@ -848,7 +1090,27 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     # these are classification INPUTS, and the codebase's norm is a refusal,
     # never a wrong bucket — a producer failure must fail the review loudly
     # rather than silently classify without a B4-eligible condition.
-    results["fields"].update(await _treatment_field_signals(db, entity))
+    _signals, _assessment = await _treatment_signals_and_assessment(db, entity, selected)
+    results["fields"].update(_signals)
+    if _assessment is not None:
+        results["assessment_as_of"] = _assessment
+    if selected is not None:
+        # Provenance of the record-specific inputs. The source PROBES above are
+        # still keyed by the entity's registered identifier (not this record's
+        # delivered NPI) - stated, not hidden.
+        results["record_context"] = {
+            "source_record_id": str(selected.id),
+            "source_intake_id": str(selected.source_intake_id),
+            "source_line": selected.line_number,
+            "treatment_fields_from": "selected record's delivered values",
+            "submitted_npi_basis": "selected record's delivered NPI",
+            "source_probes_keyed_by": "entity registered identifier"}
+        if name_identity is not None:
+            results["record_context"]["name_identity"] = {
+                "established": name_identity["established"],
+                "rule": NAME_IDENTITY_RULE,
+                "name_screen": ("selected record's delivered name"
+                                if name_identity["established"] else "refused; NOT_CHECKED")}
     # Policy status beside the sources (2026-10-04). Not read by the
     # classifier (`classify_with_db` reads sources/fields only).
     from app.Tefca import source_policy as _source_policy
@@ -883,6 +1145,23 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
         results["address_match"] = {"method": "skipped", "reason": str(e)[:200]}
 
     classification = await _classifier.classify_with_db(db, results)
+
+    # M-4 mandatory-source enforcement - PARITY with the bulk path. The SAME
+    # function (rce.source_policy.enforce_on_classification, NOT
+    # app.Tefca.source_policy) and the SAME active policy rows decide, so a
+    # record cannot reach B1/B2 here with an applicable mandatory source
+    # missing when the bulk path would send it to B3. No active policy row
+    # (the shipped state) -> no-op. NOTE for any future PECOS designation: this
+    # path's "pecos" key is the legacy NPPES-proxy connector, not CMS PPEF
+    # enrollment - see PECOS_UI_LABEL; that designation must be reconciled
+    # before a pecos policy row is activated.
+    from app.tefca_registry.rce import source_policy as _rce_source_policy
+    _active_policies = await _rce_source_policy.load_active_policies(db)
+    classification, _matched_policy = (
+        _rce_source_policy.enforce_on_classification(
+            classification, sources, {"has_submitted_npi": bool(record_npi)},
+            _active_policies))
+
     # The rule set and version path are unchanged; only the rationale text
     # gains the evidence provenance, so a reviewer can see how old the
     # SAM/LEIE evidence behind this determination is.
@@ -905,6 +1184,7 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
 
     db.add(reg.ReviewRecord(
         review_id=review_id, entity_id=entity.id, sample_id=sample_id,
+        source_record_id=source_record_id,     # None unless explicitly, validly given
         verification_results=results,          # snapshot, not a live pointer
         classification_bucket=classification.bucket,
         classification_rule=rule_code,
@@ -941,6 +1221,7 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     return {
         "entity_id": str(entity.id),
         "review_id": review_id,
+        "source_record_id": str(source_record_id) if source_record_id else None,
         "verification": sources,
         "classification": {
             **classification.as_dict(),

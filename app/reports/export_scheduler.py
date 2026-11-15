@@ -57,8 +57,10 @@ async def _poll_tick():
     """
     from app.core.database import async_session_maker
     from app.reports.data import export_jobs
-    from app.reports.data.export_jobs import REPORT_GENERATION_EXPORT_TYPE_PREFIX
-    from app.reports.export_runner import run_export_job, run_report_generation_job
+    from app.reports.data.export_jobs import (
+        RECORD_REVIEW_EXPORT_TYPE_PREFIX, REPORT_GENERATION_EXPORT_TYPE_PREFIX)
+    from app.reports.export_runner import (
+        run_export_job, run_record_review_export_job, run_report_generation_job)
 
     try:
         async with async_session_maker() as db:
@@ -71,9 +73,12 @@ async def _poll_tick():
             # 2026-10-01); dispatched on `export_type`'s prefix rather than a
             # separate "kind" column, same distinction `report_type` already
             # makes on the row.
-            runner = (run_report_generation_job
-                     if (job.export_type or "").startswith(REPORT_GENERATION_EXPORT_TYPE_PREFIX)
-                     else run_export_job)
+            if (job.export_type or "").startswith(REPORT_GENERATION_EXPORT_TYPE_PREFIX):
+                runner = run_report_generation_job
+            elif (job.export_type or "").startswith(RECORD_REVIEW_EXPORT_TYPE_PREFIX):
+                runner = run_record_review_export_job
+            else:
+                runner = run_export_job
             state = await runner(db, job)
             logger.info("export job %s finished: %s", job.id, state)
     except Exception as exc:  # noqa: BLE001
