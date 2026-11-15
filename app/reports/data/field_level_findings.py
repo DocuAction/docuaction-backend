@@ -43,6 +43,11 @@ address_city address_state address_postalCode address_country partof""".split())
 B2_VALUES = frozenset("MISSPELLING WHITE_SPACE CAPITALIZATION ABBREVIATION WRONG_ATTRIBUTE OTHER".split())
 
 EXCLUDED_ISSUE_TYPES = frozenset({"NAIC_ON_NON_PAYER"})
+#: Issue types whose F3.3 Field_ID is fixed even though the finding originates in a different delivered column
+#: (issue type -> the delivered column the finding names). Field_ID follows F3.3, the source column stays traceable
+#: in Field_Reason and in a separate (non-contract) mapping exception, and confirmation of the mapping is pending
+#: with the owner / client (F3.3 maps DOA_NOT_AN_OID to `partof`; the rule fires on the delivered `doa` column).
+SOURCE_COLUMN_TRACEABLE = {"DOA_NOT_AN_OID": "doa"}
 ACTUAL = "ACTUAL"            # Field_ID is "the actual (evidenced) field"
 NOT_SPECIFIED = None         # Stephen's dash: no Field_ID
 #: original AGT issue type -> (client Issue_Type, Field_ID rule). Rule: a controlled name,
@@ -124,7 +129,8 @@ def build_field_rows(facts: Iterable[Dict[str, Any]], issues: Iterable[Any], *,
     rows: List[List[str]] = []
     rec = {"records": len(by_agt), "issues_read": 0, "rows": 0, "excluded_naic": 0,
            "issue_types_not_in_crosswalk": {}, "issues_without_record": 0,
-           "records_with_findings": 0, "field_id_blank": 0, "snapshot_date_blank": not snapshot_date}
+           "records_with_findings": 0, "field_id_blank": 0, "field_id_source_column_differs": 0,
+           "snapshot_date_blank": not snapshot_date}
     exceptions: List[Dict[str, str]] = []
     seen_records = set()
     rec["issues_from_other_runs"] = 0
@@ -163,7 +169,14 @@ def build_field_rows(facts: Iterable[Dict[str, Any]], issues: Iterable[Any], *,
         else:
             field_id = rule
             named = (it.field_name or "").strip()
-            if named and field_id_for(named) != rule:
+            if named and field_id_for(named) != rule and named.lower() == SOURCE_COLUMN_TRACEABLE.get(itype):
+                notes.append(f"Source column: {named} (the finding originates in the delivered '{named}' column; "
+                             f"Field_ID {rule} follows F3.3; owner/client confirmation of this mapping is pending)")
+                rec["field_id_source_column_differs"] += 1
+                exceptions.append({"agt_record_id": _s(fact["agt_record_id"]), "issue_type": itype,
+                                   "kind": "source_column_differs", "source_column": named, "field_id": rule,
+                                   "reason": f"Field_ID {rule} per F3.3; delivered source column is '{named}'"})
+            elif named and field_id_for(named) != rule:
                 # The finding is about a different delivered column than the fixed Field_ID names:
                 # exporting the fixed name would pair that field with another column's value.
                 notes.append(f"Field_ID not established: the finding concerns '{named}', not {rule}")
@@ -171,7 +184,7 @@ def build_field_rows(facts: Iterable[Dict[str, Any]], issues: Iterable[Any], *,
         if not field_id:
             rec["field_id_blank"] += 1
             exceptions.append({"agt_record_id": _s(fact["agt_record_id"]), "issue_type": itype,
-                               "reason": notes[-1] if notes else "blank Field_ID"})
+                               "kind": "field_id_blank", "reason": notes[-1] if notes else "blank Field_ID"})
         ref_src = reference_source(it.suggested_source)
         has_ref = bool(ref_src and _s(it.suggested_value).strip())
         when = it.created_at if getattr(it, "run_id", None) else None
