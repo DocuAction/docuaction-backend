@@ -442,6 +442,14 @@ def withhold_unestablished_name_screens(evidence: Dict[str, Any], *, delivered_n
     return out, withheld
 
 
+def extract_state_of(disposition: Any) -> str:
+    """The `sam_extract` source state for one persisted/assembled extract evidence disposition. The ONE translation both
+    classification paths use: PASS -> clear, a candidate (REVIEW) -> possible_match (never a confirmed exclusion),
+    anything else -> unavailable."""
+    return {"PASS": EXCLUSION_CLEAN_SCREEN_STATE, "REVIEW": EXCLUSION_POSSIBLE_MATCH_STATE
+            }.get(str(disposition).upper(), "unavailable")
+
+
 def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, Any]:
     """Translate assembled D1-D6 evidence into the classifier's input shape.
 
@@ -465,8 +473,7 @@ def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, An
                 # The dated public-extract screen is its OWN source state (`sam_extract`), never folded into the
                 # live API's `sam_gov`: PASS -> clear, a candidate (REVIEW) -> possible_match (never a confirmed
                 # exclusion), anything else -> unavailable.
-                ext_state = {"PASS": EXCLUSION_CLEAN_SCREEN_STATE, "REVIEW": EXCLUSION_POSSIBLE_MATCH_STATE
-                             }.get(str(item.get("disposition")).upper(), "unavailable")
+                ext_state = extract_state_of(item.get("disposition"))
                 if name == "EXCLUSION_REVOCATION":
                     cur = sources.get("sam_extract", {}).get("status")
                     if cur is None or _STATE_PRECEDENCE.index(ext_state) < _STATE_PRECEDENCE.index(cur):

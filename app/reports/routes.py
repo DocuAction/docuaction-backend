@@ -2158,6 +2158,9 @@ async def export_record_review(
         engine_version=(f"{request.format}|run={assessment.run_id}|"
                         f"cutoff={cutoff.isoformat()}|by={generated_by.strip().lower()}"),
         classification=classification, export_type=export_type)
+    # Read once, before request_job(): the losing side of a duplicate-request race rolls the session back, which
+    # expires every ORM instance loaded earlier (review finding, #233, 2026-11-15).
+    delivery_label = intake.delivery_label
     before = await active_job(db, identity)
     try:
         job = await request_job(
@@ -2178,14 +2181,14 @@ async def export_record_review(
         detail=("A record-review export for this delivery, run, cutoff and "
                 "format was already in flight; the existing job was returned."
                 if reused else "A record-review export was requested."),
-        extra={"delivery": intake.delivery_label, "intake_id": str(intake_uuid),
+        extra={"delivery": delivery_label, "intake_id": str(intake_uuid),
                "classification": classification, "format": request.format,
                "assessment_run_id": assessment.run_id,
                "evidence_cutoff": cutoff.isoformat()})
     return {
         **job.to_dict(),
         "reused_existing_job": reused,
-        "delivery": intake.delivery_label,
+        "delivery": delivery_label,
         "format": request.format,
         "assessment_run_id": assessment.run_id,
         "assessment_date": assessment.value.isoformat(),

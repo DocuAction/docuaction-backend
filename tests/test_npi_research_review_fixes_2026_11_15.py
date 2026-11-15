@@ -114,8 +114,9 @@ async def test_an_exact_replay_of_record_and_amend_is_already_present_not_refuse
     with pytest.raises(sr.ResearchRefused):
         await _record(db, intake_id, rec, **{**amend_kw, "supersedes_id": first["entry"]["id"],
                                              "researched_npi": "1730123456"})
-    count = (await db.execute(text("select count(*) from rce_supplemental_npi_research"))).scalar()
-    assert count == 2
+    count = (await db.execute(text("select count(*) from rce_supplemental_npi_research where source_intake_id = :i"),
+                              {"i": intake_id})).scalar()
+    assert count == 2          # scoped to THIS test's intake: rolled_back_db keeps rows other suites committed
 
 
 # ── 4580174245: current_only before LIMIT ───────────────────────────────────
