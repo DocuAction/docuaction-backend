@@ -424,6 +424,7 @@ def test_startup_create_all_excludes_the_migration_owned_tables():
     assert not (captured["names"] & set(tm.MIGRATION_OWNED_TABLES))
     assert "rce_curated_records" in captured["names"]
     assert "rce_record_comments" not in captured["names"], "startup must not own the append-only comment store"
+    assert "rce_supplemental_npi_research" not in captured["names"], "startup must not own the append-only research store"
 
 
 async def test_no_request_time_create_all_can_create_a_migration_owned_table(monkeypatch):
@@ -464,6 +465,7 @@ async def test_no_request_time_create_all_can_create_a_migration_owned_table(mon
             return _Begin()
 
     monkeypatch.setattr(database, "_get_engine", lambda: _Engine())
+    monkeypatch.setenv("STARTUP_SCHEMA_MUTATION_ENABLED", "true")     # pin the policy: ambient ENVIRONMENT must not decide
     monkeypatch.setattr(vr, "_table_created", False)
     await vr._ensure_table()
     assert created, "the table-creation call did not run"

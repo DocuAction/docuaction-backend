@@ -439,3 +439,16 @@ def test_every_kind_keeps_its_text_byte_for_byte_in_the_dataset_and_the_csv():
     for column, tail in ((d.ORIGINAL_COMMENTS_COLUMN, "o"), (d.IZAAN_COMMENTS_COLUMN, "i"),
                          (d.CLARIFICATIONS_COLUMN, "c")):
         assert data[header.index(column)] == _AWKWARD + tail
+
+
+def test_csv_reconciliation_line_balances_when_a_record_is_unclassified():
+    """CodeRabbit on #233 (reproduced): with one B1 and one unclassified record the line read 'B1 1, B2 0, B3 0,
+    B4 0 = 2' - the bucket terms summed to 1. The unclassified count is a term of the equation."""
+    ds = d.build_dataset([_f(1, "B1"), _f(2, None)], report_id="R", findings_count=None)
+    line = list(csv.reader(io.StringIO(d.to_csv(ds).decode("utf-8-sig"))))[0][0]
+    import re
+    m = re.search(r"Buckets: (.*?) = (\d+) ", line)
+    assert m, line
+    terms = [int(t.rsplit(" ", 1)[1]) for t in m.group(1).split(", ")]
+    assert sum(terms) == int(m.group(2)) == ds["summary"]["unique_records"], line
+    assert "Not classified 1" in line

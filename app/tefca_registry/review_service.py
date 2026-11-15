@@ -442,7 +442,7 @@ def _precedence(status: Optional[str]) -> int:
     return _PERSISTED_PRECEDENCE.get(status, len(_PERSISTED_PRECEDENCE))
 
 
-async def latest_persisted_exclusion_evidence(db, entity_id, *, accept=None) -> Dict[str, Any]:
+async def latest_persisted_exclusion_evidence(db, entity_id, *, accept=None, source_names=None) -> Dict[str, Any]:
     """Most recent `tefca_dimension_evidence` row per source for the
     EXCLUSION_REVOCATION dimension. Rows are append-only, so the newest
     `created_at` is the newest generation.
@@ -457,7 +457,8 @@ async def latest_persisted_exclusion_evidence(db, entity_id, *, accept=None) -> 
     rows = (await db.execute(
         select(DE).where(DE.entity_id == str(entity_id),
                          DE.evidence_dimension == PERSISTED_EXCLUSION_DIMENSION,
-                         DE.source.in_(list(PERSISTED_EVIDENCE_SOURCES)))
+                         DE.source.in_(list(source_names) if source_names is not None
+                                       else list(PERSISTED_EVIDENCE_SOURCES)))
         .order_by(DE.created_at.desc(), DE.generation_timestamp.desc()))).scalars().all()
     latest: Dict[str, Any] = {}
     for row in rows:
@@ -465,6 +466,18 @@ async def latest_persisted_exclusion_evidence(db, entity_id, *, accept=None) -> 
             continue
         latest.setdefault(row.source, row)
     return latest
+
+
+async def latest_persisted_extract_evidence(db, entity_id, *, accept=None):
+    """Newest persisted dated-extract screen (`SAM_EXTRACT_SUPPLEMENTARY`, EXCLUSION_REVOCATION) for the entity, or None.
+    Read-only, through the module's ONE sanctioned evidence read (`latest_persisted_exclusion_evidence`), with the same
+    record-identity `accept` rule. The extract is supplementary: it is only ever handed to the mandatory-source POLICY
+    (never to the rules engine and never written back as a live SAM answer)."""
+    from app.tefca_registry.rce.arc_pipeline import EXTRACT_EVIDENCE_SOURCE
+
+    rows = await latest_persisted_exclusion_evidence(
+        db, entity_id, accept=accept, source_names=(EXTRACT_EVIDENCE_SOURCE,))
+    return rows.get(EXTRACT_EVIDENCE_SOURCE)
 
 
 def _evidence_age_days(generation_timestamp: Optional[str]) -> Optional[float]:
@@ -1035,6 +1048,7 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     # here must not fail the review, but it must not pass silently either:
     # the stub stays NOT_CHECKED and the failure is logged, never "clear".
     persisted_used: List[dict] = []
+    extract_row = None
     try:
         persisted_rows = {}
         if selected is None:
@@ -1063,6 +1077,9 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
             persisted_rows = {source: row for source, row in persisted_rows.items()
                               if _is_this_records(source, row)}
         persisted_used = apply_persisted_exclusion_evidence(sources, persisted_rows)
+        # The dated-extract screen the bulk path hands to the mandatory-source policy (M-1). Same row-selection rule.
+        extract_row = await latest_persisted_extract_evidence(
+            db, entity.id, accept=(None if selected is None else _is_this_records))
     except Exception as exc:  # noqa: BLE001 — evidence read must not sink the review
         logger.error("Persisted exclusion evidence not consumed for %s: %s",
                      entity.id, type(exc).__name__, exc_info=True)
@@ -1170,9 +1187,16 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     # before a pecos policy row is activated.
     from app.tefca_registry.rce import source_policy as _rce_source_policy
     _active_policies = await _rce_source_policy.load_active_policies(db)
+    # PARITY (CodeRabbit on #233): the bulk path supplies `sam_extract` from the D6 evidence; so does this one, from the
+    # same persisted rows through the same translation (arc_pipeline.extract_state_of). It is handed to the POLICY only -
+    # not added to `sources`, which feed the rules engine, the verification audit rows and the review snapshot.
+    from app.tefca_registry.rce.arc_pipeline import extract_state_of
+    _policy_sources = dict(sources)
+    if extract_row is not None:
+        _policy_sources["sam_extract"] = {"status": extract_state_of(extract_row.disposition)}
     classification, _matched_policy = (
         _rce_source_policy.enforce_on_classification(
-            classification, sources, {"has_submitted_npi": bool(record_npi)},
+            classification, _policy_sources, {"has_submitted_npi": bool(record_npi)},
             _active_policies))
 
     # The rule set and version path are unchanged; only the rationale text
