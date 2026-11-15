@@ -165,6 +165,10 @@ def _assert_no_raw_npi(value, key=None):
     elif isinstance(value, list):
         for child in value:
             _assert_no_raw_npi(child, key)
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        # A numeric JSON leaf can carry an NPI as well as a string can (CodeRabbit on #233): check its text too.
+        for secret in (BAD_LEN_NPI, GOOD_NPI, GOOD_NPI_2):
+            assert secret not in str(value), (key, secret)
     elif isinstance(value, str):
         if key in _METADATA_UUID_KEYS:
             try:
@@ -181,7 +185,8 @@ def test_metadata_uuid_digits_are_allowed_but_record_values_and_embedded_text_ar
     _assert_no_raw_npi({"runs": {"selected": {"run_id": identifier}}, "job_ids": [identifier]})
     for leak in ({"note": identifier}, {"run_id": "not-a-uuid: " + BAD_LEN_NPI},
                  {"npi": BAD_LEN_NPI}, {"note": "supplied NPI " + GOOD_NPI},
-                 {"nested": [{"detail": GOOD_NPI_2}]}):
+                 {"nested": [{"detail": GOOD_NPI_2}]},
+                 {"note": int(GOOD_NPI)}, {"nested": [{"n": int(BAD_LEN_NPI)}]}, {"values": [int(GOOD_NPI_2)]}):
         with pytest.raises(AssertionError):
             _assert_no_raw_npi(leak)
 
