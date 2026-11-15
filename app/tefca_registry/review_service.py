@@ -166,7 +166,11 @@ def _name_screen_refused() -> dict:
                        "required")}
 
 
-async def probe_sources(db, entity_id, *, name_screen: Optional[dict] = None) -> Dict[str, dict]:
+_NPI_UNSET = object()
+
+
+async def probe_sources(db, entity_id, *, name_screen: Optional[dict] = None,
+                        registered_npi: Any = _NPI_UNSET) -> Dict[str, dict]:
     """Query each connector for this entity's NPI, in five-state form.
 
     Never raises. A verification that returns partial results is far more useful
@@ -180,11 +184,16 @@ async def probe_sources(db, entity_id, *, name_screen: Optional[dict] = None) ->
     """
     from sqlalchemy import select
 
-    npi = (await db.execute(
-        select(reg.TefcaEntityIdentifier.identifier_value).where(
-            reg.TefcaEntityIdentifier.entity_id == entity_id,
-            reg.TefcaEntityIdentifier.identifier_type == "npi").limit(1))
-    ).scalar_one_or_none()
+    if registered_npi is _NPI_UNSET:
+        npi = (await db.execute(
+            select(reg.TefcaEntityIdentifier.identifier_value).where(
+                reg.TefcaEntityIdentifier.entity_id == entity_id,
+                reg.TefcaEntityIdentifier.identifier_type == "npi").limit(1))
+        ).scalar_one_or_none()
+    else:
+        # The caller read the registered NPI ONCE for the whole review; reusing that value means an
+        # identifier committed meanwhile cannot change which NPI the probes use.
+        npi = registered_npi
 
     out: Dict[str, dict] = {
         k: {"status": NOT_CHECKED, "reason": why, "label": SOURCE_LABELS.get(k),
@@ -958,10 +967,18 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
 
     selected = await _validated_source_record(db, entity, source_record_id)
     source_record_id = selected.id if selected is not None else None
+    # The registered NPI is read ONCE, before any other awaited work, and this one value is used for the match,
+    # the probes, the persisted-evidence filter and the classification facts.
+    _npi_select = select(reg.TefcaEntityIdentifier.identifier_value).where(
+        reg.TefcaEntityIdentifier.entity_id == entity.id,
+        reg.TefcaEntityIdentifier.identifier_type == "npi")
     if selected is not None:
-        registered = set((await db.execute(select(reg.TefcaEntityIdentifier.identifier_value).where(
-            reg.TefcaEntityIdentifier.entity_id == entity.id,
-            reg.TefcaEntityIdentifier.identifier_type == "npi"))).scalars().all())
+        _registered_rows = list((await db.execute(_npi_select)).scalars().all())
+        registered_npi = _registered_rows[0] if _registered_rows else None
+    else:
+        registered_npi = (await db.execute(_npi_select.limit(1))).scalar_one_or_none()
+    if selected is not None:
+        registered = set(_registered_rows)
         submitted = str((selected.parsed or {}).get("NPI", selected.npi) or "").strip()
         if registered != ({submitted} if submitted else set()):
             raise ValueError("selected record's submitted NPI does not match the registered "
@@ -1009,9 +1026,9 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
                      ip_address=ip_address, metadata={"trigger": trigger})
 
     if name_identity is None:
-        sources = await probe_sources(db, entity.id)
+        sources = await probe_sources(db, entity.id, registered_npi=registered_npi)
     else:
-        sources = await probe_sources(db, entity.id, name_screen=name_identity)
+        sources = await probe_sources(db, entity.id, name_screen=name_identity, registered_npi=registered_npi)
 
     # Persisted exclusion/revocation evidence from the bulk path (2026-10-03).
     # Read-only, no network; see PERSISTED_EVIDENCE_SOURCES. A query failure
@@ -1060,11 +1077,7 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
         logger.error("NPI verification outcome not recorded for %s: %s",
                      entity.id, type(exc).__name__, exc_info=True)
 
-    npi = (await db.execute(
-        select(reg.TefcaEntityIdentifier.identifier_value).where(
-            reg.TefcaEntityIdentifier.entity_id == entity.id,
-            reg.TefcaEntityIdentifier.identifier_type == "npi").limit(1))
-    ).scalar_one_or_none()
+    npi = registered_npi
     # The NPI behind the applicability fact and NPI validation. For an explicit
     # record review this is the SELECTED record's delivered NPI (blank stays
     # blank): the entity's registered identifier belongs to the entity and may
