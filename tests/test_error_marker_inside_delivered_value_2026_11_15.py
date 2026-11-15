@@ -78,3 +78,14 @@ def test_real_driver_classes_are_still_recognised():
             "duplicate key value\nDETAIL: Key (x)=(" + _K + ") already exists.")
     out = sanitize_stored_error(real)
     assert "UniqueViolationError" in out and _K not in out
+
+
+def test_a_preflight_block_keeps_its_controlled_message_but_still_masks_embedded_values():
+    """CodeRabbit on #221 (writer mark / whitelist): PreflightBlockedError is a domain refusal whose message holds
+    only system ids; it is a listed controlled class, so GATE_BLOCKED stays readable. Delivered text stays masked."""
+    msg = "PreflightBlockedError: preflight classification_gate=BLOCKED for intake i-1 (run r-1); see preflight-run findings for detail"
+    assert sanitize_stored_error(msg) == msg
+    assert _sanitize_error_value(msg, safe_writer=True) == msg        # marked by its writer: kept
+    assert "see preflight-run findings" not in _sanitize_error_value(msg, safe_writer=False)  # unmarked legacy text: still withheld
+    leaky = f"PreflightBlockedError: x \"(sqlalchemy.{SECRET})\""
+    assert SECRET not in sanitize_stored_error(leaky)

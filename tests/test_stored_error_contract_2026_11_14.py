@@ -212,7 +212,7 @@ def test_every_controlled_class_name_is_a_real_domain_class():
 
     homes = ("app.tefca_registry.rce.intake", "app.tefca_registry.rce.curation",
              "app.tefca_registry.rce.reconciliation", "app.tefca_registry.rce.snapshot_effects",
-             "app.tefca_registry.rce.delivery_jobs")
+             "app.tefca_registry.rce.delivery_jobs", "app.tefca_registry.rce.preflight")
     defined = set()
     for home in homes:
         module = importlib.import_module(home)
