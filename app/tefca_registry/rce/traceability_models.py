@@ -77,6 +77,7 @@ MIGRATION_OWNED_TABLES = (
     "rce_delivery_stage_events", "rce_disposition_events",
     "rce_reconciliation_snapshots", "tefca_identifier_decision_events",
     "rce_delivery_report_links", "rce_record_comments",
+    "rce_supplemental_npi_research",
 )
 
 

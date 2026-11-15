@@ -988,3 +988,78 @@ async def read_record_comments(
     return await _comment_call(rcm.list_comments(
         db, intake_id=intake_id, source_record_id=source_record_id, kind=kind,
         current_only=current_only, limit=limit, after=after))
+
+
+# ── Supplemental NPI research (append-only, NON-DECISION) ────────────────────
+#
+# Persisted home for manual NPPES research on ONE delivered source record (migration
+# 20261115_rce_npi_research). Not a correction, resolution, approval or bucket change; it fills no blank
+# submitted NPI and removes no finding. Entry is `reviewer` (the analyst floor) and every call names the
+# delivery AND the explicit source record (AGT_Record_ID) with its line/HCID/TEFCA id - no entity-only
+# fallback. Until the migration is applied through the governed release path these answer 409
+# SUPPLEMENTAL_RESEARCH_NOT_APPLIED.
+
+NPI_RESEARCH_ENTRY_ROLE = "reviewer"
+NPI_RESEARCH_READ_ROLE = "reviewer"
+
+
+class SupplementalNpiResearchRequest(BaseModel):
+    expected: Dict[str, Any] = Field(description="source_line, hcid and tefca_id of the record, checked against it.")
+    action: str = Field(default="RECORD", description="RECORD | AMEND | WITHDRAW")
+    researched_npi: Optional[str] = Field(default=None, description="10 digits, kept as text; never fills the original.")
+    nppes_reference: Optional[str] = Field(default=None, description="What was looked up and where.")
+    nppes_check_date: Optional[str] = Field(default=None, description="The ACTUAL research date, YYYY-MM-DD.")
+    match_rationale: Optional[str] = Field(default=None, description="Why this NPPES record is this organization.")
+    supersedes_id: Optional[str] = Field(default=None, description="Required for AMEND and WITHDRAW.")
+    change_reason: Optional[str] = Field(default=None, description="Required for AMEND and WITHDRAW.")
+
+
+async def _research_call(coro):
+    from app.tefca_registry.rce import supplemental_research as sr
+    try:
+        return await coro
+    except sr.ResearchStoreNotApplied as exc:
+        raise HTTPException(409, str(exc))
+    except sr.ResearchRefused as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/deliveries/{intake_id}/records/{source_record_id}/supplemental-npi-research",
+             summary="Enter manual NPPES research for one delivered record (append-only)")
+async def enter_supplemental_npi_research(
+    intake_id: str,
+    source_record_id: str,
+    body: SupplementalNpiResearchRequest,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(NPI_RESEARCH_ENTRY_ROLE)),
+):
+    from app.tefca_registry import audit as reg_audit
+    from app.tefca_registry.rce import supplemental_research as sr
+
+    actor = (getattr(user, "email", None) or "").strip()
+    result = await _research_call(sr.record_entry(
+        db, intake_id=intake_id, source_record_id=source_record_id, expected=body.expected,
+        entry=body.model_dump(exclude={"expected"}), actor_email=actor,
+        actor_user_id=getattr(user, "id", None), commit=False))
+    actor_id, actor_email = reg_audit.actor_of(user)
+    reg_audit.record(db, "supplemental_npi_research_entered", None, actor_id=actor_id, actor_email=actor_email,
+                     metadata={"intake_id": intake_id, "source_record_id": source_record_id,
+                               "action": body.action.upper(), "status": result["status"],
+                               "entry_id": result["entry"]["id"]})
+    await db.commit()
+    return result
+
+
+@router.get("/deliveries/{intake_id}/supplemental-npi-research",
+            summary="Read supplemental NPI research back (current, or the full audit history)")
+async def read_supplemental_npi_research(
+    intake_id: str,
+    source_record_id: Optional[str] = Query(None),
+    current_only: bool = Query(True, description="False returns every entry, superseded and withdrawn included."),
+    limit: int = Query(200, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(NPI_RESEARCH_READ_ROLE)),
+):
+    from app.tefca_registry.rce import supplemental_research as sr
+    return {"entries": await _research_call(sr.list_entries(
+        db, intake_id=intake_id, source_record_id=source_record_id, current_only=current_only, limit=limit))}

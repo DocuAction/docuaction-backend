@@ -83,6 +83,7 @@ RECORD_COLUMNS = [
     "Reviewed Disposition (QA-approved only)", "Reviewed Disposition Date",
     "Analyst/QA Status", "Reviewed Disposition Basis",
     SAM_EXTRACT_COLUMN,
+    "Supplemental NPI Research (stored entry; NOT an accepted correction)",
 ]
 TEXT_COLUMNS = list(range(len(RECORD_COLUMNS)))   # identifiers stay text
 #: Compact subset for the PDF's main table; the full column set is in the Excel/CSV.
@@ -355,6 +356,7 @@ def build_record_row(fact: Dict[str, Any],
         _s(fact.get("reviewed_qa_status")) or "No analyst determination recorded",
         _s(fact.get("reviewed_basis")),
         _s(fact.get("sam_extract")) or NOT_ESTABLISHED,
+        _s(fact.get("supplemental_research")),
     ]
 
 
