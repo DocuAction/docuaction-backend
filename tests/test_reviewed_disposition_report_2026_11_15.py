@@ -90,7 +90,7 @@ async def test_only_qa_approved_visible_decisions_are_reported_and_nothing_else_
         assert _col(rows[i], "Bucket") == "B1" and "rationale for REV-9960" in _col(rows[i], "Reasons")
     # HELD: still HELD, still B4 in the reporting bucket, the hold is stated not released.
     assert _col(rows[6], "Status") == "HELD" and _col(rows[6], "Bucket") == "B4"
-    assert "remains HELD" in _col(rows[6], D) and _col(rows[6], D).startswith("Confirmed B1")
+    assert "remains HELD" in _col(rows[6], D) and _col(rows[6], D).startswith("QA-approved determination on the automated classification: confirmed B1")
     assert "analyst determination #1" in _col(rows[2], B)
     assert len({len(x) for x in rows.values()}) == 1 and len(rows[0]) == len(HDR)
 
@@ -142,3 +142,59 @@ async def test_the_latest_qa_event_is_decisive_and_the_cutoff_moves_it(rolled_ba
     at16 = ds_mod.build_record_row(_by_line(await _load(db, intake_id, evidence_cutoff=BEFORE.replace(hour=16)))[1])
     assert _col(at14, S) == rd.QA_RETURNED and _col(at14, "Reviewed Disposition (QA-approved only)") == ""
     assert _col(at16, S) == rd.APPROVED and _col(at16, "Reviewed Disposition (QA-approved only)") == "Confirmed B1"
+
+
+# ── possible stale APPROVED state after a superseding determination (QA gate state, regression) ──
+
+def _ev(seq, kind, **kw):
+    from app.tefca_registry import models as _m
+    e = _m.ReviewDecisionEvent(id=uuid.uuid4(), review_id="REV-T", sequence_number=seq, event_type=kind,
+                               occurred_at=BEFORE, rationale="synthetic rationale")
+    for k, v in kw.items():
+        setattr(e, k, v)
+    return e
+
+
+def test_a_superseding_determination_ends_the_standing_approval_in_every_state_the_ui_can_read():
+    from app.tefca_registry import qa_gate
+    d1 = _ev(1, "ANALYST_DETERMINATION", determination="CONFIRM")
+    q1 = _ev(2, "QA_REVIEW", qa_action="APPROVE")
+    events = [d1, q1]
+    assert qa_gate.qa_state(events) == qa_gate.QA_STATE_APPROVED and qa_gate.is_reportable(events)
+    assert [h["standing_qa_event"] for h in qa_gate.history(events)] == [False, True]
+
+    d2 = _ev(3, "SUPERSEDING_DETERMINATION", determination="RECLASSIFY", determined_bucket="B2",
+             supersedes_decision_id=d1.id, supersession_reason="synthetic supersession reason")
+    events = [d1, q1, d2]
+    assert qa_gate.qa_state(events) == qa_gate.QA_STATE_PENDING, "the earlier APPROVE must not stand"
+    assert not qa_gate.is_reportable(events)
+    hist = qa_gate.history(events)
+    assert not any(h["standing_qa_event"] for h in hist) and hist[0]["is_superseded"] is True
+    assert qa_gate.effective_determination(events)["determined_bucket"] == "B2"
+
+    q2 = _ev(4, "QA_REVIEW", qa_action="RETURN")
+    assert qa_gate.qa_state(events + [q2]) == qa_gate.QA_STATE_RETURNED
+    q3 = _ev(5, "QA_REVIEW", qa_action="APPROVE")
+    assert qa_gate.qa_state(events + [q2, q3]) == qa_gate.QA_STATE_APPROVED
+    assert [h["standing_qa_event"] for h in qa_gate.history(events + [q2, q3])] == [False, False, False, False, True]
+    assert qa_gate.qa_state([]) == qa_gate.QA_STATE_NONE
+    assert qa_gate.qa_state([_ev(1, "ANALYST_DETERMINATION", determination="CONFIRM")]) == qa_gate.QA_STATE_PENDING
+
+
+async def test_review_state_reports_the_standing_qa_state_from_the_database(rolled_back_db):
+    from app.tefca_registry import qa_gate
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(1, arc="9.99.777.64"), with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    ent = await _entity(db, "qastate")
+    await _curate(db, intake_id, recs[1], "CLEAN", entity_id=ent)
+    await _review(db, recs[1], ent, "REV-9964-000001", "B1", T_OLD)
+    first = await _event(db, "REV-9964-000001", 1, "ANALYST_DETERMINATION", BEFORE, determination="CONFIRM")
+    await _event(db, "REV-9964-000001", 2, "QA_REVIEW", LATER, qa="APPROVE")
+    assert (await qa_gate.review_state(db, "REV-9964-000001"))["qa_state"] == "APPROVED"
+    await _event(db, "REV-9964-000001", 3, "SUPERSEDING_DETERMINATION", LATER.replace(hour=16),
+                 determination="CONFIRM", supersedes=first.id)
+    state = await qa_gate.review_state(db, "REV-9964-000001")
+    assert state["qa_state"] == "PENDING_QA" and state["reportable"] is False
+    assert not any(h["standing_qa_event"] for h in state["history"])
