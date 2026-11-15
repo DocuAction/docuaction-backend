@@ -456,7 +456,7 @@ class TestALongSeparatorRunInsideALabelIsNotABypass:
     def test_the_run_is_unbounded_and_possessive(self):
         assert not hasattr(pi, "LABEL_SEPARATOR_MAX")
         assert pi._SEP.endswith("*+") and "{0," not in pi._SEP
-        assert pi.PROTECTED_IDENTIFIERS_VERSION == "1.3.0"
+        assert pi.PROTECTED_IDENTIFIERS_VERSION == "1.4.0"
 
     @pytest.mark.parametrize("count", RUNS)
     @pytest.mark.parametrize("sep", ["_", " ", "-", " _-", "\t", "\r\n", " \n\t_-\r"])
@@ -528,7 +528,10 @@ class TestALongSeparatorRunInsideALabelIsNotABypass:
         it is not."""
         blank = "\n" * 200
         assert pi.find_in_text(f"we discussed tax{blank}ID 000000000") == ["labelled_tax_identifier"]
-        assert pi.find_in_text(f"we discussed tax.{blank}ID 000000000") == []
+        # 1.4.0: dot and slash are separators too (the field rule's tokeniser accepts them: `tax.id`);
+        # any OTHER character in between still ends the label.
+        assert pi.find_in_text(f"we discussed tax.{blank}ID 000000000") == ["labelled_tax_identifier"]
+        assert pi.find_in_text(f"we discussed tax:{blank}ID 000000000") == []
         assert pi.find_in_text(f"we discussed tax{blank}Notes. ID 000000000") == []
 
     def test_long_separator_input_finishes_well_inside_a_fixed_budget(self):
