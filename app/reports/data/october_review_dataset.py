@@ -490,6 +490,9 @@ def to_csv(dataset: Dict[str, Any]) -> bytes:
     w = csv.writer(buf, lineterminator="\n")
     w.writerow([dataset["banner"] + " Buckets: " + ", ".join(
         f"{b} {dataset['summary']['buckets'][b]}" for b in BUCKETS)
+        # Records with no usable persisted classification are a term of the equation, so the line balances
+        # (review finding, #233, 2026-11-15).
+        + f", Not classified {dataset['summary']['unclassified_non_held_count']}"
         + f" = {dataset['summary']['unique_records']} "
         f"({dataset['summary']['held_inside_b4']} HELD inside B4). "
         "Field findings counted separately: "
