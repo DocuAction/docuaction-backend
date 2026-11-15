@@ -286,6 +286,7 @@ jobs:
             tests/test_record_review_pdf_html_2026_11_13.py \
             tests/test_october_review_export_db_2026_11_12.py \
             tests/test_october_review_dataset_2026_11_11.py \
+            tests/test_record_review_pdf_reviewed_columns_2026_11_15.py \
             -v --tb=short -rs --junitxml=record-review-results.xml
 
       - name: Fail if any test was skipped

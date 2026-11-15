@@ -307,6 +307,7 @@ MAIN_END_NOTES = "Notestablishedbythisloader:"
 DETAIL_HEADING = "Addressesandcommentary(verbatim)"
 DETAIL_START = "Recorddetail("
 UNCLASSIFIED_HEADING = "Unclassifiedrecords("
+REVIEW_HEADING = "".join(d.PDF_REVIEW_HEADING.split())
 
 
 def table_words(pages) -> Dict[str, List[List[Dict[str, Any]]]]:
@@ -332,7 +333,7 @@ def table_words(pages) -> Dict[str, List[List[Dict[str, Any]]]]:
             if text.startswith(DETAIL_START):
                 region = "detail"
                 continue
-            if region == "detail" and text.startswith(UNCLASSIFIED_HEADING):
+            if region == "detail" and (text.startswith(UNCLASSIFIED_HEADING) or text.startswith(REVIEW_HEADING)):
                 region = None
             if region in per:
                 per[region].extend(line)

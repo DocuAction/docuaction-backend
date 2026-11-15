@@ -145,6 +145,15 @@ PDF_CHAR_ADVANCE_EM = 0.62
 PDF_CELL_INSET_PT = 7.0                 # left + right padding and the border
 PDF_MAIN_FONT_PT, PDF_MAIN_MAX_LINES = 8.0, 40
 PDF_DETAIL_FONT_PT, PDF_DETAIL_MAX_LINES = 7.5, 24
+#: Third PDF table (2026-11-15): the analyst/QA disposition and the SAM public-extract result of a record. The
+#: Excel/CSV carry both for every record; the PDF lists the records that have something to say (any analyst/QA
+#: activity, or an extract result other than the loader's placeholder or a clean "no candidate" pass). Widths sum to 100.
+PDF_REVIEW_HEADING = "Reviewed dispositions and SAM public-extract results"
+PDF_REVIEW_COLUMNS = [("AGT_Record_ID", 13.0), ("Analyst/QA Status", 14.0),
+                      ("Reviewed Disposition (QA-approved only)", 22.0), ("Reviewed Disposition Date", 9.0),
+                      ("Reviewed Disposition Basis", 20.0), (SAM_EXTRACT_COLUMN, 22.0)]
+_NO_ANALYST_RECORD = "No analyst determination recorded"
+_CLEAN_EXTRACT = "No candidate match in the extract"
 #: The monospace identifier cells (td.mono). DejaVu Sans Mono advances 0.602 em,
 #: under the 0.62 em the estimate charges.
 PDF_MONO_FONT_PT = 7.0
@@ -762,6 +771,49 @@ def to_html(dataset: Dict[str, Any]) -> str:
         "carries a submitted address, a proposed corrected address, a comment or a "
         "clarification.</p>")
 
+    # -- third table: analyst/QA disposition and SAM public-extract result, verbatim --
+    review_idx = [col[c] for c, _w in PDF_REVIEW_COLUMNS]
+    sam_i, status_i = col[SAM_EXTRACT_COLUMN], col["Analyst/QA Status"]
+    review_rows = []
+    review_records = 0
+    for r in rec["rows"]:
+        has_analyst = r[status_i] != _NO_ANALYST_RECORD
+        extract = r[sam_i]
+        has_extract = bool(extract) and not extract.startswith(PDF_NOTE_PREFIX)             and not extract.startswith(NOT_ESTABLISHED) and not extract.startswith(_CLEAN_EXTRACT)
+        if not (has_analyst or has_extract):
+            continue
+        slices_by_col = [split_for_rows(r[i], _chars_per_line(w, PDF_DETAIL_FONT_PT), PDF_DETAIL_MAX_LINES)
+                         for i, (_c, w) in zip(review_idx[1:], PDF_REVIEW_COLUMNS[1:])]
+        parts = _row_parts(slices_by_col)
+        part_note = f" &middot; part 1 of {parts}" if parts > 1 else ""
+        cells = [f"<td class='mono'>{e(r[review_idx[0]])}<br><span class='note'>line {e(r[col['Source_Line']])}"
+                 f" &middot; {e(r[col['Bucket']])} / {e(r[col['Status']])}{part_note}</span></td>"]
+        cells += [f"<td class='verbatim'>{e(slices[0])}</td>" for slices in slices_by_col]
+        review_rows.append("<tr>" + "".join(cells) + "</tr>")
+        review_records += 1
+        for part in range(1, parts):
+            more = [f"<td class='mono'>{continued(r[review_idx[0]], part + 1, parts)}</td>"]
+            more += [f"<td class='verbatim'>{e(slices[part] if part < len(slices) else '')}</td>"
+                     for slices in slices_by_col]
+            review_rows.append("<tr class='continuation'>" + "".join(more) + "</tr>")
+    review_colgroup = "".join(f"<col style='width:{w}%'>" for _c, w in PDF_REVIEW_COLUMNS)
+    review_head = "".join(f"<th scope='col'>{_th(c)}</th>" for c, _w in PDF_REVIEW_COLUMNS)
+    review_html = (
+        f"<h2>{PDF_REVIEW_HEADING}</h2>"
+        f"<p class='note'>The automated Bucket and Status in the tables above are unchanged. An analyst "
+        f"determination is shown as a reviewed disposition ONLY after a QA APPROVE that follows it, at or "
+        f"before the report cutoff; pending, returned, escalated and superseded decisions are never shown as "
+        f"approved. A HELD record stays HELD and is not released by this report. The SAM public-extract result "
+        f"is a candidate screen against a dated extract, supplementary to the live SAM.gov API check; a "
+        f"candidate is never a confirmed exclusion. Records with no analyst activity and a clean or "
+        f"not-established extract result are not listed here; the Excel/CSV carry every record.</p>"
+        f"<table><caption>Reviewed dispositions and extract results ({review_records} of "
+        f"{len(rec['rows'])} records)</caption><colgroup>{review_colgroup}</colgroup>"
+        f"<thead><tr>{review_head}</tr></thead><tbody>{''.join(review_rows)}</tbody></table>"
+        if review_rows else
+        f"<h2>{PDF_REVIEW_HEADING}</h2><p class='note'>No record in this dataset has analyst/QA activity or a "
+        f"SAM public-extract result other than a clean or not-established one.</p>")
+
     # -- unclassified list (the summary refers to it; it must be in the PDF too) --
     uncls_html = ""
     if "Unclassified" in dataset["sheets"]:
@@ -793,7 +845,7 @@ def to_html(dataset: Dict[str, Any]) -> str:
             f"stands for a placeholder sentence that is reproduced once below the table.</p>"
             f"<table><colgroup>{colgroup}</colgroup><thead><tr>{group_row}</tr><tr>{head_row}</tr>"
             f"</thead><tbody>{''.join(body_rows)}</tbody></table>{notes_html}"
-            f"{detail_html}{uncls_html}</body></html>")
+            f"{detail_html}{review_html}{uncls_html}</body></html>")
 
 
 def to_pdf(dataset: Dict[str, Any]) -> bytes:
