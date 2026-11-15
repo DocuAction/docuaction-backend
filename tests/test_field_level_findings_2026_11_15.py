@@ -137,3 +137,35 @@ def test_b2_subclassification_only_from_supported_issue_types():
                             issue(1, "NPI_REQUIRED")])
     assert [col(r, "B2_Subclassifications") for r in out["rows"]] == ["OTHER", "WHITE_SPACE", ""]
     assert all(col(r, "B2_Subclassifications") in fl.B2_VALUES | {""} for r in out["rows"])
+
+
+# ── model-review follow-up (the `imran` reviewer agent; model review, not QA) ──────────────────
+
+def test_a_delivery_assessed_twice_exports_only_the_selected_runs_findings():
+    out = build([fact(1)], [issue(1, "NPI_REQUIRED", "NPI", run_id="run-1"),
+                            issue(1, "NPI_REQUIRED", "NPI", run_id="run-2", created_at=datetime(2026, 11, 9, 9, 0, 0)),
+                            issue(1, "SAM_EXTRACT_CANDIDATE", run_id=None)], run_id="run-2")
+    assert len(out["rows"]) == 2 and out["reconciliation"]["issues_from_other_runs"] == 1
+    assert col(out["rows"][0], "Reference_Source_Date") == "2026-11-09"
+    unscoped = build([fact(1)], [issue(1, "NPI_REQUIRED", "NPI", run_id="run-1"),
+                                 issue(1, "NPI_REQUIRED", "NPI", run_id="run-2")])
+    assert len(unscoped["rows"]) == 2, "without a selected run nothing is filtered (the caller must pass it)"
+
+
+def test_internal_normalisation_labels_are_not_reference_sources():
+    for label in ("ZERO_PAD", "WHITESPACE_NORMALISE", "OBSERVED_FREQUENCY", "tefca_entity_identifiers"):
+        r = build([fact(1)], [issue(1, "ZIP_LEADING_ZERO_STRIPPED", "address_postalCode",
+                                    suggested_value="02101", suggested_source=label)])["rows"][0]
+        assert (col(r, "Reference_Value"), col(r, "Reference_Source")) == ("", ""), label
+    r = build([fact(1)], [issue(1, "ZIP_LEADING_ZERO_STRIPPED", "address_postalCode",
+                                suggested_value="02101", suggested_source="sam.gov")])["rows"][0]
+    assert (col(r, "Reference_Value"), col(r, "Reference_Source")) == ("02101", "SAM.gov")
+
+
+def test_a_fixed_field_id_is_not_used_when_the_finding_concerns_another_column():
+    r = build([fact(1)], [issue(1, "DOA_NOT_AN_OID", "doa", original_value="not-an-oid")])
+    row = r["rows"][0]
+    assert col(row, "Field_ID") == "" and "concerns 'doa', not partof" in col(row, "Field_Reason")
+    assert col(row, "Submitted_Value") == "not-an-oid" and len(r["mapping_exceptions"]) == 1
+    ok = build([fact(1)], [issue(1, "DOA_NOT_AN_OID", "partOf")])["rows"][0]
+    assert col(ok, "Field_ID") == "partof"
