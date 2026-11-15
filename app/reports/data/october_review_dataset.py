@@ -214,8 +214,10 @@ def _reviewed_cell(fact: Dict[str, Any], status: str) -> str:
     """Approved reviewed disposition only. A HELD record keeps its HELD status:
     reporting a disposition never releases a hold."""
     text = _s(fact.get("reviewed_disposition"))
-    if text and status.upper() == STATUS_HELD:
-        text += " (record remains HELD; the hold is not released by this report)"
+    if status.upper() == STATUS_HELD:
+        notice = "record remains HELD; the hold is not released by this report"
+        # No determination / awaiting QA / returned: a hold-only notice, never an approval or a date.
+        return f"{text} ({notice})" if text else f"No approved disposition ({notice})"
     return text
 
 
