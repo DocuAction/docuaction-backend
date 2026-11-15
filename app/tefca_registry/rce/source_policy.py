@@ -177,7 +177,10 @@ def apply_source_policy(bucket: str, rule_code: Optional[str],
             extract = _state_of(sources.get("sam_extract"))
             if extract in PENDING_REVIEW_STATES:
                 return "B3", None, "EXCLUSION_POSSIBLE_MATCH_PENDING", policy
-            if state not in ACCEPTABLE_STATES and extract in ACCEPTABLE_STATES:
+            # The extract replaces ONLY an API state that did not answer. A live candidate (possible_match) is a
+            # review reason that a clear extract must never clear; it falls through to the pending branch below.
+            if (state not in ACCEPTABLE_STATES and state not in PENDING_REVIEW_STATES
+                    and extract in ACCEPTABLE_STATES):
                 continue
         if state in ACCEPTABLE_STATES:
             continue
