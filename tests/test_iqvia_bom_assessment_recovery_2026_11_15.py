@@ -770,3 +770,49 @@ def test_T12_the_output_screen_refuses_anything_that_could_carry_a_value():
     unexpected.counts = {"first_name": 3}
     with pytest.raises(ValueError, match="unexpected output key"):
         ra.screen_output([unexpected])
+
+
+# ── CodeRabbit follow-up: the pending row is locked, and re-read, under both writers ────────────
+
+async def test_the_pending_snapshot_row_is_locked_when_an_assessment_is_recorded_and_when_it_is_approved(
+        db, tmp_path, guard_on):
+    from sqlalchemy import event
+    f = _file(tmp_path, "tlock", n=3, identity_first=False)
+    snap = await _legacy_import(db, f)
+    statements = []
+    engine = db.get_bind()
+    listener = lambda conn, cursor, statement, params, context, executemany: statements.append(statement)   # noqa: E731
+    event.listen(engine, "before_cursor_execute", listener)
+    try:
+        await rec.record_assessment(db, snap.id, user=qa("tlock-a"), outcome=rec.OUTCOME_ACCEPTED,
+                                    basis="synthetic", approval_ref="SYN")
+        recorded = [s for s in statements if "FROM source_snapshot" in s and "FOR UPDATE" in s]
+        assert recorded, "record_assessment must lock the pending row it writes the assessment into"
+        statements.clear()
+        approved = await sx.approve_snapshot(db, snap.id, user=qa("tlock-b"), approval_ref="SYN")
+        _created_snapshot_ids.append(approved.id)
+        assert [s for s in statements if "FROM source_snapshot" in s and "FOR UPDATE" in s], \
+            "approve_snapshot must lock the pending row before the guard runs"
+    finally:
+        event.remove(engine, "before_cursor_execute", listener)
+
+
+async def test_the_approval_guard_reads_the_assessment_as_it_is_under_the_lock_not_a_stale_copy(
+        db, tmp_path, guard_on):
+    """The ORM identity map would hand back the object loaded before another transaction withdrew
+    the assessment; the guarded read must refresh it."""
+    from app.core.database import async_session_maker
+    f = _file(tmp_path, "tstale", n=3, identity_first=False)
+    snap = await _legacy_import(db, f)
+    await rec.record_assessment(db, snap.id, user=qa("tstale-a"), outcome=rec.OUTCOME_ACCEPTED,
+                                basis="synthetic", approval_ref="SYN")
+    stale = await db.get(sm.SourceSnapshot, snap.id)
+    assert (stale.metadata_ or {}).get("bom_assessment"), "loaded with the assessment present"
+    async with async_session_maker() as other:                       # a second transaction withdraws it
+        row = await other.get(sm.SourceSnapshot, snap.id)
+        meta = dict(row.metadata_ or {})
+        meta.pop("bom_assessment")
+        row.metadata_ = meta
+        await other.commit()
+    with pytest.raises(ValueError, match="BOM_ASSESSMENT_REQUIRED|no assessment"):
+        await sx.approve_snapshot(db, snap.id, user=qa("tstale-b"), approval_ref="SYN")

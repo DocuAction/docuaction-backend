@@ -191,7 +191,8 @@ async def record_assessment(db, snapshot_id, *, user, outcome: str, basis: str, 
         raise PermissionError(f"recording an assessment requires {ASSESSOR_ROLE} or above")
     if outcome not in (OUTCOME_ACCEPTED, OUTCOME_NOT_ACCEPTED):
         raise ValueError(f"outcome must be {OUTCOME_ACCEPTED} or {OUTCOME_NOT_ACCEPTED}")
-    snapshot = await db.get(sm.SourceSnapshot, snapshot_id)
+    # Same lock as approve_snapshot, re-read under it: an approval cannot interleave with this write.
+    snapshot = await db.get(sm.SourceSnapshot, snapshot_id, with_for_update=True, populate_existing=True)
     if snapshot is None:
         raise ValueError(f"no snapshot {snapshot_id}")
     if snapshot.status != sm.SNAPSHOT_PENDING or await decision_row(db, snapshot.id):
