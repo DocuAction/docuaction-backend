@@ -134,8 +134,11 @@ def file_sha256(path: Path, *, chunk_bytes: int = 1024 * 1024) -> str:
 #: The one decoding of a staged reference file, shared with the preflight that
 #: gates it (see reference_preflight.REFERENCE_FILE_ENCODING). Before 2026-11-14
 #: this module opened the file as "utf-8": a leading UTF-8 byte-order mark,
-#: which the preflight tolerates (REF-SCH-010), stayed in the first column's
-#: name, no row carried the identity column, and every row was rejected.
+#: which the preflight tolerates (REF-SCH-010), could stay in the first column's
+#: name. If that column was required for identity, rows could be rejected; if
+#: the identity columns were elsewhere, rows could stage while the first field
+#: was mis-keyed, omitted from a projection, or unavailable to downstream
+#: logic. The actual impact on any real snapshot requires assessment.
 from app.tefca_registry.rce.reference_preflight import REFERENCE_FILE_ENCODING  # noqa: E402
 
 

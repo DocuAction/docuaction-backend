@@ -105,9 +105,14 @@ bound is stated in every result (`rows_sampled`, `tail_checked`).
   * a byte-order mark (changed 2026-11-14, fifth pass, on the IMPORTER's side).
     The mark is removed before the first column name is matched here
     (REF-SCH-010, informational, as decided 2026-10-04). The importer opened
-    the file as utf-8, kept the mark in that name and rejected every row; it
-    now decodes with REFERENCE_FILE_ENCODING, the same as this gate, so the two
-    read a marked file identically. This gate's verdicts are unchanged.
+    the file as utf-8 and could retain the mark in the first column's name. If
+    that column was required for identity, rows could be rejected; if the
+    identity columns were elsewhere, rows could stage while the first field was
+    mis-keyed, omitted from a projection, or unavailable to downstream logic.
+    Which happened to a real snapshot is a matter of evidence, not inference
+    (see iqvia_reader_assessment). The importer now decodes with
+    REFERENCE_FILE_ENCODING, the same as this gate, so the two read a marked
+    file identically. This gate's verdicts are unchanged.
   * consequences of the same change: a header longer than the window is read
     whole; a file larger than the window whose start is blank is no longer
     called empty; a field-count finding's `line` is always the physical line
