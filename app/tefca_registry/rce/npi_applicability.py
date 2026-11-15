@@ -463,7 +463,9 @@ def _treatment_scope_signal(
         "status": True,
         "reason_code": ("TREATMENT_TOKEN_NPI_MISSING_COMBINED_SCOPE" if combined_purposes
                         else "TREATMENT_SOLE_PURPOSE_NPI_MISSING_ONC_SCOPE"),
-        "scope_basis": "ONC updated Treatment scope (relayed 2026-11-09)",
+        "scope_basis": ("Methodology v1.3-A combined-purpose Treatment scope (DRAFT; acceptance and "
+                        "effective date not recorded)" if combined_purposes
+                        else "ONC updated Treatment scope (relayed 2026-11-09)"),
         "participation_level": participation,
         "raw_participation_level": (participation_raw or ""),
         "raw_purposes": assignment.raw_purposes,
@@ -474,9 +476,12 @@ def _treatment_scope_signal(
         "requirement_effective": requirement_effective.isoformat(),
         "assessment_date": assessment_date.isoformat(),
         "note": ("Active Participant/Sub-Participant record asserting the "
-                 "exact T-TRTMNT exchange purpose as its sole purpose with a "
-                 "blank submitted NPI (ONC updated scope). A supplemental NPI "
-                 "from manual QA, NPPES or IQVIA remains separate evidence "
+                 + ("exact T-TRTMNT exchange purpose, alone or combined with other purposes, with a "
+                    "blank submitted NPI (combined-purpose scope). A supplemental NPI "
+                    if combined_purposes else
+                    "exact T-TRTMNT exchange purpose as its sole purpose with a "
+                    "blank submitted NPI (ONC updated scope). A supplemental NPI ")
+                 + "from manual QA, NPPES or IQVIA remains separate evidence "
                  "and never fills the submitted blank. No initiating-node "
                  "requirement applies."),
     }
