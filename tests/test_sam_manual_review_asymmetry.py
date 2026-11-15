@@ -207,7 +207,8 @@ async def test_review_service_reads_persisted_evidence_only_through_the_helper()
 
     src = inspect.getsource(svc)
     assert src.count("TEFCADimensionEvidence") == 1
-    assert "sources = await probe_sources(db, entity.id)" in src
+    # the registered NPI is read once per review and passed in (CodeRabbit Major on #225)
+    assert "sources = await probe_sources(db, entity.id, registered_npi=registered_npi)" in src
     assert "latest_persisted_exclusion_evidence(db, entity.id)" in src
 
 
