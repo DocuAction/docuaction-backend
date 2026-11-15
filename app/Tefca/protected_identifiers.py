@@ -95,7 +95,7 @@ _SPLIT = re.compile(r"[^A-Za-z0-9]+")
 #: marks and joining words; padding between them is free (see `_PAD`).
 #: 1.4.0: the separators are the ones the FIELD rule's tokeniser accepts for names (`tax.id`, `tax/id`):
 #: whitespace, underscore, hyphen, dot and slash.
-_SEP = r"[\s_\-./]*+"
+_SEP = r"(?:[|:](?!\s))?[\s_\-./]*+"   # 1.5.1: `tax|id` / `tax:id` are protected names too (the tokenizer splits on any non-alphanumeric); a pipe or colon followed by whitespace still ends the label (prose "Tax: ID")
 #: 1.4.0: trailing NAME tokens. `is_protected_field` protects a name when any WHOLE token is protected
 #: (`EIN_PRIMARY`, `ein.primary`, `einPrimary`), so the text label consumes them too. Joined only by
 #: `_ - . /` (never whitespace: running prose is not a field name) or by a camel-case boundary, and each
@@ -108,8 +108,8 @@ _VALUE = r"(?:\d{2}[-\s]?\d{7}|\d{3}-\d{2}-\d{4})(?![\d\-])"
 #: not itself begin a value (`EIN_2026`, `EIN_PRIMARY_2`; `EIN_12-3456789` keeps its value). Unbounded trailing runs made a
 #: scan quadratic (`"ein_" * n`: every `ein` start re-consumed the rest of the run). With the bound, each label start costs a
 #: constant, so a scan is linear. A protected name with MORE than 8 trailing tokens is a stated limit.
-_TRAIL = (r"(?:[_\-./]++[A-Za-z][A-Za-z0-9]{0,40}+"
-          rf"|[_\-./]++(?!{_VALUE})[0-9]{{1,4}}(?![0-9])"
+_TRAIL = (r"(?:[_\-./|:]++[A-Za-z][A-Za-z0-9]{0,40}+"
+          rf"|[_\-./|:]++(?!{_VALUE})[0-9]{{1,4}}(?![0-9])"
           r"|(?-i:(?<=[a-z0-9])[A-Z][a-z0-9]{0,40}+)){0,8}+")
 _SUFFIX = "(?:" + "|".join(sorted((re.escape(x) for x in _ID_SUFFIXES), key=len, reverse=True)) + ")"
 _SINGLE = "(?:" + "|".join(sorted((re.escape(x) for x in _SINGLE_TOKENS), key=len, reverse=True)) + ")"

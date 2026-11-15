@@ -418,7 +418,7 @@ def test_a_single_token_under_an_error_key_is_not_trusted_as_a_code(token):
 
 @pytest.mark.parametrize("code", [
     "TimeoutError", "ConnectTimeout", "CancelledError", "KeyError", "IntakeError",
-    "NotADelimitedFile", "LineCountMismatch", "RuntimeException",
+    "NotADelimitedFile", "LineCountMismatch", "TimeoutException",   # a real httpx class; "RuntimeException" is not a Python class (CodeRabbit #233)
     "worker_stopped_without_reporting",
 ])
 def test_an_exception_class_name_or_a_known_token_under_an_error_key_is_a_code(code):

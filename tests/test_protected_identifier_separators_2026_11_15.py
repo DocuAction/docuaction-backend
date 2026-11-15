@@ -135,3 +135,24 @@ def test_empty_protected_containers_are_fresh_copies_not_the_callers_objects():
     assert out["EIN"] is not source["EIN"] and out["TIN"] is not source["TIN"]
     out["EIN"].append("000000001"); out["TIN"]["x"] = "000000001"
     assert source == {"EIN": [], "TIN": {}, "FEIN": "", "tax_id": None}, "writing to the result must not write to the source"
+
+
+# CodeRabbit Major on #233 (reproduced): `_SPLIT` (the field tokenizer) accepts ANY non-alphanumeric separator, so
+# `tax|id` and `tax:id` are protected field names, but the text label recognised only whitespace _ - . /.
+PIPED_OR_COLONED = ["tax|id", "tax:id", "TAX|ID", "hco|tin", "org:ein", "ein|primary", "ein:primary", "tax|id|primary",
+                    "taxpayer:id", "employer|identification|number"]
+
+
+@pytest.mark.parametrize("name", PIPED_OR_COLONED)
+def test_pipe_and_colon_separated_field_names_label_their_value_in_text(name):
+    assert pi.is_protected_field(name), name
+    for text in (f"{name}={VALUE}", f"{name}: {VALUE}", f'"{name}":"{VALUE}"', f"{name}|{VALUE}"):
+        assert "labelled_tax_identifier" in pi.find_in_text(text), text
+        redacted = pi.redact_text(text)
+        assert VALUE not in redacted and pi.REDACTED in redacted, (text, redacted)
+
+
+@pytest.mark.parametrize("name", ["protein|primary", "einstein:primary", "taxonomy|code", "listing:id", "tax|rate"])
+def test_pipe_and_colon_do_not_widen_whole_token_boundaries(name):
+    assert not pi.is_protected_field(name), name
+    assert pi.find_in_text(f"{name}={VALUE}") == [], name
