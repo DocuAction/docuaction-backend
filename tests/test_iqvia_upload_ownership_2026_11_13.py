@@ -543,3 +543,32 @@ class TestAnInterruptedRegistrationCanBeRetried:
         assert exc.value.detail["code"] == "DUPLICATE_SNAPSHOT"
         snapshots, n_jobs = await self._counts(db, content)
         assert len(snapshots) == 1 and n_jobs == 0, "a different upload does not finish it"
+
+
+# ── CodeRabbit on #232 (7534eb6) for #218: size mismatch after rollback, and a terminal status is never moved back ──────
+
+async def test_a_size_mismatch_answers_409_with_the_declared_size_not_a_lazy_load_error(db, monkeypatch):
+    upload_id = await _start(db, monkeypatch)
+    for index, part in enumerate((b"A" * 10, b"B" * 10)):
+        await routes.upload_chunk(upload_id, index, _FakeRequest(part), db, user=_User("reviewer", OWNER))
+    session = await db.get(jobs.IqviaUploadSession, upload_id)
+    Path(session.temp_path).write_bytes(Path(session.temp_path).read_bytes() + b"X")     # 21 bytes, 20 declared
+    with pytest.raises(HTTPException) as exc:
+        await routes.complete_upload(upload_id, db, user=_User("reviewer", OWNER))
+    assert exc.value.status_code == 409 and exc.value.detail["code"] == "UPLOAD_SIZE_MISMATCH"
+    assert "declared total_size was 20" in exc.value.detail["error"] and "21 bytes" in exc.value.detail["error"]
+
+
+async def test_linkage_after_the_worker_finished_never_moves_a_terminal_upload_back_to_staging_queued(db, monkeypatch):
+    upload_id = await _start(db, monkeypatch)
+    await jobs.mark_upload_staged(db, upload_id)
+    await jobs.mark_upload_complete(db, upload_id, snapshot_id=None)
+    session = await db.get(jobs.IqviaUploadSession, upload_id, populate_existing=True)
+    assert session.status == jobs.IqviaUploadSession.STATUS_STAGED, "the worker's terminal STAGED stays"
+    other = await _start(db, monkeypatch)
+    await jobs.mark_upload_failed(db, other)
+    await jobs.mark_upload_complete(db, other, snapshot_id=None)
+    assert (await db.get(jobs.IqviaUploadSession, other, populate_existing=True)).status == jobs.IqviaUploadSession.STATUS_FAILED
+    fresh = await _start(db, monkeypatch)
+    await jobs.mark_upload_complete(db, fresh, snapshot_id=None)
+    assert (await db.get(jobs.IqviaUploadSession, fresh, populate_existing=True)).status == jobs.IqviaUploadSession.STATUS_STAGING_QUEUED
