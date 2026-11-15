@@ -516,11 +516,12 @@ async def complete_upload(upload_id: uuid.UUID, db: AsyncSession = Depends(get_d
             "error": f"{len(missing)} chunk(s) still missing; cannot complete",
             "code": "UPLOAD_INCOMPLETE", "missing_chunk_indices": missing[:200]})
     actual_size = Path(session.temp_path).stat().st_size
-    if actual_size != session.total_size:
+    declared_size = session.total_size              # read BEFORE the rollback: rollback expires the instance
+    if actual_size != declared_size:
         await db.rollback()
         raise HTTPException(409, detail={
             "error": f"assembled file is {actual_size} bytes, declared total_size was "
-                     f"{session.total_size} -- refusing to stage a size mismatch",
+                     f"{declared_size} -- refusing to stage a size mismatch",
             "code": "UPLOAD_SIZE_MISMATCH"})
     # Closed to writes BEFORE the file is hashed: the sha256 registered below is
     # then the hash of bytes nothing can change any more.
