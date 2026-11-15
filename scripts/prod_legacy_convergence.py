@@ -122,6 +122,9 @@ AREA1_OWNER_TABLES = {
     # (trigger + app SELECT/INSERT only). OWNER-OWNED, never re-owned to the app
     # at FINALIZE: a table owner could drop its own append-only trigger.
     "rce_record_comments",
+    # 20261115_rce_npi_research: append-only supplemental NPI research per delivered
+    # source record (trigger + app SELECT/INSERT only). OWNER-OWNED for the same reason.
+    "rce_supplemental_npi_research",
     # 20261108_source_policy: versioned mandatory-source policy (M-1..M-4),
     # ships EMPTY and inactive; the app holds SELECT only (the runtime never
     # writes policy — rows are owner-side governed acts). Created by the chain
@@ -623,6 +626,9 @@ MANAGED_CHAIN_CREATES = {
     # docuaction_app at FINALIZE. FKs into rce_source_intakes/rce_source_records
     # (chain-created, Area-1), so it could not have existed in legacy PROD.
     "rce_record_comments",
+    # 20261115_rce_npi_research -- append-only (trigger + SELECT/INSERT); owner-owned,
+    # NOT moved to docuaction_app at FINALIZE. FKs into the chain-created Area-1 tables.
+    "rce_supplemental_npi_research",
     # 20261108_source_policy: SELECT-only for the app; owner-owned; ships empty.
     "rce_source_policies",
 }

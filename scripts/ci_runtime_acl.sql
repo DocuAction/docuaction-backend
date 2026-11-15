@@ -34,7 +34,9 @@ DECLARE
     'iqvia_advisory_comparison_outcome',
     -- 20261112_rce_record_comments: append-only trigger + app SELECT/INSERT only
     -- -- owner must own it or the runtime role could drop its own trigger.
-    'rce_record_comments'];
+    'rce_record_comments',
+    -- 20261115_rce_npi_research: append-only trigger + app SELECT/INSERT only -- owner-owned.
+    'rce_supplemental_npi_research'];
   r record;
   owning_tbl text;
 BEGIN
