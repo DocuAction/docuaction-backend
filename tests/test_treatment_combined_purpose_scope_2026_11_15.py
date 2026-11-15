@@ -88,3 +88,11 @@ def test_impact_comparison_counts_only_what_the_combined_scope_adds():
     out = compare_treatment_scopes(rows, assessment_date=ASSESS, requirement_effective=BR_NPI_TRTMNT_EFFECTIVE)
     assert out == {"records": 6, "sole_purpose_scope": 1, "combined_purpose_scope": 3,
                    "added_by_combined": 2, "sole_only": 0}
+
+
+def test_the_combined_signal_describes_itself_as_combined_not_sole_purpose():
+    sig = comb("T-PH-ECR,T-TRTMNT")
+    assert "combined-purpose" in sig["scope_basis"] and "sole purpose" not in sig["note"]
+    assert "alone or combined" in sig["note"]
+    old = sole("T-TRTMNT")
+    assert "sole purpose" in old["note"] and old["scope_basis"].startswith("ONC updated")
