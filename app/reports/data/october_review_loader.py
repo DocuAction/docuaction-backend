@@ -352,7 +352,7 @@ async def load_record_facts(
                       reg.ReviewRecord.created_at.desc(),
                       reg.ReviewRecord.id.desc()))).scalars().all()}
         from app.tefca_registry.rce import supplemental_research as _sr
-        research = await _sr.current_by_record(db, intake_uuid, ids)     # {} until the migration is applied
+        research = await _sr.current_by_record(db, intake_uuid, ids, cutoff=cutoff)     # {} until the migration is applied
         decisions = await rd.load_for_reviews(
             db, [r.review_id for r in reviews.values()], cutoff)
         stats["records_with_multiple_reviews"] += len((await db.execute(
