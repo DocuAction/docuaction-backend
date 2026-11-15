@@ -344,10 +344,13 @@ async def preview_rows(rows: Sequence[Dict[str, str]], resolve: Resolver,
                 info = await validate_identity(identity) or {}
                 item["source_record"] = info.get("source_record")
                 problem = info.get("problem")
-            if not problem and identity[IDENTITY_AGT].lower() in seen_agt:
+            # One canonical key per UUID: the hyphenated and the compact spelling both validate, and lower-casing
+            # does not make them equal (review finding, #233, 2026-11-15). Validated above, so this cannot raise.
+            agt_key = str(uuid.UUID(identity[IDENTITY_AGT])) if not problem else None
+            if not problem and agt_key in seen_agt:
                 item["disposition"] = DISP_NEEDS_REVIEW
                 item["reasons"].append(
-                    f"duplicate {IDENTITY_AGT} (first at row {seen_agt[identity[IDENTITY_AGT].lower()]}); "
+                    f"duplicate {IDENTITY_AGT} (first at row {seen_agt[agt_key]}); "
                     f"a repeated record is never applied twice")
                 counts[DISP_NEEDS_REVIEW] += 1
                 out.append(item)
@@ -358,7 +361,7 @@ async def preview_rows(rows: Sequence[Dict[str, str]], resolve: Resolver,
                 counts[DISP_REJECTED] += 1
                 out.append(item)
                 continue
-            seen_agt[identity[IDENTITY_AGT].lower()] = n
+            seen_agt[agt_key] = n
         matches = list(await resolve(identity))
         if mode == "agt" and identity.get(IDENTITY_REVIEW):
             wanted = identity[IDENTITY_REVIEW]

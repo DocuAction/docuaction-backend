@@ -286,3 +286,14 @@ async def test_review_id_does_not_bypass_a_foreign_agt_record_validator():
     out = await cui.preview_rows([_row(review_id="REV-2026-000001", analyst_note="x")],
         res, _validator(problem="record belongs to another intake"))
     assert out["rows"][0]["disposition"] == cui.DISP_REJECTED and res.calls == []
+
+
+async def test_the_same_agt_in_hyphenated_and_compact_form_is_one_record_not_two():
+    """CodeRabbit on #233 (reproduced): both spellings pass UUID validation, but lower-casing does not make them
+    equal, so the second row was not recognised as a duplicate and a repeated record could be applied twice."""
+    rows = [_row(analyst_note="first"),
+            _row(**{cui.IDENTITY_AGT: uuid.UUID(AGT).hex.upper(), "analyst_note": "second"})]
+    out = await cui.preview_rows(rows, _resolver(), _validator())
+    d = [r["disposition"] for r in out["rows"]]
+    assert d == [cui.DISP_UNCHANGED, cui.DISP_NEEDS_REVIEW], d
+    assert "duplicate agt_record_id (first at row 1)" in out["rows"][1]["reasons"][0]

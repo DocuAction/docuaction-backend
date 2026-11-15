@@ -808,3 +808,18 @@ async def test_a_new_comment_without_source_sheet_or_column_is_rejected_at_intak
     stored = (await db.execute(select(func.count()).select_from(RceRecordComment).where(
         RceRecordComment.source_intake_id == intake_id))).scalar()
     assert stored == 1
+
+
+async def test_retrying_only_the_tail_of_a_committed_batch_keeps_each_entry_identity(rolled_back_db):
+    """CodeRabbit on #233 (reproduced): after [A, B] was committed under batch X, re-sending only [B] under X gave B
+    the key of position 0 - A's key - so B was REJECTED ('batch entry identity was reused with different content')
+    although the documented contract is that re-sending a batch or its tail is safe."""
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, arc="9.99.779.18")
+    a, b = _entry(recs[1], body="first words"), _entry(recs[2], body="second words")
+    first = await _import(db, intake_id, [a, b])
+    assert [r["status"] for r in first["results"]] == ["inserted", "inserted"]
+    tail = await _import(db, intake_id, [b], batch_id=first["batch_id"])
+    assert [r["status"] for r in tail["results"]] == ["already_present"], tail["results"]
+    n = (await db.execute(select(func.count()).select_from(RceRecordComment))).scalar()
+    assert n == 2
