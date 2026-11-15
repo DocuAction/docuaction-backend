@@ -184,7 +184,8 @@ async def test_cycle_lock_connection_survives_commit_and_pool_churn(db_required)
     """Use the actual pool: an ordinary Session would release its lock backend."""
     from app.tefca_registry.review_cycle import _cycle_session
 
-    engine = create_async_engine(os.environ["DATABASE_URL"], pool_size=2, max_overflow=0)
+    from app.core.database import _normalize_url   # same normalisation as the shared fixtures (postgresql:// -> asyncpg)
+    engine = create_async_engine(_normalize_url(os.environ["DATABASE_URL"]), pool_size=2, max_overflow=0)
     key = str(uuid.uuid4())
     try:
         async with AsyncSession(engine, expire_on_commit=False) as request_db:
