@@ -123,6 +123,7 @@ jobs:
             tests/test_delivery_rollups_isolation.py \
             tests/test_identity_provenance_and_controls.py \
             tests/test_review_cycle_report_scope_isolation.py \
+            tests/test_review_cycle_outer_transaction_2026_11_15.py \
             tests/test_report_scope_summary_isolation.py \
             tests/test_report_links.py \
             tests/test_report_storage_durable.py \
