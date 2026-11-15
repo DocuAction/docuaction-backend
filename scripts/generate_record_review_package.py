@@ -258,7 +258,8 @@ async def build(args) -> int:
             issues = await flf.load_issues(db, intake_uuid, cutoff_dt)
             intake = await db.get(rce_models.RceSourceIntake, intake_uuid)
         snap = ((intake.source_metadata or {}).get("snapshot_date") if intake is not None else "") or ""
-        field_result = flf.build_field_rows(loaded["facts"], issues, snapshot_date=str(snap))
+        field_result = flf.build_field_rows(loaded["facts"], issues, snapshot_date=str(snap),
+                                            run_id=loaded["meta"].get("assessment_run_id"))
         for fmt, render in (("csv", flf.to_csv), ("xlsx", flf.to_xlsx)):
             data = render(field_result)
             fpath = os.path.join(out_dir, f"{report_id}-field-findings.{fmt}")

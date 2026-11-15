@@ -104,8 +104,19 @@ def _s(v: Any) -> str:
     return "" if v is None else str(v)
 
 
+#: Reference sources a client may be shown. Internal normalisation labels the rules write into
+#: `suggested_source` (ZERO_PAD, WHITESPACE_NORMALISE, OBSERVED_FREQUENCY, table names) are NOT
+#: attributable reference sources: a local normalisation is not an external reference.
+REFERENCE_SOURCES = {"iqvia": "IQVIA", "sam.gov": "SAM.gov", "sam": "SAM.gov", "pecos": "PECOS", "nppes": "NPPES",
+                     "usps": "USPS", "oig leie": "OIG LEIE", "leie": "OIG LEIE", "hhs-oig leie": "OIG LEIE"}
+
+
+def reference_source(label: Optional[str]) -> str:
+    return REFERENCE_SOURCES.get((label or "").strip().lower(), "")
+
+
 def build_field_rows(facts: Iterable[Dict[str, Any]], issues: Iterable[Any], *,
-                     snapshot_date: str = "") -> Dict[str, Any]:
+                     snapshot_date: str = "", run_id: Any = None) -> Dict[str, Any]:
     """facts: the loader's per-record facts. issues: rows with issue_type, field_name,
     original_value, suggested_value, suggested_source, description, run_id, created_at,
     source_record_id. Returns {"rows", "reconciliation", "mapping_exceptions"}."""
@@ -116,8 +127,14 @@ def build_field_rows(facts: Iterable[Dict[str, Any]], issues: Iterable[Any], *,
            "records_with_findings": 0, "field_id_blank": 0, "snapshot_date_blank": not snapshot_date}
     exceptions: List[Dict[str, str]] = []
     seen_records = set()
+    rec["issues_from_other_runs"] = 0
     for it in issues:
         rec["issues_read"] += 1
+        # One assessment run: the record-level master reports the selected run, and the engine writes a
+        # fresh set of findings per run. A finding with no run is kept (it carries no check event).
+        if run_id is not None and getattr(it, "run_id", None) is not None and str(it.run_id) != str(run_id):
+            rec["issues_from_other_runs"] += 1
+            continue
         itype = _s(it.issue_type).strip()
         if itype in EXCLUDED_ISSUE_TYPES:
             rec["excluded_naic"] += 1
@@ -145,11 +162,18 @@ def build_field_rows(facts: Iterable[Dict[str, Any]], issues: Iterable[Any], *,
                 notes.append(f"Field_ID not established: expected one of {', '.join(rule)}")
         else:
             field_id = rule
+            named = (it.field_name or "").strip()
+            if named and field_id_for(named) != rule:
+                # The finding is about a different delivered column than the fixed Field_ID names:
+                # exporting the fixed name would pair that field with another column's value.
+                notes.append(f"Field_ID not established: the finding concerns '{named}', not {rule}")
+                field_id = ""
         if not field_id:
             rec["field_id_blank"] += 1
             exceptions.append({"agt_record_id": _s(fact["agt_record_id"]), "issue_type": itype,
                                "reason": notes[-1] if notes else "blank Field_ID"})
-        has_ref = bool(_s(it.suggested_source).strip() and _s(it.suggested_value).strip())
+        ref_src = reference_source(it.suggested_source)
+        has_ref = bool(ref_src and _s(it.suggested_value).strip())
         when = it.created_at if getattr(it, "run_id", None) else None
         ref_date = when.date().isoformat() if when is not None else ""
         if not ref_date:
@@ -168,7 +192,7 @@ def build_field_rows(facts: Iterable[Dict[str, Any]], issues: Iterable[Any], *,
             snapshot_date, _s(fact.get("source_line")), _s(fact.get("qhin_number")), _s(fact.get("hcid")),
             _s(fact.get("tefca_id")), et, _s(fact.get("submitted_npi")), _s(fact["agt_record_id"]),
             field_id, "", _s(it.original_value),
-            _s(it.suggested_value) if has_ref else "", _s(it.suggested_source) if has_ref else "",
+            _s(it.suggested_value) if has_ref else "", ref_src if has_ref else "",
             ref_date, sub, client_type, reason, _s(fact.get("purpose_of_use")),
         ])
         seen_records.add(_s(fact["agt_record_id"]))
