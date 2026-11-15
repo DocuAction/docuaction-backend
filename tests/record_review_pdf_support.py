@@ -314,9 +314,9 @@ def table_words(pages) -> Dict[str, List[List[Dict[str, Any]]]]:
     """{"main": [words per page], "detail": [words per page]} - the words inside
     each of the two record tables, located by the text that brackets them."""
     region = None
-    out = {"main": [], "detail": []}
+    out = {"main": [], "detail": [], "review": []}
     for page in pages:
-        per = {"main": [], "detail": []}
+        per = {"main": [], "detail": [], "review": []}
         _top, body, _bottom = split_furniture(page)
         for line in _lines(body):
             text = "".join(w["text"] for w in line)
@@ -334,11 +334,20 @@ def table_words(pages) -> Dict[str, List[List[Dict[str, Any]]]]:
                 region = "detail"
                 continue
             if region == "detail" and (text.startswith(UNCLASSIFIED_HEADING) or text.startswith(REVIEW_HEADING)):
+                region = "review-intro" if text.startswith(REVIEW_HEADING) else None
+                continue
+            if region == "review-intro":
+                # the intro paragraph ends where the bold table header begins
+                if not any(_is_bold(w) for w in line):
+                    continue
+                region = "review"
+            if region == "review" and text.startswith(UNCLASSIFIED_HEADING):
                 region = None
             if region in per:
                 per[region].extend(line)
         out["main"].append(per["main"])
         out["detail"].append(per["detail"])
+        out["review"].append(per["review"])
     return out
 
 
