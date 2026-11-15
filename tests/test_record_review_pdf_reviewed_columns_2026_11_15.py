@@ -64,6 +64,11 @@ def _render():
             pytest.fail("RECORD_REVIEW_REQUIRE_REAL_RENDER=1 but WeasyPrint cannot render here: " + unavailable_reason())
         pytest.skip("WeasyPrint native libraries are not available here")
     pdf = d.to_pdf(_dataset())
+    out = os.getenv("RECORD_REVIEW_PDF_OUT")
+    if out:  # CI artifact so a person can open the populated reviewed-disposition / SAM-extract pages
+        from pathlib import Path
+        Path(out).mkdir(parents=True, exist_ok=True)
+        (Path(out) / "weasyprint-reviewed-disposition-and-sam-extract.pdf").write_bytes(pdf)
     return pdf, s.read_pdf(pdf)
 
 
