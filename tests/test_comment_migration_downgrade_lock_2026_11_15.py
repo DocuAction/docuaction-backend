@@ -17,14 +17,6 @@ MIGRATION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "2026
 pytestmark = pytest.mark.regression
 
 
-def _engine():
-    url = os.environ.get("DATABASE_URL", "")
-    if not url:
-        pytest.skip("DATABASE_URL not set")
-    url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://").replace("postgresql://", "postgresql+psycopg2://", 1)
-    return sa.create_engine(url)
-
-
 def _module():
     spec = importlib.util.spec_from_file_location("mig_20261112", MIGRATION)
     mod = importlib.util.module_from_spec(spec)
@@ -32,29 +24,39 @@ def _module():
     return mod
 
 
-def test_downgrade_locks_the_table_exclusively_before_it_checks_emptiness_and_holds_it_through_the_drop(db_required):
+async def test_downgrade_locks_the_table_exclusively_before_it_checks_emptiness_and_holds_it_through_the_drop(db_required):
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+    from app.core.database import _normalize_url
+
     mig = _module()
-    engine = _engine()
-    with engine.connect() as conn:
-        tx = conn.begin()
-        if conn.execute(sa.text("select to_regclass('public.rce_record_comments')")).scalar() is None:
-            tx.rollback()
-            pytest.skip("rce_record_comments is not applied in this database")
-        statements = []
-        sa.event.listen(conn, "before_cursor_execute",
-                        lambda c, cur, stmt, params, ctx, many: statements.append(" ".join(stmt.split())))
-        try:
-            with Operations.context(MigrationContext.configure(conn)):
-                mig.downgrade()
-            table_stmts = [s for s in statements if "rce_record_comments" in s]
-            lock_at = next(i for i, s in enumerate(table_stmts) if s.upper().startswith("LOCK TABLE") and "ACCESS EXCLUSIVE" in s.upper())
-            check_at = next(i for i, s in enumerate(table_stmts) if "SELECT EXISTS" in s.upper())
-            drop_at = next(i for i, s in enumerate(table_stmts) if s.upper().startswith("DROP TABLE"))
-            assert lock_at < check_at < drop_at, table_stmts
-            # held through the drop: the same transaction, no commit between the three
-            assert tx.is_active
-        finally:
-            tx.rollback()
+    engine = create_async_engine(_normalize_url(os.environ["DATABASE_URL"]), poolclass=NullPool)
+    try:
+        async with engine.connect() as conn:
+            tx = await conn.begin()
+            if (await conn.execute(sa.text("select to_regclass('public.rce_record_comments')"))).scalar() is None:
+                await tx.rollback()
+                pytest.skip("rce_record_comments is not applied in this database")
+            statements = []
+            sa.event.listen(conn.sync_connection, "before_cursor_execute",
+                            lambda c, cur, stmt, params, ctx, many: statements.append(" ".join(stmt.split())))
+
+            def run(sync_conn):
+                with Operations.context(MigrationContext.configure(sync_conn)):
+                    mig.downgrade()
+
+            try:
+                await conn.run_sync(run)
+                table_stmts = [s for s in statements if "rce_record_comments" in s]
+                lock_at = next(i for i, s in enumerate(table_stmts) if s.upper().startswith("LOCK TABLE") and "ACCESS EXCLUSIVE" in s.upper())
+                check_at = next(i for i, s in enumerate(table_stmts) if "SELECT EXISTS" in s.upper())
+                drop_at = next(i for i, s in enumerate(table_stmts) if s.upper().startswith("DROP TABLE"))
+                assert lock_at < check_at < drop_at, table_stmts
+                assert tx.is_active                      # one transaction: the lock is held through the drop
+            finally:
+                await tx.rollback()
+    finally:
+        await engine.dispose()
 
 
 async def test_downgrade_refuses_a_populated_table_and_leaves_the_comment_in_place(rolled_back_db):
