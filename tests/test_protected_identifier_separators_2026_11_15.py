@@ -90,3 +90,48 @@ def test_more_than_eight_trailing_tokens_is_the_documented_limit():
     assert pi.is_protected_field(name)
     assert pi.find_in_text(f"{name}: {VALUE}") == [], "stated limit of the bounded trailing run"
     assert "labelled_tax_identifier" in pi.find_in_text("EIN" + "_x" * 8 + f": {VALUE}")
+
+
+# ── CodeRabbit on #232 (7534eb6): spaced quoted keys, index-vs-value, empty containers (reproduced before 1.5.0) ─────────
+
+@pytest.mark.parametrize("name", ["EIN PRIMARY", "TIN BACKUP", "provider tin id", "FEIN secondary 2"])
+def test_a_quoted_serialized_key_with_spaces_is_a_label(name):
+    assert pi.is_protected_field(name), name
+    for text in (f'{{"{name}":"{VALUE}"}}', f'{{"{name}": {VALUE}}}', f"{{'{name}': '{VALUE}'}}"):
+        assert "labelled_tax_identifier" in pi.find_in_text(text), text
+        assert VALUE not in pi.redact_text(text), text
+    assert pi.redact_mapping({name: VALUE}) == {name: pi.REDACTED}
+
+
+@pytest.mark.parametrize("name", ["EIN PRIMARY", "tax id"])
+async def test_the_gateway_refuses_a_spaced_quoted_key(name, monkeypatch):
+    from app.tefca_registry.ai.gateway import TEFCAAIGateway
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-not-a-key"); monkeypatch.setenv("OPENAI_API_KEY", "synthetic-not-a-key")
+    sent = []
+
+    async def record(self, model, prompt, max_output, temperature):
+        sent.append(prompt)
+        return '{"synthetic": true}'
+
+    monkeypatch.setattr(TEFCAAIGateway, "_call_anthropic", record); monkeypatch.setattr(TEFCAAIGateway, "_call_openai", record)
+    assert await TEFCAAIGateway().call(f'Compare SYNTHETIC ORG {{"{name}": "{VALUE}"}} with SYNTHETIC ORG LLC') is None and sent == []
+
+
+@pytest.mark.parametrize("name", ["synthetic note", "einstein primary", "the tax rate", "protein x"])
+def test_quoted_keys_that_are_not_protected_names_stay_unmatched(name):
+    assert pi.find_in_text(f'{{"{name}": "{VALUE}"}}') == [], name
+
+
+@pytest.mark.parametrize("text", ["EIN_2 000000001", "EIN_2: 000000001", "EIN_2026 000000001", "tax_id_2 000000001"])
+def test_an_index_followed_by_a_complete_value_is_a_label_guard(text):
+    """Reported against an older commit; not reproducible on the current head; kept as a guard."""
+    assert "labelled_tax_identifier" in pi.find_in_text(text) and VALUE not in pi.redact_text(text)
+
+
+def test_empty_protected_containers_are_fresh_copies_not_the_callers_objects():
+    source = {"EIN": [], "TIN": {}, "FEIN": "", "tax_id": None}
+    out = pi.redact_mapping(source)
+    assert out["EIN"] == [] and out["TIN"] == {} and out["FEIN"] == "" and out["tax_id"] is None
+    assert out["EIN"] is not source["EIN"] and out["TIN"] is not source["TIN"]
+    out["EIN"].append("000000001"); out["TIN"]["x"] = "000000001"
+    assert source == {"EIN": [], "TIN": {}, "FEIN": "", "tax_id": None}, "writing to the result must not write to the source"
