@@ -75,7 +75,7 @@ async def test_blocking_finding_never_rewrites_the_original_disposition(rolled_b
     before_status = curated.record_status
 
     out = await ppv.record_finding(
-        db, entity_id=entity_id, outcome=ppv.NPI_DEACTIVATED, npi=NPI_VALID_OTHER,
+        db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, outcome=ppv.NPI_DEACTIVATED, npi=NPI_VALID_OTHER,
         detail={"deactivation_date": "2026-09-01"}, actor="SYSTEM")
 
     assert out["blocking"] is True
@@ -95,7 +95,7 @@ async def test_blocking_finding_sets_review_required_and_opens_exactly_one_case(
     _rows, _intake_id, _job, curated, _promo = await _promoted(db, "9.99.888.02")
     entity_id = curated.canonical_entity_id
 
-    out = await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_DEACTIVATED,
+    out = await ppv.record_finding(db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, outcome=ppv.NPI_DEACTIVATED,
                                    npi=NPI_VALID_OTHER, actor="SYSTEM")
     assert out["verification_status"] == "in_review"
     entity = await _entity(db, entity_id)
@@ -124,7 +124,7 @@ async def test_blocking_finding_creates_a_new_snapshot_and_leaves_the_old_one_un
         db, intake_id, full, job_id=job.id, actor=SYN, trigger="PIPELINE")
     original_hash, original_seq = original.hash, original.sequence
 
-    out = await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_DEACTIVATED,
+    out = await ppv.record_finding(db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, outcome=ppv.NPI_DEACTIVATED,
                                    npi=NPI_VALID_OTHER, actor="SYSTEM")
 
     await db.refresh(original)
@@ -143,7 +143,7 @@ async def test_material_identifier_conflict_and_invalid_active_identifier_are_bl
     entity_id = curated.canonical_entity_id
 
     conflict = await ppv.record_post_promotion_conflict(
-        db, entity_id=entity_id, identifier_type="npi",
+        db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, identifier_type="npi",
         submitted_value="1234567893", existing_value=NPI_VALID_OTHER, actor="SYSTEM")
     assert conflict["blocking"] is True
     entity = await _entity(db, entity_id)
@@ -155,7 +155,7 @@ async def test_material_identifier_conflict_and_invalid_active_identifier_are_bl
         reg.TefcaEntityIdentifier.identifier_status == "active"))).scalars().all()
     assert [a.identifier_value for a in active] == [NPI_VALID_OTHER]
 
-    invalid = await ppv.check_active_identifier_validity(db, entity_id, actor="SYSTEM")
+    invalid = await ppv.check_active_identifier_validity(db, entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, actor="SYSTEM")
     assert invalid is None, "the active NPI is valid; nothing to report"
 
 
@@ -167,7 +167,7 @@ async def test_nonblocking_finding_is_visible_but_never_holds_or_excludes(rolled
     entity_id = curated.canonical_entity_id
     before_status = curated.record_status
 
-    out = await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_NOT_FOUND,
+    out = await ppv.record_finding(db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, outcome=ppv.NPI_NOT_FOUND,
                                    npi=NPI_VALID_OTHER, actor="SYSTEM")
     assert out["blocking"] is False
     assert out["case"] is None and out["verification_status"] is None
@@ -187,7 +187,7 @@ async def test_external_verification_unavailable_is_recorded_and_nonblocking(rol
     _rows, _intake_id, _job, curated, _promo = await _promoted(db, "9.99.888.06")
     entity_id = curated.canonical_entity_id
 
-    out = await ppv.record_finding(db, entity_id=entity_id,
+    out = await ppv.record_finding(db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id,
                                    outcome=ppv.NPI_VERIFICATION_UNAVAILABLE,
                                    npi=NPI_VALID_OTHER, detail="NPPES timed out",
                                    actor="SYSTEM")
@@ -205,9 +205,9 @@ async def test_duplicate_finding_delivery_writes_one_issue_and_one_case(rolled_b
     _rows, _intake_id, _job, curated, _promo = await _promoted(db, "9.99.888.07")
     entity_id = curated.canonical_entity_id
 
-    first = await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_DEACTIVATED,
+    first = await ppv.record_finding(db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, outcome=ppv.NPI_DEACTIVATED,
                                      npi=NPI_VALID_OTHER, actor="SYSTEM")
-    second = await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_DEACTIVATED,
+    second = await ppv.record_finding(db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, outcome=ppv.NPI_DEACTIVATED,
                                       npi=NPI_VALID_OTHER, actor="SYSTEM")
     assert first["issue"]["issue_code"] == second["issue"]["issue_code"]
     assert second["case"]["created"] is False
@@ -223,7 +223,7 @@ async def test_repeated_verification_after_resolution_opens_a_new_finding(rolled
     _rows, _intake_id, _job, curated, _promo = await _promoted(db, "9.99.888.08")
     entity_id = curated.canonical_entity_id
 
-    first = await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_DEACTIVATED,
+    first = await ppv.record_finding(db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, outcome=ppv.NPI_DEACTIVATED,
                                      npi=NPI_VALID_OTHER, actor="SYSTEM")
     await ppv.resolve_post_promotion_finding(
         db, first["issue"]["id"], decision="FALSE_POSITIVE", actor=ANALYST,
@@ -231,7 +231,7 @@ async def test_repeated_verification_after_resolution_opens_a_new_finding(rolled
     entity = await _entity(db, entity_id)
     assert entity.verification_status == "verified"
 
-    second = await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_DEACTIVATED,
+    second = await ppv.record_finding(db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, outcome=ppv.NPI_DEACTIVATED,
                                       npi=NPI_VALID_OTHER, actor="SYSTEM")
     assert second["issue"]["id"] != first["issue"]["id"]
     assert second["case"]["created"] is True
@@ -245,7 +245,7 @@ async def test_finding_resolved_by_analyst_requires_independent_qa(rolled_back_d
     db = rolled_back_db
     _rows, _intake_id, _job, curated, _promo = await _promoted(db, "9.99.888.09")
     entity_id = curated.canonical_entity_id
-    out = await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_DEACTIVATED,
+    out = await ppv.record_finding(db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, outcome=ppv.NPI_DEACTIVATED,
                                    npi=NPI_VALID_OTHER, actor="SYSTEM")
     issue_id = out["issue"]["id"]
 
@@ -267,7 +267,7 @@ async def test_finding_returned_by_qa_keeps_the_entity_excluded(rolled_back_db):
     db = rolled_back_db
     _rows, _intake_id, _job, curated, _promo = await _promoted(db, "9.99.888.10")
     entity_id = curated.canonical_entity_id
-    out = await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_DEACTIVATED,
+    out = await ppv.record_finding(db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, outcome=ppv.NPI_DEACTIVATED,
                                    npi=NPI_VALID_OTHER, actor="SYSTEM")
     issue_id = out["issue"]["id"]
 
@@ -286,10 +286,10 @@ async def test_entity_restored_only_after_the_last_blocking_finding_is_resolved(
     _rows, _intake_id, _job, curated, _promo = await _promoted(db, "9.99.888.11")
     entity_id = curated.canonical_entity_id
 
-    a = await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_DEACTIVATED,
+    a = await ppv.record_finding(db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, outcome=ppv.NPI_DEACTIVATED,
                                  npi=NPI_VALID_OTHER, actor="SYSTEM")
     conflict = await ppv.record_post_promotion_conflict(
-        db, entity_id=entity_id, identifier_type="npi",
+        db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, identifier_type="npi",
         submitted_value="1234567893", existing_value=NPI_VALID_OTHER, actor="SYSTEM")
 
     entity = await _entity(db, entity_id)
@@ -326,7 +326,7 @@ async def test_final_classification_is_refused_while_unresolved(rolled_back_db):
     db = rolled_back_db
     _rows, _intake_id, _job, curated, _promo = await _promoted(db, "9.99.888.12")
     entity_id = curated.canonical_entity_id
-    await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_DEACTIVATED,
+    await ppv.record_finding(db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, outcome=ppv.NPI_DEACTIVATED,
                              npi=NPI_VALID_OTHER, actor="SYSTEM")
 
     review = reg.ReviewRecord(
@@ -421,7 +421,7 @@ async def test_b1_bucket_does_not_bypass_a_genuine_open_finding(rolled_back_db):
     db = rolled_back_db
     _rows, _intake_id, _job, curated, _promo = await _promoted(db, "9.99.888.14")
     entity_id = curated.canonical_entity_id
-    await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_DEACTIVATED,
+    await ppv.record_finding(db, entity_id=entity_id, source_record_id=curated.source_record_id, intake_id=curated.source_intake_id, outcome=ppv.NPI_DEACTIVATED,
                              npi=NPI_VALID_OTHER, actor="SYSTEM")
 
     review = reg.ReviewRecord(

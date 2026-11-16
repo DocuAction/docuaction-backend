@@ -334,7 +334,11 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
             npi = None
             from app.Tefca import rce_fields
             npi = rce_fields.rce_npi(entity)
-            await vf.record_from_evidence(db, entity_id=entity_uuid, npi=npi, evidence=evidence)
+            # Anchored to the curated record of THIS delivery that carries `ref` (exactly one, linking this entity);
+            # an entity promoted by several deliveries never receives its finding on another delivery's ledger.
+            anchor = await vf.anchor_for_reference(db, intake_id=intake_id, ref=ref, entity_id=entity_uuid)
+            await vf.record_from_evidence(db, entity_id=entity_uuid, npi=npi, evidence=evidence,
+                                          source_record_id=anchor, intake_id=intake_id)
         except Exception as exc:  # noqa: BLE001 - the issue ledger must not fail coverage
             logger.error("automated coverage: NPI outcome not recorded for %s: %s",
                         entity_uuid, type(exc).__name__, exc_info=True)

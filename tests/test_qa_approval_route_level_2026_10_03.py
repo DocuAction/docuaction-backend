@@ -107,8 +107,10 @@ async def test_eligible_non_b1_completes_qa_via_real_routes_genuine_finding_stil
     entity_b_id = result_b["outcomes"][0]["entity_id"]
 
     async with async_session_maker() as db:
+        from rce_traceability_support import anchor_for_entity
         await ppv.record_finding(db, entity_id=entity_b_id, outcome=ppv.NPI_DEACTIVATED,
-                                 npi="1234567893", actor="route-test")
+                                 npi="1234567893", actor="route-test",
+                                 **await anchor_for_entity(db, entity_b_id))
         await db.commit()
     print(f"[B] seeded (bucket={result_b['outcomes'][0]['bucket']}), "
           f"THEN a genuine open finding recorded, review_id={review_id_b}")
