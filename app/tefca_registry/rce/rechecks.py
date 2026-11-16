@@ -530,8 +530,28 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
     # IDENTITY FIRST: a refusal persists nothing - no evidence, no ledger row, no identifier-status or entity-status
     # change (CodeRabbit on #233, rounds 5-6).
     from app.Tefca import rce_fields
-    from app.Tefca.connectors import _extract_npi
-    probe_npi = (rce_fields.rce_npi(entity) or _extract_npi(entity) or "").strip()   # what the probes are asked about
+    rce_npi = rce_fields.rce_npi(entity) or ""
+    identifiers = [dict(identifier) for identifier in entity.get("identifier", []) or []]
+    identifier_npis = {str(identifier.get("value") or "").strip() for identifier in identifiers
+                       if identifier.get("system") == rce_fields.NPI_SYSTEM}
+    identifier_npis.discard("")
+    if len(identifier_npis) > 1 or (rce_npi and identifier_npis and rce_npi not in identifier_npis):
+        # Neither representation is authoritative over the other. Refuse even formatting-only disagreements;
+        # choosing or normalising an identifier here would introduce a new identity rule.
+        item.state, item.outcome, item.processed_at = rm.ITEM_DONE, rm.OUTCOME_IDENTITY_REFUSED, now
+        item.detail = {"reason": "the entity carries conflicting NPI values (RCE NPI / FHIR NPI identifiers); "
+                                 "no source was asked", "persisted": False}
+        return
+    identifier_npi = next(iter(identifier_npis), "")
+    probe_npi = rce_npi or identifier_npi
+    # All source adapters must see the same value. This request-local copy supplies a missing representation
+    # without changing the resolver result, registry identifiers, or delivered record.
+    entity = {**entity, "_rce": {**rce_fields.rce_block(entity), "NPI": probe_npi},
+              "identifier": [{**identifier, "value": probe_npi}
+                             if identifier.get("system") == rce_fields.NPI_SYSTEM else dict(identifier)
+                             for identifier in identifiers]}
+    if probe_npi and not identifier_npi:
+        entity["identifier"].insert(0, {"system": rce_fields.NPI_SYSTEM, "value": probe_npi})
     context, refusal = await vf.validated_delivery_context(
         db, intake_id=job.intake_id, ref=item.entity_ref, queued_entity_id=item.entity_id, entity=entity,
         probe_npi=probe_npi)
