@@ -194,15 +194,56 @@ async def _curated_for_entity(db, entity_id):
         .limit(1))).scalar_one_or_none()
 
 
+async def anchor_for_reference(db, *, intake_id, ref, entity_id):
+    """The source_record_id a verification of `ref` belongs to, or None.
+
+    ANCHORED only when exactly ONE curated record of the named delivery carries the delivered reference
+    (`rce_org_oid`) AND links the very entity being verified - the rule `arc_pipeline._source_anchor` applies. No
+    delivery, no such record, a duplicate delivered id or a different linked entity leave it unanchored; an
+    unanchored verification writes no ledger row (never "the entity's latest record")."""
+    if intake_id is None or not ref or entity_id is None:
+        return None
+    rows = (await db.execute(
+        select(m.RceCuratedRecord.source_record_id, m.RceCuratedRecord.canonical_entity_id)
+        .where(m.RceCuratedRecord.source_intake_id == intake_id,
+               m.RceCuratedRecord.rce_org_oid == ref))).all()
+    if len(rows) != 1:
+        return None
+    source_record_id, canonical = rows[0]
+    if canonical is None or str(canonical) != str(entity_id):
+        return None
+    return source_record_id
+
+
+async def _curated_for_anchor(db, entity_id, source_record_id, intake_id=None):
+    """The curated record of the NAMED source record, only if it links `entity_id` (and belongs to `intake_id` when
+    the caller knows the delivery); otherwise None. Never another delivery's record for the same entity."""
+    if source_record_id is None:
+        return None
+    stmt = select(m.RceCuratedRecord).where(
+        m.RceCuratedRecord.source_record_id == source_record_id,
+        m.RceCuratedRecord.canonical_entity_id == entity_id)
+    if intake_id is not None:
+        stmt = stmt.where(m.RceCuratedRecord.source_intake_id == intake_id)
+    return (await db.execute(stmt.limit(1))).scalar_one_or_none()
+
+
 async def record_npi_outcome(db, *, entity_id, npi: Optional[str], outcome: str,
                              detail: Optional[Any] = None,
-                             commit: bool = False) -> Optional[m.RceIssue]:
+                             commit: bool = False,
+                             source_record_id=None,
+                             intake_id=None) -> Optional[m.RceIssue]:
     """Write the ledger row for one verification outcome. Returns it, or None.
 
-    None when the outcome is VERIFIED (nothing to record), when the entity did
-    not come from a delivery (no ledger), or when an identical undecided issue
-    already exists for the record (no duplicate). Does not commit unless asked:
-    the caller's verification transaction owns the commit.
+    ANCHORED: the row is written on the curated record of `source_record_id` - the source record the verification
+    is about - validated against `entity_id` (and `intake_id` when the caller knows the delivery). The same record
+    serves insertion and duplicate detection. WITHOUT an established anchor nothing is written: an entity can be
+    promoted by several deliveries, and "the entity's latest record" would put one delivery's finding on another's
+    ledger.
+
+    None when the outcome is VERIFIED (nothing to record), when there is no anchor (or it does not match the
+    entity/delivery), or when an identical undecided issue already exists for the record (no duplicate). Does not
+    commit unless asked: the caller's verification transaction owns the commit.
     """
     if outcome not in OUTCOMES:
         raise ValueError(f"unknown NPI outcome {outcome!r}; one of {OUTCOMES}")
@@ -219,10 +260,11 @@ async def record_npi_outcome(db, *, entity_id, npi: Optional[str], outcome: str,
     if outcome == VERIFIED:
         return None
 
-    curated = await _curated_for_entity(db, entity_id)
+    curated = await _curated_for_anchor(db, entity_id, source_record_id, intake_id)
     if curated is None:
-        logger.info("NPI outcome %s for entity %s has no delivery ledger; recorded "
-                    "in the review only", outcome, entity_id)
+        logger.warning("NPI outcome %s for entity %s has no established delivery-record anchor (source_record_id=%s, "
+                       "intake_id=%s); no ledger row written, recorded in the review/evidence only",
+                       outcome, entity_id, source_record_id, intake_id)
         return None
 
     rule_id, severity, authority = NON_QUALITY_ISSUE_TYPES[outcome]
@@ -446,7 +488,8 @@ async def record_sam_extract_candidate(db, *, entity_id, npi: Optional[str],
     return issue
 
 
-async def record_from_sources(db, *, entity_id, sources: Dict[str, Any]
+async def record_from_sources(db, *, entity_id, sources: Dict[str, Any],
+                              source_record_id=None, intake_id=None
                               ) -> Optional[m.RceIssue]:
     """Convenience for `review_service`: read the probed NPPES source dict."""
     nppes = (sources or {}).get("nppes") or {}
@@ -455,12 +498,15 @@ async def record_from_sources(db, *, entity_id, sources: Dict[str, Any]
         return None
     return await record_npi_outcome(
         db, entity_id=entity_id, npi=nppes.get("lookup_identifier"),
-        outcome=outcome, detail=nppes.get("npi_outcome_detail") or nppes.get("reason"))
+        outcome=outcome, detail=nppes.get("npi_outcome_detail") or nppes.get("reason"),
+        source_record_id=source_record_id, intake_id=intake_id)
 
 
 async def record_from_evidence(db, *, entity_id, npi: Optional[str],
-                               evidence: Dict[str, Any]) -> Optional[m.RceIssue]:
-    """Convenience for `arc_pipeline.verify_and_classify`."""
+                               evidence: Dict[str, Any],
+                               source_record_id=None, intake_id=None) -> Optional[m.RceIssue]:
+    """Convenience for the verification callers; they name the source record the evidence is about
+    (see `record_npi_outcome` - no anchor, no ledger write)."""
     derived = npi_outcome_from_evidence(evidence)
     if derived is None:
         return None
@@ -473,4 +519,5 @@ async def record_from_evidence(db, *, entity_id, npi: Optional[str],
     if not npi and derived["outcome"] == NPI_VERIFICATION_UNAVAILABLE:
         return None
     return await record_npi_outcome(db, entity_id=entity_id, npi=npi,
-                                    outcome=derived["outcome"], detail=derived)
+                                    outcome=derived["outcome"], detail=derived,
+                                    source_record_id=source_record_id, intake_id=intake_id)

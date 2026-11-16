@@ -132,24 +132,24 @@ async def test_not_found_deactivated_and_unavailable_are_distinct_and_not_duplic
     entity_id = curated.canonical_entity_id
     run = await run_selection.current_run(db, intake_id)
 
-    nf = await vf.record_npi_outcome(db, entity_id=entity_id, npi=NPI_VALID_OTHER,
+    nf = await vf.record_npi_outcome(db, entity_id=entity_id, npi=NPI_VALID_OTHER, source_record_id=curated.source_record_id, intake_id=intake_id,
                                      outcome=vf.NPI_NOT_FOUND, detail="not in NPPES")
     assert nf.rule_id == "NPI-005" and nf.issue_type == "NPI_NOT_FOUND"
     assert nf.severity == "MEDIUM" and nf.correction_authority == "HUMAN_REQUIRED"
     assert nf.run_id == run.id and nf.source_record_id == curated.source_record_id
     assert nf.issue_code.startswith("VR-")
 
-    again = await vf.record_npi_outcome(db, entity_id=entity_id, npi=NPI_VALID_OTHER,
+    again = await vf.record_npi_outcome(db, entity_id=entity_id, npi=NPI_VALID_OTHER, source_record_id=curated.source_record_id, intake_id=intake_id,
                                         outcome=vf.NPI_NOT_FOUND, detail="not in NPPES")
     assert again.id == nf.id, "a repeat verification does not duplicate an open finding"
 
-    un = await vf.record_npi_outcome(db, entity_id=entity_id, npi=NPI_VALID_OTHER,
+    un = await vf.record_npi_outcome(db, entity_id=entity_id, npi=NPI_VALID_OTHER, source_record_id=curated.source_record_id, intake_id=intake_id,
                                      outcome=vf.NPI_VERIFICATION_UNAVAILABLE,
                                      detail="timeout")
     assert un.rule_id == "NPI-009" and un.severity == "INFORMATIONAL"
     assert un.correction_authority == "NO_CORRECTION"
 
-    de = await vf.record_npi_outcome(db, entity_id=entity_id, npi=NPI_VALID_OTHER,
+    de = await vf.record_npi_outcome(db, entity_id=entity_id, npi=NPI_VALID_OTHER, source_record_id=curated.source_record_id, intake_id=intake_id,
                                      outcome=vf.NPI_DEACTIVATED,
                                      detail={"detail": "deactivated",
                                              "deactivation_date": "2024-01-31"})
@@ -159,7 +159,7 @@ async def test_not_found_deactivated_and_unavailable_are_distinct_and_not_duplic
     assert [(r.identifier_value, r.identifier_status) for r in rows] == [
         (NPI_VALID_OTHER, vf.INACTIVE_PENDING_REVIEW)]
 
-    ok = await vf.record_npi_outcome(db, entity_id=entity_id, npi=NPI_VALID_OTHER,
+    ok = await vf.record_npi_outcome(db, entity_id=entity_id, npi=NPI_VALID_OTHER, source_record_id=curated.source_record_id, intake_id=intake_id,
                                      outcome=vf.VERIFIED, detail="active")
     assert ok is None
 
@@ -168,7 +168,7 @@ async def test_not_found_deactivated_and_unavailable_are_distinct_and_not_duplic
                    and i.rule_id in ("NPI-005", "NPI-006", "NPI-009"))
     assert types == ["NPI_DEACTIVATED", "NPI_NOT_FOUND", "NPI_VERIFICATION_UNAVAILABLE"]
     with pytest.raises(ValueError):
-        await vf.record_npi_outcome(db, entity_id=entity_id, npi=NPI_VALID_OTHER,
+        await vf.record_npi_outcome(db, entity_id=entity_id, npi=NPI_VALID_OTHER, source_record_id=curated.source_record_id, intake_id=intake_id,
                                     outcome="SOMETHING_ELSE", detail=None)
 
 
@@ -178,7 +178,8 @@ async def test_record_from_sources_reads_the_probed_nppes_dict(promoted_entity):
         db, entity_id=curated.canonical_entity_id,
         sources={"nppes": {"status": "not_found", "npi_outcome": "NPI_NOT_FOUND",
                            "npi_outcome_detail": "NPI not present in NPPES.",
-                           "lookup_identifier": NPI_VALID_OTHER}})
+                           "lookup_identifier": NPI_VALID_OTHER}},
+        source_record_id=curated.source_record_id, intake_id=intake_id)
     assert issue is not None and issue.rule_id == "NPI-005"
     assert issue.original_value == NPI_VALID_OTHER
     assert await vf.record_from_sources(db, entity_id=curated.canonical_entity_id,

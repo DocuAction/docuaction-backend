@@ -211,10 +211,12 @@ async def test_an_open_blocking_ledger_finding_keeps_the_entity_in_review(db_req
     assert first["bucket"] == "B1" and await _entity_status(first["entity_id"]) == "verified"
 
     async with async_session_maker() as db:
+        from rce_traceability_support import anchor_for_entity
         await ppv.record_finding(db, entity_id=uuid.UUID(first["entity_id"]),
                                  outcome=ppv.NPI_DEACTIVATED, npi=None,
                                  detail="SYNTHETIC deactivation (test fixture)",
-                                 actor="pytest-prior-risk")
+                                 actor="pytest-prior-risk",
+                                 **await anchor_for_entity(db, first["entity_id"]))
         await db.commit()
     assert await _entity_status(first["entity_id"]) == "in_review"
 

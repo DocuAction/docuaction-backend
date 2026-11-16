@@ -59,8 +59,10 @@ async def _with_qhin(db, arc):
 
 
 async def _block(db, entity_id):
+    from rce_traceability_support import anchor_for_entity
     return await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_DEACTIVATED,
-                                    npi=NPI_VALID_OTHER, actor="SYSTEM")
+                                    npi=NPI_VALID_OTHER, actor="SYSTEM",
+                                    **await anchor_for_entity(db, entity_id))
 
 
 async def _members(db, sample_id):
@@ -98,8 +100,10 @@ async def test_unresolved_blocking_finding_is_excluded_from_a_new_draw(rolled_ba
 async def test_nonblocking_finding_remains_eligible(rolled_back_db):
     db = rolled_back_db
     intake_id, job, curated, entity_id = await _with_qhin(db, "9.99.777.82")
+    from rce_traceability_support import anchor_for_entity
     await ppv.record_finding(db, entity_id=entity_id, outcome=ppv.NPI_NOT_FOUND,
-                             npi=NPI_VALID_OTHER, actor="SYSTEM")
+                             npi=NPI_VALID_OTHER, actor="SYSTEM",
+                             **await anchor_for_entity(db, entity_id))
     eligible, unresolved = await qs.resolve_qhin_strata(db, intake_id)
     assert [u["entity_id"] for u in eligible] == [entity_id]
     assert qs.review_required_exclusions(unresolved) == []
