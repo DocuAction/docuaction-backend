@@ -511,6 +511,33 @@ async def _enrollment_only_evidence(entity, *, db, entity_id, snapshot) -> Dict[
     }
 
 
+async def _validated_delivery_context(db, job: RceRecheckJob, item: RceRecheckItem, entity) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """ONE identity validation for a recheck item, run before anything is persisted.
+
+    Returns (context, None) or (None, reason). The reference is resolved GLOBALLY (`resolve_entity` knows nothing
+    of the job's delivery), so three facts must hold before the item's evidence, ledger row or any status change may
+    be written: (1) the reference still resolves to the QUEUED entity (a registry identity exists and equals
+    `item.entity_id`); (2) exactly one delivered record of the job's delivery carries the reference and links that
+    entity (`anchor_for_reference`); (3) that record can be read, so its delivered NPI is known. The delivered NPI is
+    the record's own (`parsed["NPI"]`, else the record's `npi`), never the registry entity's."""
+    from app.tefca_registry.rce import verification_findings as vf
+
+    resolved_id = entity.get("_registry_entity_id")
+    if resolved_id is None:
+        return None, "the reference has no registry identity now"
+    if str(resolved_id) != str(item.entity_id):
+        return None, "the reference now resolves to a different entity than the one queued"
+    anchor = await vf.anchor_for_reference(db, intake_id=job.intake_id, ref=item.entity_ref, entity_id=item.entity_id)
+    if anchor is None:
+        return None, ("the job's delivery has no single delivered record carrying this reference and linking the "
+                      "queued entity (missing, duplicated, or linked to another entity)")
+    record = await db.get(m.RceSourceRecord, anchor)
+    if record is None:
+        return None, "the delivered record could not be read"
+    delivered_npi = str((record.parsed or {}).get("NPI", record.npi) or "").strip()
+    return {"source_record_id": anchor, "delivered_npi": delivered_npi}, None
+
+
 async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_store) -> None:
     """Re-verify one item under the job's PINNED evidence scope: resolve the
     entity, gather (enrollment-only answers from the pinned PPEF edition;
@@ -526,6 +553,13 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
     if entity is None:
         item.state, item.outcome, item.processed_at = rm.ITEM_DONE, rm.OUTCOME_NOT_RESOLVED, now
         item.detail = {"reason": "entity reference did not resolve"}
+        return
+    # IDENTITY FIRST: a refusal persists nothing - no evidence, no ledger row, no identifier-status or entity-status
+    # change (CodeRabbit on #233, rounds 5-6).
+    context, refusal = await _validated_delivery_context(db, job, item, entity)
+    if context is None:
+        item.state, item.outcome, item.processed_at = rm.ITEM_DONE, rm.OUTCOME_IDENTITY_REFUSED, now
+        item.detail = {"reason": refusal, "persisted": False}
         return
     scope = (job.pinned or {}).get("evidence_scope") or SCOPE_FULL_BUILD
     if scope == SCOPE_CMS_ENROLLMENT_ONLY:
@@ -551,20 +585,20 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
     for row in rows:
         row["review_cycle_id"] = None
         db.add(TEFCADimensionEvidence(**row))
+    npi_outcome_skipped = None
     try:
-        from app.Tefca import rce_fields
-        # Anchored to the curated record of the job's delivery that carries this item's reference (exactly one,
-        # linking this entity); otherwise nothing is written - never the entity's latest record in another delivery.
-        # The NPI and evidence above belong to the entity the reference resolves to NOW. They are written under the
-        # queued entity's record only when that is the same entity; a reference that has since resolved to another
-        # entity (or has no registry identity) gets no anchor, so nothing is written (CodeRabbit round 5).
-        resolved_id = entity.get("_registry_entity_id")
-        same_entity = resolved_id is not None and str(resolved_id) == str(item.entity_id)
-        anchor = (await vf.anchor_for_reference(db, intake_id=job.intake_id, ref=item.entity_ref,
-                                                entity_id=item.entity_id)) if same_entity else None
-        await vf.record_from_evidence(db, entity_id=item.entity_id,
-                                      npi=rce_fields.rce_npi(entity), evidence=evidence,
-                                      source_record_id=anchor, intake_id=job.intake_id)
+        from app.Tefca.connectors import _extract_npi
+        # The ledger row belongs to the DELIVERED record validated above. The evidence was gathered for the registry
+        # entity's NPI; when the delivery submitted a different NPI, that finding is not about what this delivery
+        # submitted, so no NPI outcome (and no identifier-status change) is written for it. The entity-level evidence
+        # above is unaffected (CodeRabbit round 6).
+        registry_npi = (_extract_npi(entity) or "").strip()      # the NPI the source probes were asked about
+        if registry_npi != context["delivered_npi"]:
+            npi_outcome_skipped = "the delivery submitted a different NPI than the one the evidence was gathered for"
+        else:
+            await vf.record_from_evidence(db, entity_id=item.entity_id, npi=context["delivered_npi"] or None,
+                                          evidence=evidence, source_record_id=context["source_record_id"],
+                                          intake_id=job.intake_id)
     except Exception as exc:  # noqa: BLE001 -- the ledger must not fail a recheck
         logger.error("recheck: NPI outcome not recorded for %s: %s", item.entity_id,
                      type(exc).__name__, exc_info=True)
@@ -583,6 +617,8 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
     item.detail = {"evidence_generation": evidence.get("generated_at"),
                    "rows_appended": len(rows),
                    "entity_status_changed_to_verified": False}
+    if npi_outcome_skipped:
+        item.detail["npi_outcome_skipped"] = npi_outcome_skipped
 
 
 async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str, Any]:
