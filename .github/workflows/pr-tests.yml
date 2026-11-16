@@ -216,6 +216,7 @@ jobs:
             tests/test_record_review_package_script_2026_11_12.py \
             tests/test_record_review_download_path_db_2026_11_13.py \
             tests/test_reviewed_disposition_report_2026_11_15.py \
+            tests/test_qa_approved_reporting_bucket_2026_11_16.py \
             tests/test_treatment_b4_journey_2026_11_15.py \
             tests/test_comment_migration_downgrade_lock_2026_11_15.py \
             tests/test_review_single_npi_read_2026_11_15.py \

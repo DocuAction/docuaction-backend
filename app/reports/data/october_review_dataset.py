@@ -36,6 +36,21 @@ RULES IT ENFORCES (and the records that carry them)
       distinguishable: "Bucket Basis" begins "Persisted classification" or
       "Reporting annotation" and never mixes the two.
     * B2 stays labelled provisional when the fact says so.
+    * FINAL REPORTING BUCKET (owner authorization 2026-11-16, synthetic testing
+      only; methodology revision 1.3-A, DRAFT). "Bucket" is the reporting
+      bucket: the persisted automated bucket, replaced by an analyst RECLASSIFY
+      only when the loader states an independent QA approval visible at the
+      cutoff (`approved_bucket`). ELIGIBLE means what methodology 1.3-A
+      describes and nothing wider: a CLEAN/CORRECTED record whose automated
+      bucket is B4, reclassified to B1, B2 or B3. It is never applied to a HELD
+      record (HELD stays B4, once, not released), to a REJECTED / not-curated
+      record, to a record with no persisted classification, to a non-B4
+      record, or INTO B4; each such approval is stated as "NOT applied" in the
+      Bucket Basis. The automated bucket keeps its own column and the Bucket
+      Basis names the reclassification as a reporting annotation; nothing is
+      written back. Totals count each record once, by the reporting bucket, and
+      the summary shows the automated distribution and every move so the two
+      reconcile.
 Nothing here is QA approval. Every output is labelled DRAFT.
 """
 from __future__ import annotations
@@ -46,7 +61,7 @@ import io
 import re
 from typing import Any, Dict, Iterable, List, Optional
 
-DATASET_VERSION = "1.0.0"
+DATASET_VERSION = "1.1.0"
 BUCKETS = ("B1", "B2", "B3", "B4")
 STATUS_HELD = "HELD"
 USPS_UNAVAILABLE = "Not checked—unavailable"
@@ -66,6 +81,14 @@ DRAFT_BANNER = ("CURRENT REVIEW / DRAFT / NOT FINAL - INDEPENDENT QA PENDING. "
 PROHIBITED_PECOS_PHRASES = ("lost-identifier/outage family",)
 
 SAM_EXTRACT_COLUMN = "SAM Public Extract (supplementary; candidate only)"
+#: The persisted automated bucket, kept beside the reporting "Bucket" (2026-11-16).
+AUTOMATED_BUCKET_COLUMN = "Automated Bucket (original; unchanged by review)"
+NO_PERSISTED_BUCKET = "None persisted"
+RECLASSIFIED_FLAG = "RECLASSIFIED (QA-approved)"
+#: Curated statuses whose record may carry a reclassified reporting bucket (fail-closed: nothing else).
+RECLASSIFIABLE_STATUSES = ("CLEAN", "CORRECTED")
+#: Methodology 1.3-A: "a B4 record may remain in B4 or be reclassified to B1, B2 or B3".
+RECLASSIFIABLE_FROM, RECLASSIFIABLE_TO = "B4", ("B1", "B2", "B3")
 RECORD_COLUMNS = [
     "Source_Line", "AGT_Record_ID", "QHIN Number", "HCID", "Tefca Id",
     "Organization", "Participation Level",
@@ -84,6 +107,7 @@ RECORD_COLUMNS = [
     "Analyst/QA Status", "Reviewed Disposition Basis",
     SAM_EXTRACT_COLUMN,
     "Supplemental NPI Research (stored entry; NOT an accepted correction)",
+    AUTOMATED_BUCKET_COLUMN,
 ]
 TEXT_COLUMNS = list(range(len(RECORD_COLUMNS)))   # identifiers stay text
 #: Compact subset for the PDF's main table; the full column set is in the Excel/CSV.
@@ -176,15 +200,44 @@ class DatasetRefused(ValueError):
     """The dataset could not be built honestly, and the reason is stated."""
 
 
-def reporting_bucket(bucket: Optional[str], status: Optional[str]) -> str:
-    """HELD -> B4 (once). Otherwise the record's own classified bucket."""
+def reporting_bucket(bucket: Optional[str], status: Optional[str],
+                     approved_bucket: Optional[str] = None) -> str:
+    """HELD -> B4 (once). Otherwise the record's own classified bucket, or the
+    independently QA-approved reclassification of it when one is supplied."""
     if (status or "").strip().upper() == STATUS_HELD:
         return "B4"
     if bucket not in BUCKETS:
         # No usable persisted classification: never guess one. The dataset
         # reports itself INCOMPLETE and lists the record (see build_dataset).
         return NOT_CLASSIFIED
+    if approved_bucket in BUCKETS:
+        return approved_bucket
     return bucket
+
+
+def _reclassification(fact: Dict[str, Any], status: str) -> tuple:
+    """(applied target or '', annotation text or '') for the Bucket Basis.
+
+    The annotation is stated whenever a QA-approved reclassification exists,
+    including when it is NOT applied (HELD, unclassified, non-independent QA)."""
+    target, note = fact.get("approved_bucket"), _s(fact.get("approved_note"))
+    if target not in BUCKETS:
+        return "", note
+    if status.upper() == STATUS_HELD:
+        return "", (f"QA-approved reclassification to {target} recorded but NOT applied: the record remains "
+                    "HELD and is reported once in B4")
+    if fact.get("bucket") not in BUCKETS:
+        return "", (f"QA-approved reclassification to {target} recorded but NOT applied: the record has no "
+                    "persisted classification")
+    if target == fact.get("bucket"):
+        return "", ""
+    if status.upper() not in RECLASSIFIABLE_STATUSES:
+        return "", (f"QA-approved reclassification to {target} recorded but NOT applied: record status is "
+                    f"{status or 'not recorded'}")
+    if fact.get("bucket") != RECLASSIFIABLE_FROM or target not in RECLASSIFIABLE_TO:
+        return "", (f"QA-approved reclassification {fact.get('bucket')} -> {target} recorded but NOT applied: the "
+                    "methodology provides only for a B4 record to be reclassified to B1, B2 or B3")
+    return target, note or f"QA-approved reclassification {fact.get('bucket')} -> {target}"
 
 
 def _s(v: Any) -> str:
@@ -193,17 +246,22 @@ def _s(v: Any) -> str:
 
 def _basis(fact: Dict[str, Any], status: str) -> str:
     """Persisted decision and reporting annotation are never blended."""
+    _target, reclass = _reclassification(fact, status)
     if status.upper() == STATUS_HELD:
         reason = _s(fact.get("held_reason")) or "reason not recorded"
-        return ("Reporting annotation: HELD counted once in B4; no persisted "
-                f"classification (blocked assessment: {reason})")
+        kept = ("no persisted classification" if fact.get("bucket") not in BUCKETS else
+                f"persisted classification {fact.get('bucket')} kept in its own column, not reported")
+        return (f"Reporting annotation: HELD counted once in B4; {kept} "
+                f"(blocked assessment: {reason})"
+                + (f"; {reclass}" if reclass else ""))
     base = _s(fact.get("bucket_basis"))
     if fact.get("bucket") not in BUCKETS:
         return ("No usable persisted classification" +
-                (f" ({base})" if base else ""))
+                (f" ({base})" if base else "") + (f"; {reclass}" if reclass else ""))
     note = _s(fact.get("bucket_annotation"))
     if fact.get("provisional") and not note:
         note = "provisional"
+    note = "; ".join(n for n in (note, reclass) if n)
     out = base or "Persisted classification"
     return out + (f"; Reporting annotation: {note}" if note else "")
 
@@ -246,6 +304,11 @@ _COMMENT_KINDS = (
      "report_clarifications_source"),
 )
 PROVENANCE_INCOMPLETE = "COMMENT PROVENANCE INCOMPLETE"
+RECLASSIFIED_SUMMARY_ROW = ("Records whose Bucket is a QA-approved reclassification (in-app QA APPROVE by a "
+                            "different user than the analyst; already inside the totals above; each record "
+                            "counted once)")
+AUTOMATED_SUMMARY_ROW = ("Automated reporting buckets before reclassification (HELD counted in B4; same records, "
+                         "same total)")
 PROVENANCE_SUMMARY_ROW = ("Stored comments with incomplete source provenance "
                           "(marked in Flag; text verbatim)")
 _PROVENANCE_FIELDS = ("file", "sha256", "sheet", "column")
@@ -311,7 +374,8 @@ def build_record_row(fact: Dict[str, Any],
                      stored: Optional[Dict[str, Any]] = None) -> List[str]:
     stored = stored or {}
     status = _s(fact.get("status")).strip()
-    bucket = reporting_bucket(fact.get("bucket"), status)
+    applied, _note = _reclassification(fact, status)
+    bucket = reporting_bucket(fact.get("bucket"), status, applied or None)
     pecos = _s(fact.get("pecos"))
     for phrase in PROHIBITED_PECOS_PHRASES:
         if phrase in pecos.lower():
@@ -330,6 +394,8 @@ def build_record_row(fact: Dict[str, Any],
     flag = _s(fact.get("flag"))
     if fact.get("provisional") and "PROVISIONAL" not in flag.upper():
         flag = (flag + "; " if flag else "") + "PROVISIONAL B2"
+    if applied:
+        flag = (flag + "; " if flag else "") + f"{RECLASSIFIED_FLAG} {fact.get('bucket')} -> {applied}"
     # The marker goes in Flag, never in the comment cell: the text stays verbatim.
     for _kind, column, gap in _provenance_marks(fact, stored):
         flag = ((flag + "; " if flag else "") + f"{PROVENANCE_INCOMPLETE}: {column} "
@@ -357,6 +423,7 @@ def build_record_row(fact: Dict[str, Any],
         _s(fact.get("reviewed_basis")),
         _s(fact.get("sam_extract")) or NOT_ESTABLISHED,
         _s(fact.get("supplemental_research")),
+        fact.get("bucket") if fact.get("bucket") in BUCKETS else NO_PERSISTED_BUCKET,
     ]
 
 
@@ -401,6 +468,26 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                 held_no_reason += 1
     if sum(counts.values()) + len(unclassified) != len(rows):   # guard
         raise DatasetRefused("bucket counts do not sum to the record count")
+    # Reconciliation of the reporting buckets with the automated ones: every record is in exactly one automated
+    # reporting bucket and exactly one final reporting bucket; a move changes which, never how many.
+    auto_idx = RECORD_COLUMNS.index(AUTOMATED_BUCKET_COLUMN)
+    automated = {b: 0 for b in BUCKETS}
+    transitions: Dict[str, int] = {}
+    for r in rows:
+        before = reporting_bucket(r[auto_idx], r[s_idx])
+        if before in automated:
+            automated[before] += 1
+        if before != r[b_idx]:
+            if (before != RECLASSIFIABLE_FROM or r[b_idx] not in RECLASSIFIABLE_TO
+                    or r[s_idx].upper() not in RECLASSIFIABLE_STATUSES
+                    or f"{RECLASSIFIED_FLAG} {before} -> {r[b_idx]}" not in r[b_idx + 3]):
+                raise DatasetRefused("a reporting bucket differs from the automated one without an eligible "
+                                     "QA-approved reclassification")
+            key = f"{before} -> {r[b_idx]}"
+            transitions[key] = transitions.get(key, 0) + 1
+    reclassified = sum(transitions.values())
+    if sum(automated.values()) != sum(counts.values()):         # guard: nothing lost, nothing duplicated
+        raise DatasetRefused("automated and reporting bucket totals do not reconcile")
     incomplete = bool(unclassified)
     banner = DRAFT_BANNER
     if incomplete:
@@ -444,6 +531,9 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                 comment_sources[kind].append(lab)
     summary = {
         "unique_records": len(rows), "buckets": counts,
+        "automated_buckets": automated,
+        "qa_approved_reclassifications": reclassified,
+        "reclassification_transitions": dict(sorted(transitions.items())),
         "held_inside_b4": held, "held_without_recorded_reason": held_no_reason,
         "field_findings": None if findings_count is None else int(findings_count),
         "findings_counted_in_buckets": False,
@@ -466,7 +556,11 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                         FINDINGS_NOT_INCLUDED if findings_count is None
                         else str(int(findings_count))],
                        ["Assessment date (D-12)", assessment_date]]
-                    + ([[PROVENANCE_SUMMARY_ROW, str(gaps["total"])]] if gaps["total"] else []))
+                    + ([[PROVENANCE_SUMMARY_ROW, str(gaps["total"])]] if gaps["total"] else [])
+                    + ([[RECLASSIFIED_SUMMARY_ROW, str(reclassified)]]
+                       + [[f"  moved {k}", str(v)] for k, v in sorted(transitions.items())]
+                       + [[AUTOMATED_SUMMARY_ROW, " / ".join(f"{b} {automated[b]}" for b in BUCKETS)]]
+                       if reclassified else []))
     sheets: Dict[str, Any] = {
         "Summary": {"columns": ["Measure", "Value"], "rows": summary_rows,
                     "note": banner},
@@ -504,7 +598,9 @@ def to_csv(dataset: Dict[str, Any]) -> bytes:
         # (review finding, #233, 2026-11-15).
         + f", Not classified {dataset['summary']['unclassified_non_held_count']}"
         + f" = {dataset['summary']['unique_records']} "
-        f"({dataset['summary']['held_inside_b4']} HELD inside B4). "
+        f"({dataset['summary']['held_inside_b4']} HELD inside B4"
+        + (f"; {dataset['summary']['qa_approved_reclassifications']} moved by QA-approved reclassification"
+           if dataset['summary'].get('qa_approved_reclassifications') else "") + "). "
         "Field findings counted separately: "
         + (FINDINGS_NOT_INCLUDED.lower() if dataset['summary']['field_findings'] is None
            else str(dataset['summary']['field_findings'])) + ". "
@@ -835,10 +931,15 @@ def to_html(dataset: Dict[str, Any]) -> str:
     review_head = "".join(f"<th scope='col'>{_th(c)}</th>" for c, _w in PDF_REVIEW_COLUMNS)
     review_html = (
         f"<h2>{PDF_REVIEW_HEADING}</h2>"
-        f"<p class='note'>The automated Bucket and Status in the tables above are unchanged. An analyst "
+        f"<p class='note'>Status in the tables above is unchanged. Bucket is the reporting bucket: the automated "
+        f"classification, replaced by an analyst reclassification of a B4 record to B1, B2 or B3 ONLY after an "
+        f"in-app QA APPROVE by a different user that "
+        f"follows it, at or before the report cutoff (marked in Flag; the original automated bucket is kept in "
+        f"its own Excel/CSV column and in Bucket Basis). An analyst "
         f"determination is shown as a reviewed disposition ONLY after a QA APPROVE that follows it, at or "
         f"before the report cutoff; pending, returned, escalated and superseded decisions are never shown as "
-        f"approved. A HELD record stays HELD and is not released by this report. The SAM public-extract result "
+        f"approved and never change a bucket. A HELD record stays HELD, stays in B4 and is not released by this "
+        f"report. The SAM public-extract result "
         f"is a candidate screen against a dated extract, supplementary to the live SAM.gov API check; a "
         f"candidate is never a confirmed exclusion. Records with no analyst activity and a clean or "
         f"not-established extract result are not listed here; the Excel/CSV carry every record.</p>"

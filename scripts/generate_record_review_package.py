@@ -158,6 +158,10 @@ def compare_baseline(saved: Dict[str, Any], summary: Dict[str, Any], baseline: D
             why.append(f"{summary['unclassified_non_held_count']} non-HELD record(s) have NO usable persisted "
                        f"classification and are shown as NOT CLASSIFIED (listed on the Unclassified sheet); "
                        f"no bucket was assigned to match the baseline")
+        if summary.get("qa_approved_reclassifications"):
+            moves = ", ".join(f"{k}: {v}" for k, v in summary["reclassification_transitions"].items())
+            why.append(f"{summary['qa_approved_reclassifications']} record(s) are reported under a QA-approved "
+                       f"reclassification ({moves}); a baseline of automated buckets does not include those moves")
         for d in diffs:
             d["explanation"] = "; ".join(why) or "no recorded explanation - investigate before relying on the package"
     return diffs

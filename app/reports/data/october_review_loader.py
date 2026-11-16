@@ -86,7 +86,7 @@ from sqlalchemy import and_, exists, func, or_, select, text
 from app.reports.data import reviewed_disposition as rd
 from app.reports.data.october_review_dataset import STORED_COMMENT_KEY
 
-LOADER_VERSION = "1.0.0"
+LOADER_VERSION = "1.1.0"
 BATCH_SIZE = 2000
 BUCKETS = ("B1", "B2", "B3", "B4")
 
@@ -509,6 +509,11 @@ async def load_record_facts(
                     rd.summarize(decisions.get(rev.review_id, []), automated_bucket=bucket).items()
                     if rev is not None else
                     {"disposition": "", "date": "", "qa_status": rd.NOT_REVIEWED, "basis": ""}.items())},
+                # Owner authorization 2026-11-16: an independently QA-approved RECLASSIFY visible at the cutoff is
+                # offered to the dataset as the reporting bucket. `bucket` above stays the persisted automated one.
+                **{"approved_" + k: v for k, v in (
+                    rd.final_bucket_decision(decisions.get(rev.review_id, []), automated_bucket=bucket).items()
+                    if rev is not None else {"bucket": "", "note": ""}.items())},
                 "provisional": bool(ann.get("provisional")),
                 "bucket_annotation": _s(ann.get("bucket_annotation")),
                 "nppes": cells["nppes"], "pecos": cells["pecos"],
@@ -606,8 +611,11 @@ async def load_record_facts(
             "Reviews created before that anchor existed, and entity-only reviews, "
             "carry none: they are not attached, not inferred from a shared entity "
             "and not rewritten - the record stays unclassified and says so.",
-            "Bucket is the persisted classification_bucket only; no analyst "
-            "reclassification and no spreadsheet analysis is substituted.",
+            "Bucket is the reporting bucket: the persisted classification_bucket, replaced only by an "
+            "analyst RECLASSIFY of a B4 record to B1/B2/B3 that a different recorded user approved in the "
+            "QA gate at or before the cutoff (never for a HELD, rejected, not-curated or unclassified "
+            "record). The persisted bucket is kept in its own column; no spreadsheet analysis is "
+            "substituted.",
             "Stored comments (rce_record_comments) are read verbatim by kind when the "
             "store exists; caller-supplied annotations/comments are inputs from retained "
             "files. Comments are commentary only and decide nothing.",
