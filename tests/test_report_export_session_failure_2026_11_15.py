@@ -63,3 +63,21 @@ async def test_a_duplicate_request_race_returns_the_winning_job_instead_of_a_500
 
     assert second["job_id"] == first["job_id"], "the loser of the race is given the winner's job"
     assert second["delivery"], "the delivery label is still returned after the rollback"
+
+
+async def test_a_failed_audit_write_does_not_turn_a_queued_export_into_a_500(rolled_back_db, monkeypatch):
+    """CodeRabbit on #233 (round 3, routes.py:2189) - the SAME cause as above: `record_export_event` is documented as
+    never raising, but on a failed commit it rolls the session back, which expires the persistent `job`; the route then
+    read `job.to_dict()` / `job.id` after the audit call and returned a 500 for a job that is already committed."""
+    db = rolled_back_db
+    intake_id, _, _ = await _seed(db, arc="9.99.777.93")
+
+    async def audit_that_fails_and_rolls_back(session, **_kw):
+        session.expire_all()                              # what db.rollback() does to every persistent instance
+    from app.reports.data import export_audit              # the route imports it at call time from here
+    monkeypatch.setattr(export_audit, "record_export_event", audit_that_fails_and_rolls_back)
+
+    out = await report_routes.export_record_review(_req(intake_id, "csv"), db=db, user=QA)
+
+    assert out["job_id"] and out["status_url"].endswith(out["job_id"])
+    assert out["delivery"] and out["format"] == "csv"

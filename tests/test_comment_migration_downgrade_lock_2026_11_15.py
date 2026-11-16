@@ -37,6 +37,10 @@ async def test_downgrade_locks_the_table_exclusively_before_it_checks_emptiness_
             if (await conn.execute(sa.text("select to_regclass('public.rce_record_comments')"))).scalar() is None:
                 await tx.rollback()
                 pytest.skip("rce_record_comments is not applied in this database")
+            if (await conn.execute(sa.text("select exists (select 1 from public.rce_record_comments)"))).scalar():
+                await tx.rollback()
+                # Stored comments are never deleted to prepare a test; the populated-table refusal has its own test.
+                pytest.skip("rce_record_comments holds rows; the empty-table ordering check needs an empty table")
             statements = []
             sa.event.listen(conn.sync_connection, "before_cursor_execute",
                             lambda c, cur, stmt, params, ctx, many: statements.append(" ".join(stmt.split())))

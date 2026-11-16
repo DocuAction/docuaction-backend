@@ -478,6 +478,19 @@ def _dimension_medicare(profile: ApplicabilityProfile,
 
 # ── D3 EXCLUSION / DEBARMENT / REVOCATION ────────────────────────────────────
 
+def _extract_subject_identifier(sam_extract: SourceResult) -> Optional[str]:
+    """What the extract screen was queried BY, in the bulk path's own `key=value` vocabulary (`npi=` / `org=`), so
+    every identity rule that reads `query_identifier` (single-record selection, bulk name-screen withholding) can apply to
+    this item like any other. The NPI is the subject when present (a name leg never becomes the subject of an NPI
+    row); otherwise the organisation name. No subject -> None (such a row is never attributed to any record)."""
+    qp = getattr(sam_extract, "query_params", None) or {}
+    npi = str(qp.get("npi") or "").strip()
+    if npi:
+        return f"npi={npi}"
+    org = str(qp.get("org") or "").strip()
+    return f"org={org}" if org else None
+
+
 def sam_extract_evidence_items(
     dim: str, sam_extract: Optional[SourceResult],
 ) -> "tuple[List[EvidenceItem], bool]":
@@ -504,6 +517,7 @@ def sam_extract_evidence_items(
         return [EvidenceItem(
             dimension=dim, source="SAM_EXTRACT_SUPPLEMENTARY",
             disposition=Disposition.REVIEW.value if candidate else Disposition.PASS.value,
+            query_identifier=_extract_subject_identifier(sam_extract),
             query_timestamp=sam_extract.query_timestamp,
             dataset_version_anchor=sam_extract.api_version,
             fields_evaluated=["npi", "normalized_business_name"],
@@ -526,6 +540,7 @@ def sam_extract_evidence_items(
     return [EvidenceItem(
         dimension=dim, source="SAM_EXTRACT_SUPPLEMENTARY",
         disposition=Disposition.UNAVAILABLE.value,
+        query_identifier=_extract_subject_identifier(sam_extract),
         rule_applied="SAM_PUBLIC_EXTRACT_SUPPLEMENTARY_SCREEN",
         note=(sam_extract.error or
               "SAM public extract supplementary screen could not be performed."),
