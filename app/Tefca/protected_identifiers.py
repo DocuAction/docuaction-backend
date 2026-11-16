@@ -156,6 +156,24 @@ def _quoted_key_hits(text: str):
             yield m
 
 
+#: PARITY WITH THE FIELD RULE (1.5.2). The label regex above bounds its trailing name tokens (8) to stay linear, so a name the
+#: FIELD rule protects (`EIN` + 9 tokens) used to escape text detection. One cause behind the 1.4.1 bound, the 1.5.1 separators
+#: and this: the text scanner re-implemented the field tokenizer. This pass removes the divergence by judging a whole NAME RUN
+#: (letters, digits and the joiners `_ - . / | :`, possessive so each character is consumed once -> linear at any length) with
+#: `is_protected_field` itself, then requiring a value to follow it. The run is not allowed to be the value (`EIN_12-3456789`
+#: keeps its value inside the bounded label above).
+_NAME_RUN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9_\-./|:]*+")
+_VALUE_AFTER_RUN = re.compile(rf"{_GAP}(?P<val>{_VALUE})", re.IGNORECASE)
+
+
+def _name_run_hits(text: str):
+    for run in _NAME_RUN.finditer(text):
+        if len(run.group(0)) > 8 and is_protected_field(run.group(0)):    # shorter names are the bounded label's job
+            hit = _VALUE_AFTER_RUN.match(text, run.end())
+            if hit:
+                yield hit
+
+
 class ProtectedIdentifierEgressRefused(RuntimeError):
     """Text bound for an AI transport carried a tax identifier. Never retried."""
 
@@ -222,7 +240,7 @@ def find_in_text(text: Any) -> List[str]:
     if not isinstance(text, str) or not text:
         return []
     reasons = []
-    if _LABELLED.search(text) or any(True for _ in _quoted_key_hits(text)):
+    if _LABELLED.search(text) or any(True for _ in _quoted_key_hits(text)) or any(True for _ in _name_run_hits(text)):
         reasons.append("labelled_tax_identifier")
     if _EIN_SHAPE.search(text):
         reasons.append("ein_shaped_value")
@@ -236,7 +254,8 @@ def redact_text(text: str) -> str:
     # The label stays (it says what was withheld); only the value is replaced.
     text = _LABELLED.sub(lambda m: m.group(1) + REDACTED, text)
     spans = [(m.start("val"), m.end("val")) for m in _quoted_key_hits(text)]
-    for start, end in reversed(spans):
+    spans += [(m.start("val"), m.end("val")) for m in _name_run_hits(text)]
+    for start, end in sorted(set(spans), reverse=True):
         text = text[:start] + REDACTED + text[end:]
     return _EIN_SHAPE.sub(REDACTED, text)
 
