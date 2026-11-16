@@ -574,3 +574,62 @@ async def test_conflicting_fhir_npi_identifiers_are_not_overwritten(rolled_back_
     build.assert_not_awaited()
     assert entity == before
     _untouched(await _state(db, ent, rec))
+
+
+# -- the preflight reads: a real database failure in one item must not lose the batch (CodeRabbit 5916281973) --------
+
+@pytest.mark.parametrize("failed_read", ["anchor", "source"])
+async def test_a_failed_preflight_read_fails_one_item_and_the_batch_session_stays_usable(rolled_back_db, monkeypatch, failed_read):
+    """`validated_delivery_context` reads the anchor and the delivered record. When PostgreSQL itself rejects one of
+    those reads for one item (a real statement error, not a Python exception), that item ends ERROR with nothing
+    persisted, the NEXT item is still processed, and the batch flushes its summary on the same session."""
+    db = rolled_back_db
+    ent_fail = await seed_entity(db, oid=f"{SYN}-PF-A-{uuid.uuid4().hex[:8]}", name=f"{SYN} preflight a", npi=NPI)
+    ent_ok = await seed_entity(db, oid=f"{SYN}-PF-B-{uuid.uuid4().hex[:8]}", name=f"{SYN} preflight b", npi=OTHER_NPI)
+    rows = make_rows(2, arc="9.99.777.88")
+    rows[0]["NPI"], rows[1]["NPI"] = NPI, OTHER_NPI
+    intake_id, _ = await seed_intake(db, rows, with_job=False)
+    recs = (await db.execute(select(m.RceSourceRecord).where(
+        m.RceSourceRecord.source_intake_id == intake_id))).scalars().all()
+    by_ref = {r.source_rce_id: r for r in recs}
+    rec_fail, rec_ok = by_ref[rows[0]["id"]], by_ref[rows[1]["id"]]
+    for rec, ent in ((rec_fail, ent_fail), (rec_ok, ent_ok)):
+        db.add(m.RceCuratedRecord(id=uuid.uuid4(), source_intake_id=intake_id, source_record_id=rec.id,
+                                  record_status="CLEAN", rce_org_oid=rec.source_rce_id, transformation_version="test",
+                                  canonical_entity_id=ent, promoted_at=T0))
+    await db.flush()
+    job = await _real_job(db, intake_id, [(ent_fail, rec_fail.source_rce_id), (ent_ok, rec_ok.source_rce_id)])
+    job_id, fail_ref, fail_rec_id = job.id, rec_fail.source_rce_id, rec_fail.id
+
+    async def _resolve(_db, ref):
+        return _resolved(ent_fail, NPI) if ref == fail_ref else _resolved(ent_ok, OTHER_NPI)
+
+    original_anchor, original_get = vf.anchor_for_reference, db.get
+
+    async def broken_anchor(db_, *, intake_id, ref, entity_id):
+        if ref == fail_ref:
+            await db_.execute(text("SELECT 1 / 0"))                 # PostgreSQL rejects the statement
+        return await original_anchor(db_, intake_id=intake_id, ref=ref, entity_id=entity_id)
+
+    async def broken_get(model, ident, *args, **kwargs):
+        if model is m.RceSourceRecord and ident == fail_rec_id:
+            await db.execute(text("SELECT 1 / 0"))
+        return await original_get(model, ident, *args, **kwargs)
+
+    with monkeypatch.context() as mp:
+        if failed_read == "anchor":
+            mp.setattr(vf, "anchor_for_reference", broken_anchor)
+        else:
+            mp.setattr(db, "get", broken_get)
+        out = await _run_job(db, mp, job, _resolve)
+
+    assert await db.scalar(text("SELECT 41 + 1")) == 42                     # the batch session is still usable
+    assert out["summary"]["by_outcome"] == {rm.ITEM_ERROR: 1, rm.OUTCOME_RISK_SIGNAL: 1}, out["summary"]
+    assert out["complete"] is True
+    items = {i.entity_ref: i for i in (await db.execute(select(rm.RceRecheckItem).where(
+        rm.RceRecheckItem.job_id == job_id))).scalars().all()}
+    assert items[fail_ref].state == rm.ITEM_ERROR and items[fail_ref].outcome is None
+    assert items[rec_ok.source_rce_id].state == rm.ITEM_DONE
+    _untouched(await _state(db, ent_fail, rec_fail))                        # nothing persisted for the failed item
+    ok = await _state(db, ent_ok, rec_ok)                                   # the other item was fully processed
+    assert ok["evidence"] > 0 and [i.source_record_id for i in ok["issues"]] == [rec_ok.id]
