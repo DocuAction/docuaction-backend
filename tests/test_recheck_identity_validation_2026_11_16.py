@@ -489,3 +489,88 @@ async def test_the_nppes_derived_helpers_write_nothing_without_an_npi(rolled_bac
         "nppes": {"npi_outcome": vf.NPI_NOT_FOUND, "lookup_identifier": npi}}) is None
     st = await _state(db, ent, rec)
     assert st["issues"] == [] and st["identifier"] == ["active"]
+
+
+@pytest.mark.parametrize("scope", ["full", "enrollment_only"])
+async def test_conflicting_rce_and_fhir_npis_refuse_before_any_probe(rolled_back_db, monkeypatch, scope):
+    from app.tefca_registry.rce import rechecks
+    db = rolled_back_db
+    ent, intake, (rec,) = await _one_delivery(db, "9.99.777.84", entity_npi=NPI, delivered_npi=NPI)
+    entity = _resolved(ent, OTHER_NPI)
+    entity["_rce"] = {"NPI": NPI}
+    enrollment = AsyncMock()
+    monkeypatch.setattr(rechecks, "_enrollment_only_evidence", enrollment)
+    pinned = {"evidence_scope": rechecks.SCOPE_CMS_ENROLLMENT_ONLY} if scope == "enrollment_only" else {}
+    item, writer, build = await _recheck(db, monkeypatch, ent=ent, intake=intake,
+        ref=rec.source_rce_id, resolved=entity, pinned=pinned)
+    _refused(item)
+    writer.assert_not_awaited()
+    build.assert_not_awaited()
+    enrollment.assert_not_awaited()
+    _untouched(await _state(db, ent, rec))
+
+
+@pytest.mark.parametrize("representation", ["rce_only", "fhir_only", "matching", "blank_first"])
+async def test_recheck_probes_share_one_npi_without_mutating_the_resolver_result(rolled_back_db, monkeypatch, representation):
+    from copy import deepcopy
+    from app.Tefca.connectors import _extract_npi
+    from app.Tefca.rce_fields import rce_npi
+    db = rolled_back_db
+    ent, intake, (rec,) = await _one_delivery(db, "9.99.777.85", entity_npi=NPI, delivered_npi=NPI)
+    entity = _resolved(ent, None if representation == "rce_only" else NPI)
+    if representation != "fhir_only":
+        entity["_rce"] = {"NPI": NPI}
+    if representation == "blank_first":
+        entity["identifier"].insert(0, {"system": "http://hl7.org/fhir/sid/us-npi", "value": ""})
+    before = deepcopy(entity)
+    item, writer, build = await _recheck(db, monkeypatch, ent=ent, intake=intake,
+        ref=rec.source_rce_id, resolved=entity)
+    assert item.outcome == rm.OUTCOME_RISK_SIGNAL
+    probed = build.await_args.args[0]
+    assert _extract_npi(probed) == rce_npi(probed) == writer.await_args.kwargs["npi"] == NPI
+    assert entity == before
+
+
+@pytest.mark.parametrize("failed_read", ["anchor", "source"])
+async def test_a_failed_anchor_read_does_not_poison_the_callers_transaction(rolled_back_db, monkeypatch, failed_read):
+    db = rolled_back_db
+    ent, intake, (rec,) = await _one_delivery(db, "9.99.777.86", entity_npi=NPI, delivered_npi=NPI)
+    original_anchor = vf._curated_for_anchor
+    original_get = db.get
+
+    async def broken_anchor(*args, **kwargs):
+        await db.execute(text("SELECT 1 / 0"))
+
+    async def broken_get(model, *args, **kwargs):
+        if model is m.RceSourceRecord:
+            await db.execute(text("SELECT 1 / 0"))
+        return await original_get(model, *args, **kwargs)
+
+    with monkeypatch.context() as mp:
+        if failed_read == "anchor":
+            mp.setattr(vf, "_curated_for_anchor", broken_anchor)
+        else:
+            mp.setattr(db, "get", broken_get)
+        from sqlalchemy.exc import DBAPIError
+        with pytest.raises(DBAPIError):
+            await vf.record_npi_outcome(db, entity_id=ent, npi=NPI, outcome=vf.NPI_DEACTIVATED,
+                source_record_id=rec.id, intake_id=intake)
+    assert await db.scalar(text("SELECT 41 + 1")) == 42
+    assert await original_anchor(db, ent, rec.id, intake) is not None
+    _untouched(await _state(db, ent, rec))
+
+
+async def test_conflicting_fhir_npi_identifiers_are_not_overwritten(rolled_back_db, monkeypatch):
+    from copy import deepcopy
+    db = rolled_back_db
+    ent, intake, (rec,) = await _one_delivery(db, "9.99.777.87", entity_npi=NPI, delivered_npi=NPI)
+    entity = _resolved(ent)
+    entity["identifier"].append({"system": "http://hl7.org/fhir/sid/us-npi", "value": OTHER_NPI})
+    before = deepcopy(entity)
+    item, writer, build = await _recheck(db, monkeypatch, ent=ent, intake=intake,
+        ref=rec.source_rce_id, resolved=entity)
+    _refused(item)
+    writer.assert_not_awaited()
+    build.assert_not_awaited()
+    assert entity == before
+    _untouched(await _state(db, ent, rec))
