@@ -527,6 +527,18 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
         item.state, item.outcome, item.processed_at = rm.ITEM_DONE, rm.OUTCOME_NOT_RESOLVED, now
         item.detail = {"reason": "entity reference did not resolve"}
         return
+    # IDENTITY FIRST: a refusal persists nothing - no evidence, no ledger row, no identifier-status or entity-status
+    # change (CodeRabbit on #233, rounds 5-6).
+    from app.Tefca import rce_fields
+    from app.Tefca.connectors import _extract_npi
+    probe_npi = (rce_fields.rce_npi(entity) or _extract_npi(entity) or "").strip()   # what the probes are asked about
+    context, refusal = await vf.validated_delivery_context(
+        db, intake_id=job.intake_id, ref=item.entity_ref, queued_entity_id=item.entity_id, entity=entity,
+        probe_npi=probe_npi)
+    if context is None:
+        item.state, item.outcome, item.processed_at = rm.ITEM_DONE, rm.OUTCOME_IDENTITY_REFUSED, now
+        item.detail = {"reason": refusal, "persisted": False}
+        return
     scope = (job.pinned or {}).get("evidence_scope") or SCOPE_FULL_BUILD
     if scope == SCOPE_CMS_ENROLLMENT_ONLY:
         from app.Tefca.models import TEFCAPPEFSnapshot
@@ -551,21 +563,16 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
     for row in rows:
         row["review_cycle_id"] = None
         db.add(TEFCADimensionEvidence(**row))
+    ledger_failure = None
     try:
-        from app.Tefca import rce_fields
-        # Anchored to the curated record of the job's delivery that carries this item's reference (exactly one,
-        # linking this entity); otherwise nothing is written - never the entity's latest record in another delivery.
-        # The NPI and evidence above belong to the entity the reference resolves to NOW. They are written under the
-        # queued entity's record only when that is the same entity; a reference that has since resolved to another
-        # entity (or has no registry identity) gets no anchor, so nothing is written (CodeRabbit round 5).
-        resolved_id = entity.get("_registry_entity_id")
-        same_entity = resolved_id is not None and str(resolved_id) == str(item.entity_id)
-        anchor = (await vf.anchor_for_reference(db, intake_id=job.intake_id, ref=item.entity_ref,
-                                                entity_id=item.entity_id)) if same_entity else None
-        await vf.record_from_evidence(db, entity_id=item.entity_id,
-                                      npi=rce_fields.rce_npi(entity), evidence=evidence,
-                                      source_record_id=anchor, intake_id=job.intake_id)
+        # The ledger row belongs to the DELIVERED record validated above (same NPI as the probes used). The writer
+        # wraps its identifier change and its insert in one savepoint, so a failure leaves neither behind and the
+        # batch session usable; the evidence appended above stays. A failure is NOT silent: it is flagged on the
+        # item and counted in the job summary (class name only, never message text).
+        await vf.record_from_evidence(db, entity_id=item.entity_id, npi=probe_npi or None, evidence=evidence,
+                                      source_record_id=context["source_record_id"], intake_id=job.intake_id)
     except Exception as exc:  # noqa: BLE001 -- the ledger must not fail a recheck
+        ledger_failure = type(exc).__name__
         logger.error("recheck: NPI outcome not recorded for %s: %s", item.entity_id,
                      type(exc).__name__, exc_info=True)
 
@@ -583,6 +590,9 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
     item.detail = {"evidence_generation": evidence.get("generated_at"),
                    "rows_appended": len(rows),
                    "entity_status_changed_to_verified": False}
+    if ledger_failure:
+        item.detail["ledger_recorded"] = False
+        item.detail["ledger_error_class"] = ledger_failure
 
 
 async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str, Any]:
@@ -630,6 +640,13 @@ async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str
     pending = int(counts.get(rm.ITEM_PENDING, 0))
     job.summary = {"by_outcome": {k: int(v) for k, v in counts.items()},
                    "pending": pending,
+                   # Items refused at identity validation: nothing was gathered or persisted for them.
+                   "identity_refused": int(counts.get(rm.OUTCOME_IDENTITY_REFUSED, 0)),
+                   # Items whose evidence was appended but whose NPI ledger write failed (see item detail).
+                   "ledger_not_recorded": int((await db.execute(
+                       select(func.count()).select_from(RceRecheckItem).where(
+                           RceRecheckItem.job_id == job.id,
+                           RceRecheckItem.detail["ledger_recorded"].astext == "false"))).scalar() or 0),
                    "note": "ANSWERED_NO_SIGNAL is a re-evaluation result, not a "
                            "verification pass; no entity was marked verified."}
 
@@ -651,17 +668,28 @@ async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str
         # entity was actually asked -- every reference failed to resolve, or
         # every lookup raised -- reported SUCCEEDED / "Finished". Nothing was
         # re-evaluated, so that is a failure with a reason, not a success.
-        not_asked = int(counts.get(rm.OUTCOME_NOT_RESOLVED, 0)) + int(counts.get(rm.ITEM_ERROR, 0))
+        refused = int(counts.get(rm.OUTCOME_IDENTITY_REFUSED, 0))
+        not_asked = (int(counts.get(rm.OUTCOME_NOT_RESOLVED, 0)) + int(counts.get(rm.ITEM_ERROR, 0)) + refused)
         total_items = sum(int(v) for v in counts.values())
         job.completed_at = datetime.utcnow()
-        if total_items and not_asked == total_items:
+        if total_items and refused == total_items:
+            job.state = rm.STATE_FAILED
+            job.error_reason = (
+                f"no entity could be re-evaluated: all {refused} item(s) were refused at identity validation "
+                f"(the reference no longer maps to the queued entity, the delivery has no single delivered "
+                f"record for it, or the probes would use an NPI the delivery did not submit). Nothing was "
+                f"persisted for them and the source was not asked.")
+        elif total_items and not_asked == total_items:
             job.state = rm.STATE_FAILED
             job.error_reason = (
                 f"no entity could be re-evaluated: {int(counts.get(rm.OUTCOME_NOT_RESOLVED, 0))} "
                 f"reference(s) did not resolve in the registry and "
                 f"{int(counts.get(rm.ITEM_ERROR, 0))} lookup(s) raised an error. The source "
                 f"was not asked. Check the entity resolver configuration "
-                f"(ENTITY_RESOLVER_SOURCE) before requesting another recheck.")
+                f"(ENTITY_RESOLVER_SOURCE) before requesting another recheck."
+                + (f" {refused} item(s) were refused at identity validation (the reference no longer maps to "
+                   f"the queued entity, the delivery has no single delivered record for it, or its submitted "
+                   f"NPI differs); nothing was persisted for them." if refused else ""))
         else:
             job.state = rm.STATE_SUCCEEDED
     await db.commit()

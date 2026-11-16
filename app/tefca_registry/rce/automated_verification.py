@@ -310,6 +310,16 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
         return {"ref": ref, "outcome": OUTCOME_NOT_ELIGIBLE,
                 "reason": "entity did not resolve for this reference"}
 
+    # The shared identity validation decides whether an NPI outcome may be written for this delivery. It does NOT
+    # refuse the attempt here: coverage has no attempt marker other than the entity's evidence rows (the candidate
+    # query reselects an entity until it has one), so refusing without persisting anything would reselect the same
+    # entity every batch and never complete. Evidence persistence is therefore unchanged; only the ledger write and
+    # the identifier-status change it carries require a validated delivered-record context.
+    from app.Tefca import rce_fields
+    from app.Tefca.connectors import _extract_npi
+    probe_npi = (rce_fields.rce_npi(entity) or _extract_npi(entity) or "").strip()
+    context, identity_refusal = await vf.validated_delivery_context(
+        db, intake_id=intake_id, ref=ref, queued_entity_id=canonical_entity_id, entity=entity, probe_npi=probe_npi)
     entity_uuid = entity.get("_registry_entity_id") or canonical_entity_id
     service = EvidenceService(local_store=local_store or make_local_store(db))
 
@@ -328,18 +338,17 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
         row["review_cycle_id"] = None
         db.add(TEFCADimensionEvidence(**row))
 
+    ledger_failure = None
     if entity_uuid is not None:
         try:
             from app.services.npi_validator import is_valid_npi  # noqa: F401 - availability check only
-            npi = None
-            from app.Tefca import rce_fields
-            npi = rce_fields.rce_npi(entity)
-            # Anchored to the curated record of THIS delivery that carries `ref` (exactly one, linking this entity);
-            # an entity promoted by several deliveries never receives its finding on another delivery's ledger.
-            anchor = await vf.anchor_for_reference(db, intake_id=intake_id, ref=ref, entity_id=entity_uuid)
-            await vf.record_from_evidence(db, entity_id=entity_uuid, npi=npi, evidence=evidence,
-                                          source_record_id=anchor, intake_id=intake_id)
+            # Only on the delivered record the shared validation established (the writer owns the savepoint around
+            # its identifier change and insert). No validated context -> no NPI outcome for this delivery.
+            if context is not None:
+                await vf.record_from_evidence(db, entity_id=entity_uuid, npi=probe_npi or None, evidence=evidence,
+                                              source_record_id=context["source_record_id"], intake_id=intake_id)
         except Exception as exc:  # noqa: BLE001 - the issue ledger must not fail coverage
+            ledger_failure = type(exc).__name__
             logger.error("automated coverage: NPI outcome not recorded for %s: %s",
                         entity_uuid, type(exc).__name__, exc_info=True)
         try:
@@ -367,8 +376,14 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
             row.updated_at = datetime.utcnow()
 
     await db.flush()
-    return {"ref": ref, "entity_id": str(entity_uuid) if entity_uuid else None,
-            "outcome": outcome, "dimensions_recorded": len(rows)}
+    result = {"ref": ref, "entity_id": str(entity_uuid) if entity_uuid else None,
+              "outcome": outcome, "dimensions_recorded": len(rows)}
+    if context is None:
+        result["npi_outcome_not_anchored"] = identity_refusal      # no ledger row / identifier change was attempted
+    if ledger_failure:
+        result["ledger_recorded"] = False                          # class name only, never message text
+        result["ledger_error_class"] = ledger_failure
+    return result
 
 
 async def record_sam_extract_attempt(db, *, ref: str,
@@ -562,6 +577,9 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
         "skipped_lock": False,
         "processed_this_call": len(outcomes),
         "by_outcome": by_outcome,
+        # Attempts whose NPI outcome was not written: no validated delivered-record context / the write failed.
+        "npi_outcome_not_anchored": sum(1 for o in outcomes if o.get("npi_outcome_not_anchored")),
+        "ledger_not_recorded": sum(1 for o in outcomes if o.get("ledger_recorded") is False),
         "outcomes": outcomes,
         **progress,
         "complete": progress["remaining"] == 0,
