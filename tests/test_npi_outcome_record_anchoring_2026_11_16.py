@@ -32,7 +32,9 @@ def _not_found_evidence() -> dict:
 
 async def _delivery(db, arc: str, entity, promoted_at: datetime):
     """One synthetic delivery with ONE curated record linking the shared `entity`."""
-    intake_id, _ = await seed_intake(db, make_rows(1, arc=arc), with_job=False)
+    rows = make_rows(1, arc=arc)
+    rows[0]["NPI"] = NPI                      # the delivered NPI equals the entity's registered NPI (single-record review check)
+    intake_id, _ = await seed_intake(db, rows, with_job=False)
     rec = (await db.execute(select(m.RceSourceRecord).where(
         m.RceSourceRecord.source_intake_id == intake_id))).scalars().one()
     db.add(m.RceCuratedRecord(
@@ -149,7 +151,8 @@ from unittest.mock import AsyncMock, patch  # noqa: E402
 
 
 def _entity_dict(ent):
-    return {"_registry_entity_id": ent, "id": str(ent), "name": f"{SYN} shared entity"}
+    return {"_registry_entity_id": ent, "id": str(ent), "name": f"{SYN} shared entity",
+            "identifier": [{"system": "http://hl7.org/fhir/sid/us-npi", "value": NPI}]}
 
 
 @pytest.mark.parametrize("a_promoted_later", [True, False])
@@ -198,4 +201,80 @@ async def test_the_arc_pipeline_writes_the_finding_on_the_verified_deliverys_rec
     # without a delivery (no intake) the reference cannot be anchored: nothing is written anywhere
     with patch.object(arc_pipeline, "_gather_all_evidence", new=AsyncMock(return_value=gathered)):
         await arc_pipeline.verify_and_classify(db, [rec_b.source_rce_id], intake_id=None, actor="anchor-test")
+    assert len(await _issues(db, rec_b)) == 1 and await _issues(db, rec_a) == []
+
+
+# ── the single-record review caller (review_service.run_review) ──────────────────────────────────────────────────
+
+class _User:
+    role = "reviewer"
+    email = "anchor-test-reviewer@synthetic-test.docuaction.invalid"
+    id = None
+
+
+def _wire_review(monkeypatch):
+    """Real run_review, real database; only the NPPES probe is replaced with a NOT_FOUND answer."""
+    from app.tefca_registry import review_service as rs
+
+    async def _probe(_db, _entity_id, **_kw):
+        return {"nppes": {"status": "not_found", "npi_outcome": vf.NPI_NOT_FOUND,
+                          "npi_outcome_detail": "NPI not present in NPPES.", "lookup_identifier": NPI}}
+    monkeypatch.setattr(rs, "probe_sources", _probe)
+    monkeypatch.setattr(rs._classifier, "_rules", None)
+    monkeypatch.setattr(rs._classifier, "_loaded_at", 0.0)
+    return rs
+
+
+@pytest.mark.parametrize("a_promoted_later", [True, False])
+async def test_run_review_writes_the_finding_on_the_anchored_deliverys_record(rolled_back_db, monkeypatch, a_promoted_later):
+    from app.tefca_registry import models as reg
+    db = rolled_back_db
+    rs = _wire_review(monkeypatch)
+    ent, (_ia, rec_a), (_ib, rec_b) = await _two_deliveries(db, a_promoted_later=a_promoted_later)
+    entity = await db.get(reg.TefcaRegEntity, ent)
+    await rs.run_review(db, entity, user=_User(), source_record_id=rec_b.id)
+    assert [i.source_record_id for i in await _issues(db, rec_b)] == [rec_b.id]
+    assert await _issues(db, rec_a) == []                                   # never the other delivery's ledger
+
+
+@pytest.mark.parametrize("a_promoted_later", [True, False])
+async def test_an_unanchored_or_mismatched_run_review_writes_no_finding(rolled_back_db, monkeypatch, a_promoted_later):
+    from app.tefca_registry import models as reg
+    db = rolled_back_db
+    rs = _wire_review(monkeypatch)
+    ent, (_ia, rec_a), (_ib, rec_b) = await _two_deliveries(db, a_promoted_later=a_promoted_later)
+    entity = await db.get(reg.TefcaRegEntity, ent)
+    await rs.run_review(db, entity, user=_User())                           # entity-level review: no record anchor
+    assert await _issues(db, rec_a) == [] and await _issues(db, rec_b) == []
+    other = await seed_entity(db, oid=f"{SYN}-ANCHOR-{uuid.uuid4().hex[:8]}", name=f"{SYN} other entity", npi=NPI)
+    other_entity = await db.get(reg.TefcaRegEntity, other)
+    with pytest.raises(ValueError):                                         # a record that is not this entity's is refused
+        await rs.run_review(db, other_entity, user=_User(), source_record_id=rec_b.id)
+    assert await _issues(db, rec_a) == [] and await _issues(db, rec_b) == []
+
+
+# ── record_from_sources (run_review's NPPES-outcome writer): same anchor, same validation ────────────────────────
+
+_SOURCES = {"nppes": {"status": "not_found", "npi_outcome": vf.NPI_NOT_FOUND,
+                      "npi_outcome_detail": "NPI not present in NPPES.", "lookup_identifier": NPI}}
+
+
+@pytest.mark.parametrize("a_promoted_later", [True, False])
+async def test_record_from_sources_enforces_the_same_anchor_and_scope(rolled_back_db, a_promoted_later):
+    db = rolled_back_db
+    ent, (intake_a, rec_a), (intake_b, rec_b) = await _two_deliveries(db, a_promoted_later=a_promoted_later)
+    # missing scope: nothing written, whatever the entity's other deliveries hold
+    assert await vf.record_from_sources(db, entity_id=ent, sources=_SOURCES) is None
+    # invalid scope: B's record named with A's delivery; A's record named with B's delivery; another entity
+    assert await vf.record_from_sources(db, entity_id=ent, sources=_SOURCES,
+                                        source_record_id=rec_b.id, intake_id=intake_a) is None
+    assert await vf.record_from_sources(db, entity_id=ent, sources=_SOURCES,
+                                        source_record_id=rec_a.id, intake_id=intake_b) is None
+    other = await seed_entity(db, oid=f"{SYN}-ANCHOR-{uuid.uuid4().hex[:8]}", name=f"{SYN} other entity", npi=NPI)
+    assert await vf.record_from_sources(db, entity_id=other, sources=_SOURCES, source_record_id=rec_b.id) is None
+    assert await _issues(db, rec_a) == [] and await _issues(db, rec_b) == []
+    # valid scope: the same record serves insertion and duplicate detection
+    first = await vf.record_from_sources(db, entity_id=ent, sources=_SOURCES, source_record_id=rec_b.id, intake_id=intake_b)
+    again = await vf.record_from_sources(db, entity_id=ent, sources=_SOURCES, source_record_id=rec_b.id, intake_id=intake_b)
+    assert first is not None and again.id == first.id and first.source_record_id == rec_b.id
     assert len(await _issues(db, rec_b)) == 1 and await _issues(db, rec_a) == []
