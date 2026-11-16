@@ -195,7 +195,15 @@ def _scan_work(text):
 
 
 def _assert_linear(make, sizes):
-    """For doubled input, Python traversal work must grow by less than threefold."""
+    """For doubled input, Python traversal work must grow by less than threefold, and the LARGEST input must still
+    finish inside the wall-clock guard (an upper bound only: a fast correct scan passes). The step count cannot see
+    work done inside one regex call; the wall-clock guard is what bounds that."""
+    largest = make(sizes[-1])
+    started = time.perf_counter()
+    find_in_text(largest)
+    redact_text(largest)
+    took = time.perf_counter() - started
+    assert took < 15.0, (sizes, took)
     work = [_scan_work(make(n)) for n in sizes]
     assert all(steps > 0 for steps in work), (sizes, work)
     assert all(larger < 3 * smaller for smaller, larger in zip(work, work[1:])), (sizes, work)
