@@ -135,3 +135,29 @@ async def test_a_record_specific_review_selects_the_extract_row_keyed_by_its_own
     mine = await rs.latest_persisted_extract_evidence(db, ent, accept=accept_for(NPI))
     assert mine is not None and mine.query_identifier == f"npi={NPI}"            # not hidden by the newer foreign/null rows
     assert await rs.latest_persisted_extract_evidence(db, ent, accept=accept_for("")) is None
+
+
+# ── CodeRabbit round 5 (4581490300): an NPI the screen did not use is not the row's subject ──────────────────────────
+INVALID_NPI = "1234567890"      # 10 digits, fails the Luhn check: SAMExtractConnector.screen skips the NPI leg
+
+
+@pytest.mark.parametrize("kw, expected", [
+    (dict(npi=INVALID_NPI, org=NAME), f"org={NAME}"),     # only the name leg ran: the organisation is the subject
+    (dict(npi=INVALID_NPI), None),                          # nothing valid was queried: no subject at all
+    (dict(npi=NPI, org=NAME), f"npi={NPI}"),                # a valid NPI is still the subject
+])
+def test_an_invalid_npi_is_never_the_subject_of_the_extract_row(kw, expected):
+    assert _item(**kw).query_identifier == expected
+
+
+def test_a_name_only_result_labelled_with_an_invalid_npi_is_not_accepted_for_a_record_carrying_that_npi():
+    item = _item(npi=INVALID_NPI, org=NAME)
+    assert item.query_identifier == f"org={NAME}"
+    # the record carries the invalid NPI but is a DIFFERENT organisation: the name leg is not its answer
+    assert not rs.persisted_evidence_is_for_record(
+        "SAM_EXTRACT_SUPPLEMENTARY", item.query_identifier, submitted_npi=INVALID_NPI,
+        record_identity=rs.record_name_identity("Another Org"), names_usable=True)
+    # and the same row is still accepted for the organisation it actually screened by name
+    assert rs.persisted_evidence_is_for_record(
+        "SAM_EXTRACT_SUPPLEMENTARY", item.query_identifier, submitted_npi=INVALID_NPI,
+        record_identity=rs.record_name_identity(NAME), names_usable=True)

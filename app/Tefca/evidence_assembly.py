@@ -47,6 +47,7 @@ from app.Tefca.cms_ppef import (
     PPEFComponent,
 )
 from app.Tefca.connectors import SourceResult, _name_similarity
+from app.services.npi_validator import npi_rejection_reason
 from app.Tefca.evidence_dimensions import (
     Applicability,
     Dimension,
@@ -485,7 +486,7 @@ def _extract_subject_identifier(sam_extract: SourceResult) -> Optional[str]:
     row); otherwise the organisation name. No subject -> None (such a row is never attributed to any record)."""
     qp = getattr(sam_extract, "query_params", None) or {}
     npi = str(qp.get("npi") or "").strip()
-    if npi:
+    if npi and npi_rejection_reason(npi) is None:      # the same validity gate the screen uses: an NPI it skipped is no subject
         return f"npi={npi}"
     org = str(qp.get("org") or "").strip()
     return f"org={org}" if org else None
