@@ -12,6 +12,10 @@ CASES = [
     f"invalid input syntax for type uuid: \"(sqlalchemy.{SECRET})\"",
     f"duplicate key value for \"<class '{SECRET}'>\" in table x",
     f"CURATION did not complete: DataError: row \"(asyncpg.{SECRET})\" rejected",
+    # CodeRabbit (#221 thread 4579261901): text that is discarded in FRONT of the marker without a quote check
+    f"invalid input syntax for type uuid: \"prefix (sqlalchemy.{SECRET})\"",
+    f"invalid input syntax for type uuid: prefix (sqlalchemy.{SECRET})",
+    f"STAGE: ValueError: row prefix (psycopg2.{SECRET}) rejected",
 ]
 
 
