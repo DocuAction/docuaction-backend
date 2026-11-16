@@ -59,9 +59,11 @@ async def test_journey_qa_live(db_required):
     from app.core.database import async_session_maker
     from app.tefca_registry.rce import post_promotion_verification as ppv
     async with async_session_maker() as db:
+        from rce_traceability_support import anchor_for_entity
         await ppv.record_finding(
             db, entity_id=entity_b, outcome="NPI_DEACTIVATED",
-            detail={"source": "journey-live-test"}, actor="journey-live-seed")
+            detail={"source": "journey-live-test"}, actor="journey-live-seed",
+            **await anchor_for_entity(db, entity_b))
         await db.commit()
     print(f"[B] genuine blocking finding recorded against {entity_b}")
 
