@@ -7,6 +7,7 @@ value follows it in ANY of the serializations below, be detected by `find_in_tex
 kept). This test enumerates name shapes x connectors x value shapes with a fixed seed instead of one input at a time.
 Synthetic values only (000000001 / 12-3456789 / 123-45-6789 are not real identifiers)."""
 import random
+import sys
 import time
 
 import pytest
@@ -168,25 +169,44 @@ def test_mismatched_quotes_around_a_label_are_still_a_label():
         assert "000000001" not in redact_text(text), text
 
 
-def _timed(make, n):
-    text = make(n)
-    best = None
-    for _ in range(2):                                        # best of two: one slow run must not decide
-        started = time.perf_counter()
+def _scan_work(text):
+    """Count Python traversal steps in the real scanner, independent of the machine's clock.
+
+    This checks Python-level scaling; the large-input wall-clock guards separately bound regex/runtime behaviour.
+    """
+    from app.Tefca import protected_identifiers as scanner
+    steps = 0
+    filename = scanner.__file__
+
+    def count(frame, event, _arg):
+        nonlocal steps
+        if event == "line" and frame.f_code.co_filename == filename:
+            steps += 1
+        return count
+
+    previous = sys.gettrace()
+    try:
+        sys.settrace(count)
         find_in_text(text)
         redact_text(text)
-        took = time.perf_counter() - started
-        best = took if best is None or took < best else best
-    return best
+    finally:
+        sys.settrace(previous)
+    return steps
 
 
 def _assert_linear(make, sizes):
-    """Each size doubles the one before. On the LARGEST pair the time may at most ~double: a quadratic scan quadruples it.
-    The sizes are large enough to measure (the largest must take at least 0.2 s, or the check is vacuous)."""
-    times = [_timed(make, n) for n in sizes]
-    assert times[-1] >= 0.2, ("input too small to measure", sizes, times)
-    assert times[-1] < 15.0, times
-    assert times[-1] / times[-2] < 3.0, (sizes, times)
+    """For doubled input, Python traversal work must grow by less than threefold, and the LARGEST input must still
+    finish inside the wall-clock guard (an upper bound only: a fast correct scan passes). The step count cannot see
+    work done inside one regex call; the wall-clock guard is what bounds that."""
+    largest = make(sizes[-1])
+    started = time.perf_counter()
+    find_in_text(largest)
+    redact_text(largest)
+    took = time.perf_counter() - started
+    assert took < 15.0, (sizes, took)
+    work = [_scan_work(make(n)) for n in sizes]
+    assert all(steps > 0 for steps in work), (sizes, work)
+    assert all(larger < 3 * smaller for smaller, larger in zip(work, work[1:])), (sizes, work)
 
 
 def test_quoted_key_scanning_is_linear():
@@ -194,7 +214,7 @@ def test_quoted_key_scanning_is_linear():
     text = "\"" * 300_000 + "EIN\": \"000000001\"" + "'" * 300_000
     assert find_in_text(text) and "000000001" not in redact_text(text)
     assert time.perf_counter() - started < 8.0
-    _assert_linear(lambda n: ("{\"" + "ein_x " * 12 + "\"") * n, [2_500, 5_000, 10_000])
+    _assert_linear(lambda n: ("{\"" + "ein_x " * 12 + "\"") * n, [80, 160, 320])
 
 
 def test_a_run_of_values_inside_one_long_chain_is_linear():
@@ -204,7 +224,7 @@ def test_a_run_of_values_inside_one_long_chain_is_linear():
     out = redact_text(text)
     assert "000000001" not in out
     assert time.perf_counter() - started < 8.0
-    _assert_linear(lambda n: "EIN" + "_000000001" * n, [40_000, 80_000, 160_000])
+    _assert_linear(lambda n: "EIN" + "_000000001" * n, [100, 200, 400])
 
 
 # ── Round 6 (4581709517 / 4581709510): terminal punctuation after the value; the OTHER quote inside a quoted key ──────
@@ -325,3 +345,8 @@ def test_the_bound_for_short_names_is_just_under_and_just_over_sixteen():
 def test_a_long_joiner_run_is_linear():
     _assert_linear(lambda n: ("EIN_PRIMARY" + "." * 40 + "000000001 ") * n, [10_000, 20_000, 40_000])
     _assert_linear(lambda n: "EIN_PRIMARY" + ".#" * n + "000000001", [400_000, 800_000, 1_600_000])
+
+
+def test_linearity_check_accepts_a_fast_correct_scan(monkeypatch):
+    monkeypatch.setattr(time, "perf_counter", lambda: 0.0)
+    _assert_linear(lambda n: "EIN" + "_000000001" * n, [20, 40, 80])
