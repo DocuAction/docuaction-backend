@@ -553,8 +553,13 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
         db.add(TEFCADimensionEvidence(**row))
     try:
         from app.Tefca import rce_fields
+        # Anchored to the curated record of the job's delivery that carries this item's reference (exactly one,
+        # linking this entity); otherwise nothing is written - never the entity's latest record in another delivery.
+        anchor = await vf.anchor_for_reference(db, intake_id=job.intake_id, ref=item.entity_ref,
+                                               entity_id=item.entity_id)
         await vf.record_from_evidence(db, entity_id=item.entity_id,
-                                      npi=rce_fields.rce_npi(entity), evidence=evidence)
+                                      npi=rce_fields.rce_npi(entity), evidence=evidence,
+                                      source_record_id=anchor, intake_id=job.intake_id)
     except Exception as exc:  # noqa: BLE001 -- the ledger must not fail a recheck
         logger.error("recheck: NPI outcome not recorded for %s: %s", item.entity_id,
                      type(exc).__name__, exc_info=True)
