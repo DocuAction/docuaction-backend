@@ -794,7 +794,9 @@ class TestReviewCycleGate:
 
         from app.tefca_registry import review_cycle
 
-        source = inspect.getsource(review_cycle.create_review_cycle)
+        # The public entry point pins the connection across internal commits;
+        # the unchanged linking contract lives in its delegated operation.
+        source = inspect.getsource(review_cycle._create_review_cycle)
         for key in ('"source_intake_id": str(intake_id)',
                     '"queue_source": QUEUE_SOURCE',
                     "record.sample_id = sample_id",

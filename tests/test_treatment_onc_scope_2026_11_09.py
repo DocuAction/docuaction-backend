@@ -163,7 +163,8 @@ def test_shared_producer_bulk_and_single_record_parity():
 
 
 @pytest.mark.asyncio
-async def test_single_record_wrapper_reads_the_source_record_and_fails_closed():
+async def test_single_record_wrapper_reads_the_source_record_and_fails_closed(
+        monkeypatch):
     """review_service._treatment_field_signals: Area-1 parsed values in, the
     shared producer's fields out; a promoted entity whose source record is
     missing is a REFUSAL, never a silent clean classification; a pre-RCE
@@ -176,7 +177,23 @@ async def test_single_record_wrapper_reads_the_source_record_and_fails_closed():
         def __init__(self, row): self._row = row
         async def get(self, model, pk): return self._row
 
-    row = SimpleNamespace(parsed={"purposesofuse": "T-TRTMNT", "NPI": "",
+    # A real RceSourceRecord always carries its intake (non-null FK); the
+    # assessment date now comes from THAT intake's current run (2026-11-11
+    # parity change), pinned here to the authorised October date.
+    from datetime import datetime as _datetime
+    from app.tefca_registry.rce import run_selection
+    intake = _uuid.uuid4()
+    run = SimpleNamespace(id=_uuid.uuid4(), source_intake_id=intake,
+                          started_at=_datetime(2026, 11, 9, 8, 0, 0),
+                          assessment_metadata={"assessment_date": "2026-11-08"})
+
+    async def _current(_db, intake_id):
+        assert intake_id == intake            # scoped to the record's own intake
+        return run
+
+    monkeypatch.setattr(run_selection, "current_run", _current)
+    row = SimpleNamespace(source_intake_id=intake,
+                          parsed={"purposesofuse": "T-TRTMNT", "NPI": "",
                                   "active": "1", "sequoiaorgtype": "Participant",
                                   "organizationNodeType": ""})
     ent = SimpleNamespace(id=_uuid.uuid4(), source_record_id=_uuid.uuid4())

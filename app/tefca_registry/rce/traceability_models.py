@@ -69,13 +69,15 @@ ACTOR_TYPES = ("SYSTEM", "HUMAN")
 
 CURRENT_DISPOSITIONS_VIEW = "rce_current_dispositions"
 
-#: Tables that ONLY Alembic 20260917_delivery_traceability may create. Startup
+#: Tables that ONLY their governed Alembic migrations may create (delivery
+#: traceability and 20261112_rce_record_comments). Startup
 #: `create_all` excludes them: a table the runtime role created would be owned
 #: by the runtime role, and "append-only by grant" would be void.
 MIGRATION_OWNED_TABLES = (
     "rce_delivery_stage_events", "rce_disposition_events",
     "rce_reconciliation_snapshots", "tefca_identifier_decision_events",
-    "rce_delivery_report_links",
+    "rce_delivery_report_links", "rce_record_comments",
+    "rce_supplemental_npi_research",
 )
 
 
@@ -142,6 +144,8 @@ class RceDeliveryStageEvent(Base):
         duration = None
         if self.completed_at and self.started_at:
             duration = int((self.completed_at - self.started_at).total_seconds() * 1000)
+        from app.core.logging_config import sanitize_stored_error, sanitize_stored_error_tree
+
         return {
             "id": str(self.id), "job_id": str(self.job_id),
             "intake_id": str(self.intake_id) if self.intake_id else None,
@@ -153,8 +157,8 @@ class RceDeliveryStageEvent(Base):
             "warning_count": self.warning_count, "held_count": self.held_count,
             "rejected_count": self.rejected_count,
             "failure_class": self.failure_class,
-            "failure_reason": self.failure_reason,
-            "detail": self.detail or {},
+            "failure_reason": sanitize_stored_error(self.failure_reason, failure_class=self.failure_class),
+            "detail": sanitize_stored_error_tree(self.detail or {}, strict_error_keys=True),
             "correlation_id": self.correlation_id, "worker_id": self.worker_id,
             "build_sha": self.build_sha,
         }

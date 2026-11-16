@@ -290,6 +290,24 @@ class TEFCAAIGateway:
                 f"got {temperature!r}. Determinism is a compliance requirement.")
 
     # ── Public API ───────────────────────────────────────────────────────
+    @staticmethod
+    def carries_protected_identifier(prompt: str) -> bool:
+        """True when the prompt carries an EIN / TIN / FEIN (labelled, or in the
+        written NN-NNNNNNN shape). Such a prompt is never dispatched.
+
+        Logs THAT a prompt was refused and which rule matched, never the match
+        or the prompt. Defence in depth: the orchestrator already offers only
+        name, address, npi and entity_type, so this is the check that still
+        holds if a caller ever puts something else into a prompt.
+        """
+        from app.Tefca.protected_identifiers import find_in_text
+
+        reasons = find_in_text(prompt)
+        if reasons:
+            logger.error("TEFCA AI prompt carries a protected tax identifier (%s) "
+                         "— not dispatched", ", ".join(reasons))
+        return bool(reasons)
+
     async def call(self, prompt: str, context: Optional[Dict[str, Any]] = None,
                    tier: str = "standard", temperature: float = TEMPERATURE,
                    task: str = "entity_match") -> Optional[GatewayResponse]:
@@ -309,6 +327,8 @@ class TEFCAAIGateway:
             # carry the case rather than paying for a request that is wrong.
             logger.error("TEFCA AI prompt exceeds input limit (%d > %d tokens estimated) "
                          "— not dispatched", estimated, cap)
+            return None
+        if self.carries_protected_identifier(prompt):
             return None
 
         order = [self.primary_provider]
@@ -349,6 +369,8 @@ class TEFCAAIGateway:
             logger.error("TEFCA AI prompt exceeds input limit (%d > %d tokens estimated) "
                          "— not dispatched", estimated, cap)
             return DualResponse(None, None, None)
+        if self.carries_protected_identifier(prompt):
+            return DualResponse(None, None, None)
 
         other = self.fallback_provider
         if not other or not self.dual_available:
@@ -367,6 +389,11 @@ class TEFCAAIGateway:
     # ── Dispatch with retry ──────────────────────────────────────────────
     async def _call_provider(self, provider: str, prompt: str, tier: str,
                              task: str, temperature: float) -> Optional[GatewayResponse]:
+        # The single dispatch point. `call` and `call_dual` refuse earlier; this
+        # holds for any future caller that reaches a provider another way. It is
+        # not a provider failure, so the circuit breaker is not touched.
+        if self.carries_protected_identifier(prompt):
+            return None
         model = self.resolve_model(provider, tier)
         max_output = self._limits(task)["max_output"]
         breaker = self._breakers[provider]

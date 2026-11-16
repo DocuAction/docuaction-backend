@@ -1727,6 +1727,7 @@ async def case_update_import_preview(
     try:
         result = await cui.build_preview(file.filename or "upload", data, purpose=purpose,
                                          worksheet=worksheet, resolve=_case_identity_resolver(db),
+                                         validate_identity=_agt_identity_validator(db),
                                          uploaded_by=actor_email or str(actor_id or "unknown"))
     except cui.SpreadsheetRefused as exc:
         raise HTTPException(400, f"import refused: {exc}")
@@ -1752,6 +1753,20 @@ def _case_identity_resolver(db):
     from app.tefca_registry.rce import models as m
 
     async def resolve(identity: Dict[str, str]) -> List[str]:
+        agt = identity.get(cui.IDENTITY_AGT)
+        if agt:
+            # AGT_Record_ID = rce_source_records.id. Cases are found through the
+            # Area-1 anchor review_records.source_record_id ONLY - never through
+            # an entity id, which other deliveries can share. The row was already
+            # validated against its delivery by `_agt_identity_validator`.
+            try:
+                agt_uuid = uuid.UUID(str(agt))
+            except (ValueError, TypeError):
+                return []
+            return list((await db.execute(
+                select(reg.ReviewRecord.review_id)
+                .where(reg.ReviewRecord.source_record_id == agt_uuid)
+                .order_by(reg.ReviewRecord.review_id))).scalars().all())
         rid = identity.get(cui.IDENTITY_REVIEW)
         if rid:
             rows = (await db.execute(
@@ -1776,6 +1791,45 @@ def _case_identity_resolver(db):
             .order_by(reg.ReviewRecord.review_id))).scalars().all())
 
     return resolve
+
+
+def _agt_identity_validator(db):
+    """Validate an AGT_Record_ID row: the id must be a real `rce_source_records.id`
+    that belongs to the NAMED delivery (never re-pointed to another one), and a
+    supplied `source_rce_id` must equal that record's own business identifier.
+    HELD and unpromoted records validate (they have a source record whether or
+    not they were curated or promoted); nothing here promotes or releases
+    anything. Read-only."""
+    from app.tefca_registry.rce import case_update_import as cui
+    from app.tefca_registry.rce import models as m
+
+    async def validate(identity: Dict[str, str]) -> Dict[str, Any]:
+        agt, intake, src = (identity.get(cui.IDENTITY_AGT), identity.get(cui.IDENTITY_INTAKE),
+                            identity.get(cui.IDENTITY_SOURCE))
+        try:
+            agt_uuid, intake_uuid = uuid.UUID(str(agt)), uuid.UUID(str(intake))
+        except (ValueError, TypeError):
+            return {"problem": "agt_record_id and intake_id must both be UUIDs", "source_record": None}
+        rec = await db.get(m.RceSourceRecord, agt_uuid)
+        if rec is None:
+            return {"problem": f"agt_record_id {agt} is not a source record", "source_record": None}
+        if rec.source_intake_id != intake_uuid:
+            return {"problem": (f"agt_record_id {agt} belongs to delivery {rec.source_intake_id}, "
+                                f"not {intake_uuid}; refusing to attach it to another delivery"),
+                    "source_record": None}
+        if src and (rec.source_rce_id or "") != src:
+            return {"problem": (f"source_rce_id {src!r} does not match this source record's own "
+                                f"{(rec.source_rce_id or '')!r}"), "source_record": None}
+        cur = (await db.execute(
+            select(m.RceCuratedRecord.record_status, m.RceCuratedRecord.canonical_entity_id)
+            .where(m.RceCuratedRecord.source_record_id == agt_uuid))).first()
+        return {"problem": None, "source_record": {
+            "agt_record_id": str(rec.id), "source_rce_id": rec.source_rce_id,
+            "source_line": rec.line_number, "curated_status": cur[0] if cur else None,
+            "held": bool(cur and cur[0] == "HELD"),
+            "promoted": bool(cur and cur[1] is not None)}}
+
+    return validate
 
 
 @router.post("/cases/import/apply", dependencies=[Depends(require_role("senior_analyst"))])
@@ -1811,6 +1865,7 @@ async def case_update_import_apply(
     try:
         staged = await cui.build_preview(file.filename or "upload", data, purpose=purpose, worksheet=worksheet,
                                          resolve=_case_identity_resolver(db),
+                                         validate_identity=_agt_identity_validator(db),
                                          uploaded_by=actor_email or str(actor_id or "unknown"))
     except cui.SpreadsheetRefused as exc:
         raise HTTPException(400, f"import refused: {exc}")
