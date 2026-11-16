@@ -85,7 +85,7 @@ NAME_IDENTITY_RULE = ("NFC + collapsed whitespace + casefold; punctuation, word 
 
 #: How a NAME query is written into `tefca_dimension_evidence.query_identifier`
 #: by the bulk path (`evidence_assembly`): one explicit prefix per source.
-NAME_EVIDENCE_PREFIXES = {"OIG_LEIE": "org=", "SAM_GOV": "legal_name="}
+NAME_EVIDENCE_PREFIXES = {"OIG_LEIE": "org=", "SAM_GOV": "legal_name=", "SAM_EXTRACT_SUPPLEMENTARY": "org="}
 
 
 def record_name_identity(value) -> str:
@@ -123,6 +123,14 @@ def evidence_query_name(source: str, query_identifier) -> Optional[str]:
     if re.match(r"^[A-Za-z_]+=", value):
         return None
     return value
+
+
+def persisted_evidence_is_name_keyed(source: str, query_identifier) -> bool:
+    """True only when the persisted row's identifier EXPLICITLY carries the source's own name prefix (`org=` /
+    `legal_name=`): a name-only screen. A bare value (older rows) is ambiguous and is NOT treated as name-only here."""
+    prefix = NAME_EVIDENCE_PREFIXES.get(source)
+    value = str(query_identifier or "").strip()
+    return bool(prefix and value.startswith(prefix) and value[len(prefix):].strip())
 
 
 def evidence_query_npi(query_identifier) -> Optional[str]:
@@ -549,6 +557,10 @@ def apply_persisted_exclusion_evidence(sources: Dict[str, dict],
             "lookup_identifier": row.query_identifier,
             "persisted_evidence": provenance,
         }
+        # The name-only marker comes from the PERSISTED row's own identifier, never copied from the live source it
+        # replaces: an `org=` row keeps coverage_note()'s name-only exclusion, an NPI-keyed row never inherits it.
+        if persisted_evidence_is_name_keyed(source_name, row.query_identifier):
+            sources[key]["matched_by"] = MATCHED_BY_ORG_NAME
         used.append(provenance)
     return used
 

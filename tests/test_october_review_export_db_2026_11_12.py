@@ -128,6 +128,8 @@ async def test_route_refuses_a_request_that_could_never_succeed_before_queuing(r
     other_id, _ = await seed_intake(db, make_rows(1, arc="9.99.777.62"), with_job=False)
     other_run = await _run(db, other_id)
     bare_id, _ = await seed_intake(db, make_rows(1, arc="9.99.777.63"), with_job=False)
+    jobs_before = set((await db.execute(select(ReportExportJob.id).where(
+        ReportExportJob.export_type.like("record_review:%")))).scalars().all())   # shared DB: compare, never assume empty
     bad = [
         (_req(uuid.uuid4()), "No delivery"),
         (_req("not-a-uuid"), "not a UUID"),
@@ -142,9 +144,9 @@ async def test_route_refuses_a_request_that_could_never_succeed_before_queuing(r
     with pytest.raises(HTTPException) as exc:
         await report_routes.export_record_review(_req(intake_id, fmt="docx"), db=db, user=QA)
     assert exc.value.status_code == 422
-    queued = (await db.execute(select(ReportExportJob).where(
-        ReportExportJob.export_type.like("record_review:%")))).scalars().all()
-    assert queued == []                                   # nothing was queued
+    queued = [j for j in (await db.execute(select(ReportExportJob).where(
+        ReportExportJob.export_type.like("record_review:%")))).scalars().all() if j.id not in jobs_before]
+    assert queued == []                                   # nothing was queued by these requests
 
 
 async def test_route_queues_one_job_per_delivery_run_cutoff_format_and_reuses_it(rolled_back_db):
