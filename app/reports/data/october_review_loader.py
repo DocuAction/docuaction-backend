@@ -102,6 +102,11 @@ EVIDENCE_SOURCES = {
     "pecos": ("CMS_PPEF_ENROLLMENT", "MEDICARE_ENROLLMENT"),
     "leie": ("OIG_LEIE", "EXCLUSION_REVOCATION"),
     "sam": ("SAM_GOV", "EXCLUSION_REVOCATION"),
+    # The GSA public exclusions EXTRACT is a different source with different limits
+    # from the live api.sam.gov check: it writes its own rows (never SAM_GOV rows),
+    # so it is read and reported on its own. An unavailable API result is never
+    # relabelled as an extract result, nor the reverse.
+    "sam_extract": ("SAM_EXTRACT_SUPPLEMENTARY", "EXCLUSION_REVOCATION"),
 }
 NOT_PROMOTED = ("Not established by this loader: the record has no linked entity, "
                 "so no entity-linked verification evidence is available to it "
@@ -189,6 +194,36 @@ def _evidence_cell(kind: str, row: Any, limitation: str = "") -> str:
     if limitation:
         text += f" | Limitation: {limitation}"
     return text
+
+
+def _sam_extract_cell(row: Any) -> str:
+    """Extract result with its edition, check date and candidate status. A
+    candidate is NEVER a confirmed exclusion; an unavailable extract says why."""
+    orig = row.original_values or {}
+    disp = _s(row.disposition).upper()
+    if disp == "REVIEW":
+        n = orig.get("candidate_count")
+        text = (f"CANDIDATE MATCH ({n if n is not None else 'count not recorded'}) - NOT a confirmed "
+                f"exclusion; analyst determination required")
+    elif disp == "PASS":
+        text = "No candidate match in the extract"
+    elif disp == "UNAVAILABLE":
+        text = "Extract screen unavailable - not performed"
+        note = _s(row.note).strip()
+        if note:
+            text += f": {note[:160]}"
+    else:
+        text = _s(row.disposition)
+    parts = [text]
+    if orig.get("extract_filename") or orig.get("publication_date"):
+        parts.append(f"edition {_s(orig.get('publication_date')) or 'date not recorded'} "
+                     f"({_s(orig.get('extract_filename')) or 'file not recorded'})")
+    if orig.get("extract_sha256"):
+        parts.append(f"sha256 {_s(orig['extract_sha256'])[:12]}")
+    when = _s(row.query_timestamp or row.retrieved_at or _iso(row.created_at))
+    parts.append(f"checked {when[:10]}" if when else "check date not recorded")
+    parts.append("supplementary to, not a substitute for, the live SAM.gov API check")
+    return " | ".join(parts)
 
 
 def _entity_type_link(nppes_row: Any, submitted_npi: str) -> Dict[str, str]:
@@ -428,8 +463,8 @@ async def load_record_facts(
                 ev_refs.append(f"{source}:{row.id}@{_s(row.generation_timestamp)}")
                 if key == "nppes":
                     nppes_row = row
-                cells[key] = _evidence_cell(
-                    key, row, _s(ann.get("pecos_limitation")) if key == "pecos" else "")
+                cells[key] = (_sam_extract_cell(row) if key == "sam_extract" else _evidence_cell(
+                    key, row, _s(ann.get("pecos_limitation")) if key == "pecos" else ""))
             if ent is None and ann.get("pecos_limitation"):
                 cells["pecos"] += f" | Limitation: {_s(ann['pecos_limitation'])}"
 
@@ -467,6 +502,7 @@ async def load_record_facts(
                 "bucket_annotation": _s(ann.get("bucket_annotation")),
                 "nppes": cells["nppes"], "pecos": cells["pecos"],
                 "leie": cells["leie"], "sam": cells["sam"],
+                "sam_extract": cells["sam_extract"],
                 # No persisted USPS validation exists in the evidence store:
                 # the dataset renders "Not checked—unavailable".
                 "usps": "",
