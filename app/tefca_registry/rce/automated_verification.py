@@ -310,7 +310,18 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
         return {"ref": ref, "outcome": OUTCOME_NOT_ELIGIBLE,
                 "reason": "entity did not resolve for this reference"}
 
-    entity_uuid = entity.get("_registry_entity_id") or canonical_entity_id
+    # IDENTITY FIRST (shared with the recheck path): the reference must resolve to the queued entity, the delivery
+    # must hold exactly one delivered record for it, and the probes' NPI must be the NPI that record delivered.
+    # A refusal persists nothing - no evidence, ledger row, identifier status or entity status.
+    from app.Tefca import rce_fields
+    from app.Tefca.connectors import _extract_npi
+    probe_npi = (rce_fields.rce_npi(entity) or _extract_npi(entity) or "").strip()
+    context, refusal = await vf.validated_delivery_context(
+        db, intake_id=intake_id, ref=ref, queued_entity_id=canonical_entity_id, entity=entity, probe_npi=probe_npi)
+    if context is None:
+        return {"ref": ref, "entity_id": str(canonical_entity_id) if canonical_entity_id else None,
+                "outcome": OUTCOME_NOT_ELIGIBLE, "reason": refusal, "persisted": False}
+    entity_uuid = canonical_entity_id
     service = EvidenceService(local_store=local_store or make_local_store(db))
 
     try:
@@ -331,14 +342,11 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
     if entity_uuid is not None:
         try:
             from app.services.npi_validator import is_valid_npi  # noqa: F401 - availability check only
-            npi = None
-            from app.Tefca import rce_fields
-            npi = rce_fields.rce_npi(entity)
-            # Anchored to the curated record of THIS delivery that carries `ref` (exactly one, linking this entity);
-            # an entity promoted by several deliveries never receives its finding on another delivery's ledger.
-            anchor = await vf.anchor_for_reference(db, intake_id=intake_id, ref=ref, entity_id=entity_uuid)
-            await vf.record_from_evidence(db, entity_id=entity_uuid, npi=npi, evidence=evidence,
-                                          source_record_id=anchor, intake_id=intake_id)
+            # On the delivered record validated above. Savepoint: a failure in the ledger write rolls back to here
+            # (with the identifier change the writer makes) and leaves the batch session usable.
+            async with db.begin_nested():
+                await vf.record_from_evidence(db, entity_id=entity_uuid, npi=probe_npi or None, evidence=evidence,
+                                              source_record_id=context["source_record_id"], intake_id=intake_id)
         except Exception as exc:  # noqa: BLE001 - the issue ledger must not fail coverage
             logger.error("automated coverage: NPI outcome not recorded for %s: %s",
                         entity_uuid, type(exc).__name__, exc_info=True)

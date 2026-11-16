@@ -108,9 +108,17 @@ async def test_eligible_non_b1_completes_qa_via_real_routes_genuine_finding_stil
 
     async with async_session_maker() as db:
         from rce_traceability_support import anchor_for_entity
+        from app.tefca_registry.rce import models as _rce_m, verification_findings as _vf
+        anchor_b = await anchor_for_entity(db, entity_b_id)
+        # An NPI finding is recorded only for the NPI the anchored record DELIVERED (2026-11-16): report that NPI
+        # (the seeded record is given one if it delivers none - a fixture detail, the assertion below is unchanged).
+        record_b = await db.get(_rce_m.RceSourceRecord, anchor_b["source_record_id"])
+        if not _vf.delivered_npi_of(record_b):
+            record_b.parsed = {**(record_b.parsed or {}), "NPI": "1234567893"}
+            record_b.npi = "1234567893"
+            await db.flush()
         await ppv.record_finding(db, entity_id=entity_b_id, outcome=ppv.NPI_DEACTIVATED,
-                                 npi="1234567893", actor="route-test",
-                                 **await anchor_for_entity(db, entity_b_id))
+                                 npi=_vf.delivered_npi_of(record_b), actor="route-test", **anchor_b)
         await db.commit()
     print(f"[B] seeded (bucket={result_b['outcomes'][0]['bucket']}), "
           f"THEN a genuine open finding recorded, review_id={review_id_b}")
