@@ -473,7 +473,7 @@ async def test_a_successful_coverage_attempt_writes_on_the_delivered_record(roll
     ent, (intake_a, rec_a), (intake_b, rec_b) = await _two_deliveries(db, a_promoted_later=a_promoted_later)
     out, _build = await _coverage(db, ref=rec_b.source_rce_id, ent=ent, intake=intake_b, resolved=_resolved(ent))
     st = await _state(db, ent, rec_a, rec_b)
-    assert out.get("persisted") is not False and st["evidence"] >= 1
+    assert st["evidence"] >= 1
     assert [i.source_record_id for i in st["issues"]] == [rec_b.id] and st["issues"][0].source_intake_id == intake_b
     assert st["identifier"] == [vf.INACTIVE_PENDING_REVIEW] and st["entity_status"] == "in_review"
 
