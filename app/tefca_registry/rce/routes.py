@@ -1071,5 +1071,8 @@ async def read_supplemental_npi_research(
     user=Depends(require_role(NPI_RESEARCH_READ_ROLE)),
 ):
     from app.tefca_registry.rce import supplemental_research as sr
-    return {"entries": await _research_call(sr.list_entries(
-        db, intake_id=intake_id, source_record_id=source_record_id, current_only=current_only, limit=limit))}
+    entries, truncated = await _research_call(sr.list_entries_page(
+        db, intake_id=intake_id, source_record_id=source_record_id, current_only=current_only, limit=limit))
+    # `truncated` is true when more rows matched than `limit` (at most 500): narrow with source_record_id or raise the
+    # limit; a truncated list is never the whole history.
+    return {"entries": entries, "truncated": truncated, "limit": limit}
