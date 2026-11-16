@@ -193,6 +193,14 @@ def _validate_entry(entry: Dict[str, Any], rec: Optional[Any], intake_uuid: uuid
         return {"problem": ("source.sheet and source.column are required (non-blank text): a "
                             "comment must be traceable to the sheet and column it was read "
                             "from; nothing was stored")}
+    # PostgreSQL cannot store NUL in a text column: a NUL here would surface as a data error at insert time (not an
+    # IntegrityError) and abort the whole call. Reject the entry instead; never strip the character (CodeRabbit, #233).
+    nul_in = [lab for lab, val in (("source.file_name", name), ("source.sheet", sheet), ("source.column", column),
+                                   ("author_attribution", entry.get("author_attribution")),
+                                   ("attribution_basis", entry.get("attribution_basis")))
+              if isinstance(val, str) and "\x00" in val]
+    if nul_in:
+        return {"problem": f"{', '.join(nul_in)} contains a NUL character; refusing to alter it; nothing was stored"}
     out["src"] = {"file_name": name, "file_sha256": sha.lower(),
                   "sheet": sheet, "column": column,
                   "row": src.get("row")}
@@ -270,6 +278,33 @@ async def import_comments(db, *, intake_id: Any, entries: List[Dict[str, Any]], 
     replayed = {row.idempotency_key: row for row in (await db.execute(
         select(RceRecordComment).where(RceRecordComment.import_batch_id == batch_uuid)
     )).scalars().all()}
+
+    # Shift pre-pass, BEFORE any row is flushed (CodeRabbit, #233, round 3). An entry's idempotency key is its POSITION
+    # in the batch, so re-sending only a tail moves every entry. A shift exists when an entry's position key belongs to
+    # an imported row with different content AND its content matches another imported row. If a shift exists and the
+    # same call also carries an entry the batch never imported, positions would be re-assigned (a never-imported entry
+    # would be written under another entry's position key and the corrected one could never import under this batch):
+    # refuse the WHOLE call with nothing written. A tail whose entries are all imported is unaffected, and so is a
+    # full-batch retry (no position moves).
+    imported_content = {(r.source_record_id, r.comment_kind, r.text_sha256) for r in replayed.values()}
+    shifted, would_write = False, False
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        v = _validate_entry(entry, recs.get(_uuid(entry.get("source_record_id"))), intake_uuid)
+        if "problem" in v:
+            continue                                   # rejected per entry, writes nothing
+        content = (v["record_id"], v["kind"], text_sha256(v["text"]))
+        at_position = replayed.get(text_sha256(f"rce-comment-entry-v2|{intake_uuid}|{batch_uuid}|{i}"))
+        at_position_content = (at_position.source_record_id, at_position.comment_kind, at_position.text_sha256)             if at_position is not None else None
+        if at_position_content is not None and at_position_content != content and content in imported_content:
+            shifted = True
+        if content not in imported_content:
+            would_write = True
+    if replayed and shifted and would_write:
+        raise CommentRefused(
+            "this call re-sends part of an already imported batch at shifted positions and also carries entries that "
+            "batch never imported; nothing was written. Re-send the whole batch (re-sending is safe and idempotent)")
 
     results: List[Dict[str, Any]] = []
     counts = {s: 0 for s in STATUSES}
