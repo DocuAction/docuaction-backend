@@ -55,8 +55,11 @@ OUTCOME_ANSWERED_NO_SIGNAL = "ANSWERED_NO_SIGNAL"
 OUTCOME_RISK_SIGNAL = "RISK_SIGNAL"
 OUTCOME_STILL_UNAVAILABLE = "STILL_UNAVAILABLE"
 OUTCOME_NOT_RESOLVED = "ENTITY_NOT_RESOLVED"
+# The queued reference no longer maps to the queued entity, or the job's delivery has no single delivered record for it:
+# nothing was persisted for the item (no evidence, ledger row or status change).
+OUTCOME_IDENTITY_REFUSED = "IDENTITY_REFUSED"
 ITEM_OUTCOMES = (OUTCOME_ANSWERED_NO_SIGNAL, OUTCOME_RISK_SIGNAL,
-                 OUTCOME_STILL_UNAVAILABLE, OUTCOME_NOT_RESOLVED)
+                 OUTCOME_STILL_UNAVAILABLE, OUTCOME_NOT_RESOLVED, OUTCOME_IDENTITY_REFUSED)
 
 
 class RceRecheckJob(Base):
