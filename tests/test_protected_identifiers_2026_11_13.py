@@ -456,7 +456,7 @@ class TestALongSeparatorRunInsideALabelIsNotABypass:
     def test_the_run_is_unbounded_and_possessive(self):
         assert not hasattr(pi, "LABEL_SEPARATOR_MAX")
         assert pi._SEP.endswith("*+") and "{0," not in pi._SEP
-        assert pi.PROTECTED_IDENTIFIERS_VERSION == "1.5.0"
+        assert pi.PROTECTED_IDENTIFIERS_VERSION == "1.6.0"
 
     @pytest.mark.parametrize("count", RUNS)
     @pytest.mark.parametrize("sep", ["_", " ", "-", " _-", "\t", "\r\n", " \n\t_-\r"])
