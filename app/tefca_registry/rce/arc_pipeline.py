@@ -1078,9 +1078,13 @@ async def verify_and_classify(
             if entity_uuid is not None:
                 try:
                     from app.tefca_registry.rce import verification_findings as vf
+                    # Anchored to the delivered record THIS reference resolved to (`_source_anchor`: exactly one
+                    # curated row of this delivery, linking this entity). Unanchored (no delivery, duplicate delivered
+                    # id, different linked entity) writes no ledger row - never the entity's latest record.
                     await vf.record_from_evidence(
                         db, entity_id=entity_uuid,
-                        npi=_entity_npi(entity), evidence=evidence)
+                        npi=_entity_npi(entity), evidence=evidence,
+                        source_record_id=source_record_id, intake_id=intake_id)
                 except Exception as exc:  # noqa: BLE001 — ledger must not fail a cycle
                     logger.error("NPI verification outcome not recorded for %s: %s",
                                  entity_uuid, type(exc).__name__, exc_info=True)

@@ -208,6 +208,7 @@ jobs:
             tests/test_record_review_package_script_2026_11_12.py \
             tests/test_comment_migration_downgrade_lock_2026_11_15.py \
             tests/test_review_single_npi_read_2026_11_15.py \
+            tests/test_npi_outcome_record_anchoring_2026_11_16.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test skip is not explicitly permitted
         # Replaces a case-sensitive `grep 'No database reachable'` that let

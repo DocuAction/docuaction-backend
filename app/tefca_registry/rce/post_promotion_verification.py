@@ -56,6 +56,7 @@ from app.tefca_registry import models as reg
 from app.tefca_registry.rce import curation
 from app.tefca_registry.rce import models as m
 from app.tefca_registry.rce import run_selection
+from app.tefca_registry.rce import verification_findings as _record_vf
 from app.tefca_registry.rce.quality_rules import NON_QUALITY_ISSUE_TYPES, RULE_BY_ID
 from app.tefca_registry.rce.verification_findings import (
     NPI_DEACTIVATED, NPI_NOT_FOUND, NPI_VERIFICATION_UNAVAILABLE,
@@ -106,15 +107,19 @@ async def _curated_for_entity(db, entity_id):
 
 async def _write_generic_finding(db, *, entity_id, outcome: str,
                                  original_value: Optional[str],
-                                 description: str) -> Optional[m.RceIssue]:
+                                 description: str, source_record_id=None,
+                                 intake_id=None) -> Optional[m.RceIssue]:
     """The same shape and dedup rule as `verification_findings.
     record_npi_outcome`, for the two outcomes that are not an NPPES NPI
     check. Returns None when the entity has no delivery ledger, or when an
     identical undecided finding already exists (no duplicate)."""
-    curated = await _curated_for_entity(db, entity_id)
+    # Anchored to the named delivery record (validated against the entity and delivery); never the entity's latest
+    # record in some other delivery. No anchor -> nothing is written.
+    curated = await _record_vf._curated_for_anchor(db, entity_id, source_record_id, intake_id)
     if curated is None:
-        logger.info("post-promotion finding %s for entity %s has no delivery "
-                   "ledger; not recorded", outcome, entity_id)
+        logger.warning("post-promotion finding %s for entity %s has no established delivery-record anchor "
+                       "(source_record_id=%s, intake_id=%s); not recorded", outcome, entity_id,
+                       source_record_id, intake_id)
         return None
 
     rule_id, severity, authority = NON_QUALITY_ISSUE_TYPES[outcome]
@@ -149,7 +154,8 @@ async def record_finding(db, *, entity_id, outcome: str, npi: Optional[str] = No
                          identifier_type: str = "npi", existing_value: Optional[str] = None,
                          submitted_value: Optional[str] = None,
                          detail: Optional[Any] = None, actor: str = "SYSTEM",
-                         actor_id=None, commit: bool = False) -> Dict[str, Any]:
+                         actor_id=None, commit: bool = False,
+                         source_record_id=None, intake_id=None) -> Dict[str, Any]:
     """Record one post-promotion finding and, if it is BLOCKING, its
     consequences. Never touches the original promotion event.
 
@@ -163,11 +169,13 @@ async def record_finding(db, *, entity_id, outcome: str, npi: Optional[str] = No
 
     if outcome in (NPI_DEACTIVATED, NPI_NOT_FOUND, NPI_VERIFICATION_UNAVAILABLE):
         issue = await record_npi_outcome(db, entity_id=entity_id, npi=npi,
-                                         outcome=outcome, detail=detail)
+                                         outcome=outcome, detail=detail,
+                                         source_record_id=source_record_id, intake_id=intake_id)
     elif outcome == INVALID_ACTIVE_IDENTIFIER:
         value = npi or submitted_value
         issue = await _write_generic_finding(
             db, entity_id=entity_id, outcome=outcome, original_value=value,
+            source_record_id=source_record_id, intake_id=intake_id,
             description=(f"The entity's active {identifier_type} {value!r} does "
                         f"not pass validation. A post-promotion re-check found "
                         f"this; the registry value is left in place pending an "
@@ -175,6 +183,7 @@ async def record_finding(db, *, entity_id, outcome: str, npi: Optional[str] = No
     elif outcome == MATERIAL_IDENTIFIER_CONFLICT:
         issue = await _write_generic_finding(
             db, entity_id=entity_id, outcome=outcome, original_value=submitted_value,
+            source_record_id=source_record_id, intake_id=intake_id,
             description=(f"A later verification found a {identifier_type} value "
                         f"({submitted_value!r}) materially different from the "
                         f"registered value ({existing_value!r}) for this "
@@ -217,7 +226,8 @@ async def record_finding(db, *, entity_id, outcome: str, npi: Optional[str] = No
         db, issue, entity_id=entity_id, actor=actor)
     result["case"] = case
 
-    curated = await _curated_for_entity(db, entity_id)
+    # The reconciliation snapshot belongs to the delivery the finding was written on (the issue's own record).
+    curated = await _record_vf._curated_for_anchor(db, entity_id, issue.source_record_id, intake_id)
     if curated is not None:
         from app.tefca_registry.rce import reconciliation
         from app.tefca_registry.rce.delivery_jobs import job_for_intake
@@ -238,7 +248,8 @@ async def record_finding(db, *, entity_id, outcome: str, npi: Optional[str] = No
 # ── the other two named triggers ─────────────────────────────────────────────
 
 async def check_active_identifier_validity(db, entity_id, *, identifier_type: str = "npi",
-                                           actor: str = "SYSTEM") -> Optional[Dict[str, Any]]:
+                                           actor: str = "SYSTEM", source_record_id=None,
+                                           intake_id=None) -> Optional[Dict[str, Any]]:
     """Re-validate the entity's current ACTIVE identifier of `identifier_type`.
     Records INVALID_ACTIVE_IDENTIFIER (and its blocking consequences) if it no
     longer validates. None when the active value is valid or absent."""
@@ -256,19 +267,22 @@ async def check_active_identifier_validity(db, entity_id, *, identifier_type: st
     return await record_finding(
         db, entity_id=entity_id, outcome=INVALID_ACTIVE_IDENTIFIER,
         npi=row.identifier_value, identifier_type=identifier_type,
-        detail=message, actor=actor)
+        detail=message, actor=actor,
+        source_record_id=source_record_id, intake_id=intake_id)
 
 
 async def record_post_promotion_conflict(db, *, entity_id, identifier_type: str,
                                          submitted_value: str, existing_value: Optional[str],
-                                         actor: str = "SYSTEM") -> Dict[str, Any]:
+                                         actor: str = "SYSTEM", source_record_id=None,
+                                         intake_id=None) -> Dict[str, Any]:
     """A later verification found the registered value materially disagrees
     with a re-checked submitted/authoritative value, for an entity already
     promoted. Neither value is changed here."""
     return await record_finding(
         db, entity_id=entity_id, outcome=MATERIAL_IDENTIFIER_CONFLICT,
         identifier_type=identifier_type, submitted_value=submitted_value,
-        existing_value=existing_value, actor=actor)
+        existing_value=existing_value, actor=actor,
+        source_record_id=source_record_id, intake_id=intake_id)
 
 
 # ── reading: is there a genuine, still-open blocking finding right now ──────
