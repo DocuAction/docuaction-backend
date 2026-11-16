@@ -555,8 +555,13 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
         from app.Tefca import rce_fields
         # Anchored to the curated record of the job's delivery that carries this item's reference (exactly one,
         # linking this entity); otherwise nothing is written - never the entity's latest record in another delivery.
-        anchor = await vf.anchor_for_reference(db, intake_id=job.intake_id, ref=item.entity_ref,
-                                               entity_id=item.entity_id)
+        # The NPI and evidence above belong to the entity the reference resolves to NOW. They are written under the
+        # queued entity's record only when that is the same entity; a reference that has since resolved to another
+        # entity (or has no registry identity) gets no anchor, so nothing is written (CodeRabbit round 5).
+        resolved_id = entity.get("_registry_entity_id")
+        same_entity = resolved_id is not None and str(resolved_id) == str(item.entity_id)
+        anchor = (await vf.anchor_for_reference(db, intake_id=job.intake_id, ref=item.entity_ref,
+                                                entity_id=item.entity_id)) if same_entity else None
         await vf.record_from_evidence(db, entity_id=item.entity_id,
                                       npi=rce_fields.rce_npi(entity), evidence=evidence,
                                       source_record_id=anchor, intake_id=job.intake_id)
