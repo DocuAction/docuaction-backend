@@ -187,7 +187,7 @@ async def test_package_is_written_reopened_recounted_and_hashed(rolled_back_db, 
     assert man["summary"]["unclassified_non_held_count"] == 2
     assert len(man["unclassified_non_held_ids"]) == 2 and str(recs[2].id) not in man["unclassified_non_held_ids"]
     files = {f["format"]: f for f in man["files"]}
-    assert set(files) == {"xlsx", "csv"}
+    assert set(files) == {"xlsx", "csv", "field-findings-csv", "field-findings-xlsx"}   # grain B beside grain A
     for f in files.values():                                    # recorded hash == hash of the bytes on disk
         data = (out / f["file"]).read_bytes()
         assert hashlib.sha256(data).hexdigest() == f["sha256"] and len(data) == f["size_bytes"]
@@ -285,7 +285,7 @@ async def test_renderer_failure_preserves_other_formats_and_the_manifest(rolled_
         run_id=None, formats="xlsx,pdf,csv", baseline=None, classification="DRAFT")
     assert await pkg.build(args) == 3
     man = json.loads(next(out.glob("*.MANIFEST.json")).read_text())
-    assert {f["format"] for f in man["files"]} == {"xlsx", "csv"}
+    assert {f["format"] for f in man["files"]} == {"xlsx", "csv", "field-findings-csv", "field-findings-xlsx"}
     assert man["formats_skipped"] == {"pdf": "Rendering failed: RuntimeError"}
     assert "synthetic-record-text-must-not-leak" not in str(man)
     assert man["self_check_failures"] == []
