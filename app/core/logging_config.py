@@ -329,6 +329,13 @@ def sanitize_stored_error(value: Any, *, failure_class: str | None = None) -> An
         rest = text[end:]
         before = text[:first.start()]
         kept = _MARKER_PREFIX.match(before).group(0)
+        _stage = _STAGE_PREFIX.match(kept)
+        _lead = kept[len(_stage.group(0)) if _stage else 0:]
+        if _lead and not _is_trusted_error_code(_lead[:-2]):
+            # A leading name is provenance only when it is a listed domain class or a real driver/stdlib class
+            # (owner-requested exact input `SensitiveRecord4711: <class 'builtins.ValueError'>: rejected`):
+            # an unlisted CamelCase word is delivered text and is withheld with the rest.
+            kept = _stage.group(0) if _stage else ""
         dropped = bool(before[len(kept):].strip(" :\n\t"))
         if dropped and before.rstrip()[-1:] in ('"', "'"):
             # Discarded text AND the marker sits inside a quoted value: it is part of the delivered value.
