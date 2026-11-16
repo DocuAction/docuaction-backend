@@ -216,7 +216,9 @@ async def anchor_for_reference(db, *, intake_id, ref, entity_id):
 
 
 def npi_key(value) -> str:
-    """An NPI for COMPARISON only: stripped, a spreadsheet's trailing ".0" tolerated, digits only. Never stored."""
+    """One comparable form of an NPI: stripped, a spreadsheet's trailing ".0" tolerated, digits only. No validity
+    rule. The ledger writer also uses it for the identifier lookup, the duplicate check and the issue row's
+    `original_value`; delivered records are never rewritten."""
     text = str(value or "").strip()
     if "." in text and text.split(".", 1)[1].strip("0") == "" and text.split(".", 1)[0].isdigit():
         text = text.split(".", 1)[0]
@@ -302,39 +304,46 @@ async def record_npi_outcome(db, *, entity_id, npi: Optional[str], outcome: str,
     if outcome == VERIFIED:
         return None
 
-    # VALIDATE FIRST: nothing below - the identifier-status change included - happens without an established anchor
-    # and an NPI that anchored record delivered (CodeRabbit on #233 round 6: the status change used to run before
-    # the anchor was validated, for every caller).
-    curated = await _curated_for_anchor(db, entity_id, source_record_id, intake_id)
-    if curated is None:
-        logger.warning("NPI outcome %s for entity %s has no established delivery-record anchor (source_record_id=%s, "
-                       "intake_id=%s); no ledger row written, no identifier status changed",
-                       outcome, entity_id, source_record_id, intake_id)
-        return None
-    record = await db.get(m.RceSourceRecord, curated.source_record_id)
-    if npi_key(npi) and (record is None or npi_key(delivered_npi_of(record)) != npi_key(npi)):
-        # A finding ABOUT an NPI belongs only to a record that delivered that NPI (callers hold the registry
-        # entity's NPI, which another delivery may have supplied). An explicit finding reported with no NPI at all
-        # (post-promotion findings) is not compared; the NPPES-derived helpers below never report one without an NPI.
-        logger.warning("NPI outcome %s for entity %s is about an NPI the anchored record (%s) did not deliver; no "
-                       "ledger row written, no identifier status changed", outcome, entity_id,
-                       curated.source_record_id)
+    if source_record_id is None:
+        logger.warning("NPI outcome %s for entity %s has no delivery-record anchor (intake_id=%s); no ledger row "
+                       "written, no identifier status changed", outcome, entity_id, intake_id)
         return None
 
-    # ONE form of the NPI from here on - the digits (`npi_key`): the identifier flip, the duplicate check and the
-    # stored `original_value` all use it, so a reported "1234567893.0" cannot write a row that claims a flip it did
-    # not make. A value with no digits ("n/a") is no NPI.
-    npi = npi_key(npi) or None
-    if outcome == NPI_DEACTIVATED and npi is None:
-        logger.warning("NPI_DEACTIVATED for entity %s was reported with no NPI; a deactivation is about an NPI - no "
-                       "ledger row written", entity_id)
-        return None
-
-    # The identifier-status change and the ledger row succeed or fail TOGETHER: a savepoint owned by the writer, so
-    # a caller without its own (arc_pipeline, review_service) cannot commit a flushed status change without its row.
+    # Protect anchor reads as well as writes: a failed best-effort lookup must not abort the caller's transaction.
+    # begin_nested flushes pending caller state first; only operations inside this savepoint are rolled back here.
     async with db.begin_nested():
+        # VALIDATE FIRST: nothing below - the identifier-status change included - happens without an established anchor
+        # and an NPI that anchored record delivered (CodeRabbit on #233 round 6: the status change used to run before
+        # the anchor was validated, for every caller).
+        curated = await _curated_for_anchor(db, entity_id, source_record_id, intake_id)
+        if curated is None:
+            logger.warning("NPI outcome %s for entity %s has no established delivery-record anchor (source_record_id=%s, "
+                           "intake_id=%s); no ledger row written, no identifier status changed",
+                           outcome, entity_id, source_record_id, intake_id)
+            return None
+        record = await db.get(m.RceSourceRecord, curated.source_record_id)
+        if npi_key(npi) and (record is None or npi_key(delivered_npi_of(record)) != npi_key(npi)):
+            # A finding ABOUT an NPI belongs only to a record that delivered that NPI (callers hold the registry
+            # entity's NPI, which another delivery may have supplied). An explicit finding reported with no NPI at all
+            # (post-promotion findings) is not compared; the NPPES-derived helpers below never report one without an NPI.
+            logger.warning("NPI outcome %s for entity %s is about an NPI the anchored record (%s) did not deliver; no "
+                           "ledger row written, no identifier status changed", outcome, entity_id,
+                           curated.source_record_id)
+            return None
+
+        # ONE form of the NPI from here on - the digits (`npi_key`): the identifier flip, the duplicate check and the
+        # stored `original_value` all use it, so a reported "1234567893.0" cannot write a row that claims a flip it did
+        # not make. A value with no digits ("n/a") is no NPI.
+        npi = npi_key(npi) or None
+        if outcome == NPI_DEACTIVATED and npi is None:
+            logger.warning("NPI_DEACTIVATED for entity %s was reported with no NPI; a deactivation is about an NPI - no "
+                           "ledger row written", entity_id)
+            return None
+
+        # The identifier-status change and the ledger row succeed or fail TOGETHER: a savepoint owned by the writer, so
+        # a caller without its own (arc_pipeline, review_service) cannot commit a flushed status change without its row.
         issue = await _write_npi_outcome(db, entity_id=entity_id, npi=npi, outcome=outcome, curated=curated,
-                                         detail_text=detail_text, deactivation_date=deactivation_date)
+                                             detail_text=detail_text, deactivation_date=deactivation_date)
     if commit and issue is not None:
         await db.commit()
     return issue
