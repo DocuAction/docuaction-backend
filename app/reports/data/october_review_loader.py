@@ -83,6 +83,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from sqlalchemy import and_, exists, func, or_, select, text
 
+from app.reports.data import reviewed_disposition as rd
 from app.reports.data.october_review_dataset import STORED_COMMENT_KEY
 
 LOADER_VERSION = "1.0.0"
@@ -315,6 +316,8 @@ async def load_record_facts(
             .order_by(reg.ReviewRecord.source_record_id,
                       reg.ReviewRecord.created_at.desc(),
                       reg.ReviewRecord.id.desc()))).scalars().all()}
+        decisions = await rd.load_for_reviews(
+            db, [r.review_id for r in reviews.values()], cutoff)
         stats["records_with_multiple_reviews"] += len((await db.execute(
             select(reg.ReviewRecord.source_record_id)
             .where(reg.ReviewRecord.source_record_id.in_(ids),
@@ -455,6 +458,11 @@ async def load_record_facts(
                 "bucket": bucket, "status": status, "bucket_basis": basis,
                 "held_reason": _s(cur.status_reason) if cur is not None else "",
                 "flag": "; ".join(flag_parts),
+                # Analyst/QA disposition, SEPARATE from the automated bucket above.
+                **{"reviewed_" + k: v for k, v in (
+                    rd.summarize(decisions.get(rev.review_id, []), automated_bucket=bucket).items()
+                    if rev is not None else
+                    {"disposition": "", "date": "", "qa_status": rd.NOT_REVIEWED, "basis": ""}.items())},
                 "provisional": bool(ann.get("provisional")),
                 "bucket_annotation": _s(ann.get("bucket_annotation")),
                 "nppes": cells["nppes"], "pecos": cells["pecos"],
