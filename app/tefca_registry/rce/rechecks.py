@@ -563,14 +563,16 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
     for row in rows:
         row["review_cycle_id"] = None
         db.add(TEFCADimensionEvidence(**row))
+    ledger_failure = None
     try:
-        # The ledger row belongs to the DELIVERED record validated above (same NPI as the probes used). Savepoint: a
-        # failure inside the ledger write rolls back to here - the identifier change the writer makes with it - and
-        # leaves the batch session usable; the evidence appended above stays.
-        async with db.begin_nested():
-            await vf.record_from_evidence(db, entity_id=item.entity_id, npi=probe_npi or None, evidence=evidence,
-                                          source_record_id=context["source_record_id"], intake_id=job.intake_id)
+        # The ledger row belongs to the DELIVERED record validated above (same NPI as the probes used). The writer
+        # wraps its identifier change and its insert in one savepoint, so a failure leaves neither behind and the
+        # batch session usable; the evidence appended above stays. A failure is NOT silent: it is flagged on the
+        # item and counted in the job summary (class name only, never message text).
+        await vf.record_from_evidence(db, entity_id=item.entity_id, npi=probe_npi or None, evidence=evidence,
+                                      source_record_id=context["source_record_id"], intake_id=job.intake_id)
     except Exception as exc:  # noqa: BLE001 -- the ledger must not fail a recheck
+        ledger_failure = type(exc).__name__
         logger.error("recheck: NPI outcome not recorded for %s: %s", item.entity_id,
                      type(exc).__name__, exc_info=True)
 
@@ -588,6 +590,9 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
     item.detail = {"evidence_generation": evidence.get("generated_at"),
                    "rows_appended": len(rows),
                    "entity_status_changed_to_verified": False}
+    if ledger_failure:
+        item.detail["ledger_recorded"] = False
+        item.detail["ledger_error_class"] = ledger_failure
 
 
 async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str, Any]:
@@ -637,6 +642,11 @@ async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str
                    "pending": pending,
                    # Items refused at identity validation: nothing was gathered or persisted for them.
                    "identity_refused": int(counts.get(rm.OUTCOME_IDENTITY_REFUSED, 0)),
+                   # Items whose evidence was appended but whose NPI ledger write failed (see item detail).
+                   "ledger_not_recorded": int((await db.execute(
+                       select(func.count()).select_from(RceRecheckItem).where(
+                           RceRecheckItem.job_id == job.id,
+                           RceRecheckItem.detail["ledger_recorded"].astext == "false"))).scalar() or 0),
                    "note": "ANSWERED_NO_SIGNAL is a re-evaluation result, not a "
                            "verification pass; no entity was marked verified."}
 
@@ -662,7 +672,14 @@ async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str
         not_asked = (int(counts.get(rm.OUTCOME_NOT_RESOLVED, 0)) + int(counts.get(rm.ITEM_ERROR, 0)) + refused)
         total_items = sum(int(v) for v in counts.values())
         job.completed_at = datetime.utcnow()
-        if total_items and not_asked == total_items:
+        if total_items and refused == total_items:
+            job.state = rm.STATE_FAILED
+            job.error_reason = (
+                f"no entity could be re-evaluated: all {refused} item(s) were refused at identity validation "
+                f"(the reference no longer maps to the queued entity, the delivery has no single delivered "
+                f"record for it, or the probes would use an NPI the delivery did not submit). Nothing was "
+                f"persisted for them and the source was not asked.")
+        elif total_items and not_asked == total_items:
             job.state = rm.STATE_FAILED
             job.error_reason = (
                 f"no entity could be re-evaluated: {int(counts.get(rm.OUTCOME_NOT_RESOLVED, 0))} "

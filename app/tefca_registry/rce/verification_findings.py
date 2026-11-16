@@ -321,7 +321,27 @@ async def record_npi_outcome(db, *, entity_id, npi: Optional[str], outcome: str,
                        curated.source_record_id)
         return None
 
-    if outcome == NPI_DEACTIVATED and npi:
+    # ONE form of the NPI from here on - the digits (`npi_key`): the identifier flip, the duplicate check and the
+    # stored `original_value` all use it, so a reported "1234567893.0" cannot write a row that claims a flip it did
+    # not make. A value with no digits ("n/a") is no NPI.
+    npi = npi_key(npi) or None
+    if outcome == NPI_DEACTIVATED and npi is None:
+        logger.warning("NPI_DEACTIVATED for entity %s was reported with no NPI; a deactivation is about an NPI - no "
+                       "ledger row written", entity_id)
+        return None
+
+    # The identifier-status change and the ledger row succeed or fail TOGETHER: a savepoint owned by the writer, so
+    # a caller without its own (arc_pipeline, review_service) cannot commit a flushed status change without its row.
+    async with db.begin_nested():
+        issue = await _write_npi_outcome(db, entity_id=entity_id, npi=npi, outcome=outcome, curated=curated,
+                                         detail_text=detail_text, deactivation_date=deactivation_date)
+    if commit and issue is not None:
+        await db.commit()
+    return issue
+
+
+async def _write_npi_outcome(db, *, entity_id, npi, outcome, curated, detail_text, deactivation_date):
+    if outcome == NPI_DEACTIVATED:
         await _mark_identifier_inactive(db, entity_id, npi)
 
     rule_id, severity, authority = NON_QUALITY_ISSUE_TYPES[outcome]
@@ -376,8 +396,6 @@ async def record_npi_outcome(db, *, entity_id, npi: Optional[str], outcome: str,
     )
     db.add(issue)
     await db.flush()
-    if commit:
-        await db.commit()
     logger.info("NPI verification outcome recorded",
                 extra={"entity_id": str(entity_id), "outcome": outcome,
                        "issue_code": issue.issue_code})

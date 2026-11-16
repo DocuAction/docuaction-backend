@@ -14,6 +14,10 @@ Rules proved here:
   * a failure inside the ledger write rolls back to a savepoint (no orphan identifier change, session still usable);
   * a job whose every item was refused FAILS with a reason and reports the count; it never reads SUCCEEDED.
 
+Coverage (`automated_verification`) has no attempt marker other than the entity's evidence rows, so it cannot refuse
+an attempt without being reselected forever; there the shared validation gates only the NPI ledger write and the
+identifier change it carries (flagged in the result and counted in the batch summary).
+
 Deliberately NOT implemented (it contradicts the refusal rule): a review nitpick asked the refusal test to assert that
 `record_from_evidence` is awaited with `source_record_id=None`; a refused recheck must not reach outcome recording.
 Synthetic data only.
@@ -148,7 +152,8 @@ async def test_the_writer_records_only_an_npi_the_anchored_record_delivered(roll
         assert (issue is not None) is writes, (delivered, reported, outcome)
     st = await _state(db, ent, rec)
     if writes:
-        assert len(st["issues"]) == 2 and all(i.original_value for i in st["issues"])
+        assert len(st["issues"]) == 2 and all(i.original_value == NPI for i in st["issues"])   # stored as digits
+        assert st["identifier"] == [vf.INACTIVE_PENDING_REVIEW]     # the row that claims the flip really flipped it
     else:
         assert st["issues"] == [] and st["identifier"] == ["active"]         # no row (never npi=None), no status change
 
@@ -244,14 +249,40 @@ async def test_no_probe_npi_proceeds_but_never_writes_an_npi_outcome(rolled_back
     assert st["evidence"] >= 1 and st["issues"] == []                 # entity evidence appended; no ledger row (npi=None)
 
 
-async def test_a_failing_ledger_write_rolls_back_to_its_savepoint(rolled_back_db, monkeypatch):
+async def test_the_writer_owns_the_savepoint_a_failure_after_the_flip_leaves_no_flip_and_no_row(rolled_back_db, monkeypatch):
+    """For a caller WITHOUT its own savepoint (arc_pipeline, review_service): the real writer flips the identifier,
+    then fails before its insert; neither survives and the session stays usable."""
     db = rolled_back_db
     ent, intake_id, (rec,) = await _one_delivery(db, "9.99.777.78", entity_npi=NPI, delivered_npi=NPI)
 
-    async def _flip_then_fail(db_, **kw):
-        await vf._mark_identifier_inactive(db_, kw["entity_id"], NPI)   # what the writer does before its insert
-        await db_.execute(text("select * from table_that_does_not_exist_2026_11_16"))
+    async def _boom(*_a, **_k):
+        raise RuntimeError("synthetic failure after the identifier flip")
+    monkeypatch.setattr(vf.run_selection, "current_run", _boom)
+    with pytest.raises(RuntimeError):
+        await vf.record_npi_outcome(db, entity_id=ent, npi=NPI, outcome=vf.NPI_DEACTIVATED,
+                                    source_record_id=rec.id, intake_id=intake_id)
+    await db.flush()                                                     # still usable
+    st = await _state(db, ent, rec)
+    assert st["identifier"] == ["active"] and st["issues"] == []
 
+
+@pytest.mark.parametrize("npi", [None, "", "n/a"])
+async def test_a_deactivation_reported_with_no_npi_writes_nothing(rolled_back_db, npi):
+    db = rolled_back_db
+    ent, intake_id, (rec,) = await _one_delivery(db, "9.99.777.83", entity_npi=NPI, delivered_npi=NPI)
+    assert await vf.record_npi_outcome(db, entity_id=ent, npi=npi, outcome=vf.NPI_DEACTIVATED,
+                                       source_record_id=rec.id, intake_id=intake_id) is None
+    st = await _state(db, ent, rec)
+    assert st["issues"] == [] and st["identifier"] == ["active"]
+
+
+async def test_a_failed_ledger_write_is_flagged_on_the_item_not_swallowed(rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    ent, intake_id, (rec,) = await _one_delivery(db, "9.99.777.79", entity_npi=NPI, delivered_npi=NPI)
+
+    async def _boom(*_a, **_k):
+        raise RuntimeError("synthetic secret text that must not be stored")
+    monkeypatch.setattr(vf.run_selection, "current_run", _boom)         # inside the REAL writer, after the flip
     from app.tefca_registry.rce import rechecks
     monkeypatch.setattr(rechecks, "evidence_sources_for", lambda _sid: ("NPPES",))
     job = SimpleNamespace(intake_id=intake_id, pinned={}, source_id="nppes", trigger_ref="x")
@@ -259,46 +290,100 @@ async def test_a_failing_ledger_write_rolls_back_to_its_savepoint(rolled_back_db
                            new_disposition=None, processed_at=None, detail={})
     with patch("app.Tefca.entity_resolution.resolve_entity", new=AsyncMock(return_value=_resolved(ent))), \
             patch("app.Tefca.evidence_service.EvidenceService.build_evidence",
-                  new=AsyncMock(return_value=_deactivated_evidence())), \
-            patch.object(vf, "record_from_evidence", new=AsyncMock(side_effect=_flip_then_fail)):
+                  new=AsyncMock(return_value=_deactivated_evidence())):
         await rechecks._recheck_one(db, job, item, local_store=None)
-    await db.flush()                                                     # the session is still usable
+    await db.flush()
     st = await _state(db, ent, rec)
     assert item.state == rm.ITEM_DONE
-    assert st["identifier"] == ["active"] and st["issues"] == []          # no status change without its ledger row
-    assert st["evidence"] >= 1                                            # the evidence appended before it stays
+    assert item.detail["ledger_recorded"] is False and item.detail["ledger_error_class"] == "RuntimeError"
+    assert "synthetic secret" not in str(item.detail)
+    assert st["identifier"] == ["active"] and st["issues"] == [] and st["evidence"] >= 1
 
 
 # ── the job: an all-refused job is not a success ─────────────────────────────────────────────────────────────────────
 
-async def test_a_job_whose_every_item_was_refused_fails_with_a_reason(rolled_back_db, monkeypatch):
+async def _real_job(db, intake_id, items):
     from app.tefca_registry.rce import rechecks
     from app.tefca_registry.rce.recheck_models import RceRecheckItem, RceRecheckJob
-    db = rolled_back_db
-    ent, (intake_a, rec_a), (intake_b, rec_b) = await _two_deliveries(db, a_promoted_later=True)
-    other = await seed_entity(db, oid=f"{SYN}-OTHER-{uuid.uuid4().hex[:8]}", name=f"{SYN} other entity", npi=OTHER_NPI)
-    job = RceRecheckJob(id=uuid.uuid4(), intake_id=intake_b, trigger_kind=rm.TRIGGER_SOURCE_RECOVERY, source_id="nppes",
+    job = RceRecheckJob(id=uuid.uuid4(), intake_id=intake_id, trigger_kind=rm.TRIGGER_SOURCE_RECOVERY, source_id="nppes",
                         trigger_ref="synthetic", idempotency_key=uuid.uuid4().hex, state=rm.STATE_RUNNING,
-                        requested_by="syn", rationale="synthetic", pinned={}, baseline_hash="0" * 64, target_count=1,
-                        processed_count=0)
+                        requested_by="syn", rationale="synthetic", pinned={}, baseline_hash="0" * 64,
+                        target_count=len(items), processed_count=0)
     db.add(job)
     await db.flush()
-    db.add(RceRecheckItem(id=uuid.uuid4(), job_id=job.id, entity_id=ent, entity_ref=rec_b.source_rce_id,
-                          state=rm.ITEM_PENDING, detail={}))
+    for ent, ref in items:
+        db.add(RceRecheckItem(id=uuid.uuid4(), job_id=job.id, entity_id=ent, entity_ref=ref,
+                              state=rm.ITEM_PENDING, detail={}))
     await db.flush()
     job.baseline_hash = await rechecks._current_baseline(db, job)
     await db.flush()
+    return job
+
+
+async def _run_job(db, monkeypatch, job, resolve):
+    from app.tefca_registry.rce import rechecks
     monkeypatch.setattr(rechecks, "evidence_sources_for", lambda _sid: ("NPPES",))
-    with patch("app.Tefca.entity_resolution.resolve_entity", new=AsyncMock(return_value=_resolved(other, OTHER_NPI))), \
+    with patch("app.Tefca.entity_resolution.resolve_entity", new=AsyncMock(side_effect=resolve)), \
             patch("app.Tefca.evidence_service.EvidenceService.build_evidence",
                   new=AsyncMock(return_value=_deactivated_evidence())):
-        out = await rechecks.run_batch(db, job.id)
+        return await rechecks.run_batch(db, job.id)
+
+
+async def test_a_job_whose_every_item_was_refused_fails_with_a_reason(rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    ent, (intake_a, rec_a), (intake_b, rec_b) = await _two_deliveries(db, a_promoted_later=True)
+    other = await seed_entity(db, oid=f"{SYN}-OTHER-{uuid.uuid4().hex[:8]}", name=f"{SYN} other entity", npi=OTHER_NPI)
+    job = await _real_job(db, intake_b, [(ent, rec_b.source_rce_id)])
+
+    async def _resolve(_db, _ref):
+        return _resolved(other, OTHER_NPI)
+    out = await _run_job(db, monkeypatch, job, _resolve)
     assert out["state"] == rm.STATE_FAILED and out["complete"] is True      # never SUCCEEDED
     assert "refused at identity validation" in out["error_reason"]
+    assert "resolver" not in out["error_reason"].lower()                    # the reason is identity, not the resolver
     assert out["summary"]["identity_refused"] == 1
     assert out["summary"]["by_outcome"] == {rm.OUTCOME_IDENTITY_REFUSED: 1}
     _untouched(await _state(db, ent, rec_a, rec_b))
     _untouched(await _state(db, other))
+
+
+async def test_a_mixed_job_succeeds_and_reports_the_refused_count(rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    good, intake_id, (rec_good,) = await _one_delivery(db, "9.99.777.84", entity_npi=NPI, delivered_npi=NPI)
+    # a second entity whose reference is NOT carried by this delivery -> refused
+    bad = await seed_entity(db, oid=f"{SYN}-BAD-{uuid.uuid4().hex[:8]}", name=f"{SYN} bad entity", npi=OTHER_NPI)
+    job = await _real_job(db, intake_id, [(good, rec_good.source_rce_id), (bad, "9.99.777.84.not-delivered")])
+
+    async def _resolve(_db, ref):
+        return _resolved(good) if ref == rec_good.source_rce_id else _resolved(bad, OTHER_NPI)
+    out = await _run_job(db, monkeypatch, job, _resolve)
+    assert out["state"] == rm.STATE_SUCCEEDED and out["complete"] is True
+    assert out["summary"]["identity_refused"] == 1 and out["summary"]["ledger_not_recorded"] == 0
+    assert out["summary"]["by_outcome"] == {rm.OUTCOME_IDENTITY_REFUSED: 1, rm.OUTCOME_RISK_SIGNAL: 1}
+    assert [i.source_record_id for i in (await _state(db, good, rec_good))["issues"]] == [rec_good.id]
+    assert (await _state(db, bad))["evidence"] == 0
+
+
+async def test_the_job_summary_counts_a_failed_ledger_write(rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    ent, intake_id, (rec,) = await _one_delivery(db, "9.99.777.85", entity_npi=NPI, delivered_npi=NPI)
+    job = await _real_job(db, intake_id, [(ent, rec.source_rce_id)])
+    real_current_run = vf.run_selection.current_run
+    calls = {"n": 0}
+
+    async def _boom_in_writer(db_, intake):
+        import inspect
+        if any(f.function == "_write_npi_outcome" for f in inspect.stack()):
+            raise RuntimeError("synthetic ledger failure")
+        return await real_current_run(db_, intake)
+    monkeypatch.setattr(vf.run_selection, "current_run", _boom_in_writer)
+
+    async def _resolve(_db, _ref):
+        return _resolved(ent)
+    out = await _run_job(db, monkeypatch, job, _resolve)
+    assert out["summary"]["ledger_not_recorded"] == 1
+    st = await _state(db, ent, rec)
+    assert st["issues"] == [] and st["identifier"] == ["active"] and st["evidence"] >= 1
 
 
 # ── the sibling automated-coverage path uses the same validation ─────────────────────────────────────────────────────
@@ -313,8 +398,7 @@ async def _coverage(db, *, ref, ent, intake, resolved, evidence=None):
 
 
 @pytest.mark.parametrize("case", ["another_entity", "no_registry_id", "reference_not_in_this_delivery", "npi_differs"])
-async def test_a_refused_coverage_attempt_persists_nothing(rolled_back_db, case):
-    from app.tefca_registry.rce import automated_verification as av
+async def test_coverage_without_a_validated_context_writes_no_npi_outcome_and_changes_no_identifier(rolled_back_db, case):
     db = rolled_back_db
     ent, (intake_a, rec_a), (intake_b, rec_b) = await _two_deliveries(db, a_promoted_later=True)
     other = await seed_entity(db, oid=f"{SYN}-OTHER-{uuid.uuid4().hex[:8]}", name=f"{SYN} other entity", npi=OTHER_NPI)
@@ -327,11 +411,60 @@ async def test_a_refused_coverage_attempt_persists_nothing(rolled_back_db, case)
         resolved = _resolved(ent, OTHER_NPI)                 # the probes would ask about an NPI delivery B did not submit
     else:
         ref = rec_a.source_rce_id
-    out, build = await _coverage(db, ref=ref, ent=ent, intake=intake_b, resolved=resolved)
-    assert out["outcome"] == av.OUTCOME_NOT_ELIGIBLE and out["persisted"] is False and out["reason"]
-    _untouched(await _state(db, ent, rec_a, rec_b))
-    _untouched(await _state(db, other))
-    build.assert_not_awaited()
+    out, _build = await _coverage(db, ref=ref, ent=ent, intake=intake_b, resolved=resolved)
+    assert out["npi_outcome_not_anchored"]                                  # flagged, with the reason
+    for e in (ent, other):
+        st = await _state(db, e, rec_a, rec_b)
+        assert st["issues"] == [] and vf.INACTIVE_PENDING_REVIEW not in st["identifier"]
+
+
+async def test_a_failed_coverage_ledger_write_is_flagged_and_leaves_no_flip(rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    ent, intake_id, (rec,) = await _one_delivery(db, "9.99.777.86", entity_npi=NPI, delivered_npi=NPI)
+
+    async def _boom(*_a, **_k):
+        raise RuntimeError("synthetic secret text that must not be stored")
+    monkeypatch.setattr(vf.run_selection, "current_run", _boom)
+    out, _build = await _coverage(db, ref=rec.source_rce_id, ent=ent, intake=intake_id, resolved=_resolved(ent))
+    await db.flush()
+    st = await _state(db, ent, rec)
+    assert out["ledger_recorded"] is False and out["ledger_error_class"] == "RuntimeError"
+    assert "synthetic secret" not in str(out)
+    assert st["identifier"] == ["active"] and st["issues"] == [] and st["evidence"] >= 1
+
+
+async def test_coverage_terminates_when_more_entities_lack_a_validated_context_than_fit_in_a_batch(rolled_back_db):
+    """The regression this guards: refusing a coverage attempt without persisting anything reselects the same
+    entities every batch. Three entities whose probes would use an NPI the delivery did not submit, batch size 2:
+    the second batch must advance and coverage must complete."""
+    from app.tefca_registry.rce import automated_verification as av
+    db = rolled_back_db
+    rows = make_rows(3, arc="9.99.777.87")
+    for r in rows:
+        r["NPI"] = NPI
+    intake_id, _ = await seed_intake(db, rows, with_job=False)
+    recs = (await db.execute(select(m.RceSourceRecord).where(
+        m.RceSourceRecord.source_intake_id == intake_id))).scalars().all()
+    by_ref = {}
+    for r in recs:
+        e = await seed_entity(db, oid=f"{SYN}-COV-{uuid.uuid4().hex[:8]}", name=f"{SYN} cov entity")
+        db.add(m.RceCuratedRecord(id=uuid.uuid4(), source_intake_id=intake_id, source_record_id=r.id,
+                                  record_status="CLEAN", rce_org_oid=r.source_rce_id, transformation_version="test",
+                                  canonical_entity_id=e, promoted_at=T0))
+        by_ref[r.source_rce_id] = _resolved(e, OTHER_NPI)        # registry NPI != the delivered NPI
+    await db.flush()
+
+    async def _resolve(_db, ref):
+        return by_ref[ref]
+    with patch("app.Tefca.entity_resolution.resolve_entity", new=AsyncMock(side_effect=_resolve)), \
+            patch("app.Tefca.evidence_service.EvidenceService.build_evidence",
+                  new=AsyncMock(return_value=_not_found_evidence())):
+        first = await av.run_coverage_batch(db, intake_id, batch_size=2)
+        second = await av.run_coverage_batch(db, intake_id, batch_size=2)
+    assert first["processed_this_call"] == 2 and first["remaining"] == 1 and first["complete"] is False
+    assert second["processed_this_call"] == 1 and second["remaining"] == 0 and second["complete"] is True
+    assert first["npi_outcome_not_anchored"] == 2 and second["npi_outcome_not_anchored"] == 1
+    assert (await db.execute(select(m.RceIssue).where(m.RceIssue.source_intake_id == intake_id))).scalars().all() == []
 
 
 @pytest.mark.parametrize("a_promoted_later", [True, False])
