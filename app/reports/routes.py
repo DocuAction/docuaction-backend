@@ -2174,10 +2174,16 @@ async def export_record_review(
                                 "run_id": assessment.run_id})
     except ExportJobConflict as exc:
         raise HTTPException(409, str(exc))
-    reused = before is not None and str(before.id) == str(job.id)
+    # ONE cause behind two review findings (#233): `request_job()` (duplicate-request race) and
+    # `record_export_event()` (a failed audit commit) can roll the request-scoped session back, which expires every
+    # persistent ORM instance. Take plain values from `job` ONCE, here, before any call that may roll back, and use only
+    # those below - the job is already committed and queued, so the response must not depend on a live ORM object.
+    job_payload = job.to_dict()
+    job_id = str(job.id)
+    reused = before is not None and str(before.id) == job_id
     await record_export_event(
         db, action=ACTION_REUSED if reused else ACTION_REQUESTED,
-        actor=generated_by, job_id=str(job.id),
+        actor=generated_by, job_id=job_id,
         detail=("A record-review export for this delivery, run, cutoff and "
                 "format was already in flight; the existing job was returned."
                 if reused else "A record-review export was requested."),
@@ -2186,7 +2192,7 @@ async def export_record_review(
                "assessment_run_id": assessment.run_id,
                "evidence_cutoff": cutoff.isoformat()})
     return {
-        **job.to_dict(),
+        **job_payload,
         "reused_existing_job": reused,
         "delivery": delivery_label,
         "format": request.format,
@@ -2194,7 +2200,7 @@ async def export_record_review(
         "assessment_date": assessment.value.isoformat(),
         "evidence_cutoff": cutoff.isoformat(),
         "status": "DRAFT / NOT FINAL / INDEPENDENT QA PENDING",
-        "status_url": f"/api/reports/exports/jobs/{job.id}",
+        "status_url": f"/api/reports/exports/jobs/{job_id}",
     }
 
 

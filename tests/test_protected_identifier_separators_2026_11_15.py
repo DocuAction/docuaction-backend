@@ -85,11 +85,36 @@ def test_a_long_run_of_label_starts_is_scanned_in_linear_time():
     assert times[64000] < 40 * max(times[4000], 0.01), f"super-linear growth: {times}"
 
 
-def test_more_than_eight_trailing_tokens_is_the_documented_limit():
-    name = "EIN" + "_x" * 9
-    assert pi.is_protected_field(name)
-    assert pi.find_in_text(f"{name}: {VALUE}") == [], "stated limit of the bounded trailing run"
+def test_a_name_with_any_number_of_trailing_tokens_is_a_label_exactly_as_the_field_rule_says():
+    """CodeRabbit on #233 (3rd review, Major): the text scanner bounded the trailing run at 8 tokens, so a name the FIELD
+    rule protects (`EIN` + 9 tokens) escaped text detection and the gateway. ONE cause: the text scanner re-implemented the
+    field tokenizer with a hard bound (the same divergence behind the 1.4.1 bound and the 1.5.1 separators). Parity: whatever
+    `is_protected_field` protects as a name is detected and redacted in text, at any length, in linear time."""
+    for tokens in (9, 20, 200):
+        name = "EIN" + "_x" * tokens
+        assert pi.is_protected_field(name)
+        for text in (f"{name}: {VALUE}", f"{name}={VALUE}", f'{{"{name}": "{VALUE}"}}', f"{name} {VALUE}"):
+            assert "labelled_tax_identifier" in pi.find_in_text(text), (tokens, text)
+            assert VALUE not in pi.redact_text(text), (tokens, text)
     assert "labelled_tax_identifier" in pi.find_in_text("EIN" + "_x" * 8 + f": {VALUE}")
+
+
+def test_the_long_name_pass_keeps_prose_and_non_protected_names_untouched():
+    for text in (f"protein_x_x_x_x_x_x_x_x_x_x: {VALUE}", f"taxonomy_a_b_c_d_e_f_g_h_i: {VALUE}",
+                 "EIN" + "_x" * 12 + ": not a number", "a_b_c_d_e_f_g_h_i_j_k: 12"):
+        assert "labelled_tax_identifier" not in pi.find_in_text(text), text
+
+
+def test_the_long_name_pass_is_linear():
+    import time
+    times = {}
+    for n in (4000, 16000, 64000):
+        text = "EIN" + "_x" * n
+        t0 = time.process_time()
+        pi.find_in_text(text + ": 12-3456789")
+        pi.redact_text(text + ": 12-3456789")
+        times[n] = time.process_time() - t0
+    assert times[64000] < 5.0 and times[64000] < 40 * max(times[4000], 0.01), times
 
 
 # ── CodeRabbit on #232 (7534eb6): spaced quoted keys, index-vs-value, empty containers (reproduced before 1.5.0) ─────────

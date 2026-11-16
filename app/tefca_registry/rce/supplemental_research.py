@@ -209,6 +209,14 @@ async def list_entries(db, *, intake_id: Any, source_record_id: Any = None, curr
                        limit: int = 200) -> List[Dict[str, Any]]:
     """Read back, newest chain state first. `current_only` hides superseded rows and withdrawn chains; the full
     history (audit trail) is current_only=False."""
+    return (await list_entries_page(db, intake_id=intake_id, source_record_id=source_record_id,
+                                    current_only=current_only, limit=limit))[0]
+
+
+async def list_entries_page(db, *, intake_id: Any, source_record_id: Any = None, current_only: bool = True,
+                            limit: int = 200) -> tuple:
+    """(entries, truncated). One row more than the bound is fetched so a caller can tell a complete read from a cut
+    one: a reviewer must never take a partial list for the whole audit history (CodeRabbit, #233, round 3)."""
     await _assert_store(db)
     intake_uuid = _uuid(intake_id)
     if intake_uuid is None:
@@ -224,8 +232,9 @@ async def list_entries(db, *, intake_id: Any, source_record_id: Any = None, curr
         later = aliased(R)
         q = q.where(R.entry_action != ACTION_WITHDRAW,
                     ~exists().where(later.supersedes_id == R.id))
-    rows = (await db.execute(q.order_by(R.source_record_id, R.entered_at, R.id).limit(max(1, min(limit, 500))))).scalars().all()
-    return [_row(r) for r in rows]
+    bound = max(1, min(limit, 500))
+    rows = (await db.execute(q.order_by(R.source_record_id, R.entered_at, R.id).limit(bound + 1))).scalars().all()
+    return [_row(r) for r in rows[:bound]], len(rows) > bound
 
 
 async def current_by_record(db, intake_id: Any, record_ids: List[Any],

@@ -232,3 +232,23 @@ async def test_a_second_root_and_a_cross_record_amendment_are_refused_by_the_dat
     cross = _row(b, entry_action="AMEND", supersedes_id=uuid.UUID(root["id"]),
                  change_reason="amending an entry that belongs to another record")
     await _expect_db_refusal(db, cross, "must stay on the same source record")
+
+
+# ── CodeRabbit on #233, round 3 (routes.py:1069): the history read says when it was cut off ─────────────────
+
+async def test_the_research_history_read_signals_truncation_and_the_limit_in_force(rolled_back_db):
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, "9.99.777.99", n=3)
+    for rec in recs:
+        await _record(db, intake_id, rec)
+    user = SimpleNamespace(email=WHO, id=None)
+
+    cut = await rce_routes.read_supplemental_npi_research(str(intake_id), source_record_id=None, current_only=False,
+                                                          limit=2, db=db, user=user)
+    assert len(cut["entries"]) == 2 and cut["truncated"] is True and cut["limit"] == 2
+    exact = await rce_routes.read_supplemental_npi_research(str(intake_id), source_record_id=None, current_only=False,
+                                                            limit=3, db=db, user=user)
+    assert len(exact["entries"]) == 3 and exact["truncated"] is False        # exactly `limit` rows is NOT a truncation
+    more = await rce_routes.read_supplemental_npi_research(str(intake_id), source_record_id=None, current_only=True,
+                                                           limit=50, db=db, user=user)
+    assert len(more["entries"]) == 3 and more["truncated"] is False and more["limit"] == 50
