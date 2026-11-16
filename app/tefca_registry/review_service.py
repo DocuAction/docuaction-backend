@@ -1101,7 +1101,11 @@ async def run_review(db, entity, *, user=None, ip_address: Optional[str] = None,
     # repeat verification with the same outcome writes nothing new.
     try:
         from app.tefca_registry.rce import verification_findings as vf
-        await vf.record_from_sources(db, entity_id=entity.id, sources=sources)
+        # Only a review anchored to a validated delivered record (`selected`) writes the ledger row, on THAT record.
+        await vf.record_from_sources(
+            db, entity_id=entity.id, sources=sources,
+            source_record_id=(selected.id if selected is not None else None),
+            intake_id=(selected.source_intake_id if selected is not None else None))
     except Exception as exc:  # noqa: BLE001 — the ledger must not fail a review
         logger.error("NPI verification outcome not recorded for %s: %s",
                      entity.id, type(exc).__name__, exc_info=True)
