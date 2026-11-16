@@ -169,6 +169,21 @@ def exchange_direction_from_record(org_node_type: Optional[str]) -> str:
     return DIRECTION_UNKNOWN
 
 
+class AssessmentDateRequired(ValueError):
+    """A Treatment producer was called without an assessment date. The date is
+    a classification INPUT (BR-NPI-TRTMNT-001 is date-gated); a missing one is
+    refused, never defaulted to the wall clock."""
+
+
+def _require_assessment_date(value) -> date:
+    if value is None or isinstance(value, str) or not isinstance(value, date):
+        raise AssessmentDateRequired(
+            "assessment_date is required and must be a date (use "
+            "rce.assessment_context.resolve_assessment_date); refusing to "
+            "default to today")
+    return value.date() if isinstance(value, datetime) else value
+
+
 def _as_date(value) -> Optional[date]:
     if value is None:
         return None
@@ -368,6 +383,41 @@ def treatment_onc_scope_missing_npi(
     assessment_date: date,
     requirement_effective: date,
 ) -> Optional[dict]:
+    """Sole-purpose ONC scope (relayed 2026-11-09). See `_treatment_scope_signal`."""
+    return _treatment_scope_signal(
+        purposes_raw, npi_raw, active_raw, participation_raw, assessment_date=assessment_date,
+        requirement_effective=requirement_effective, combined_purposes=False)
+
+
+def treatment_combined_scope_missing_npi(
+    purposes_raw: Optional[str],
+    npi_raw: Optional[str],
+    active_raw: Optional[str],
+    participation_raw: Optional[str],
+    *,
+    assessment_date: date,
+    requirement_effective: date,
+) -> Optional[dict]:
+    """Methodology v1.3-A (REVISED B) amendment, relayed in the 2026-11-15 prompt: the exact
+    parsed T-TRTMNT token ALONE OR COMBINED with other purposes is in scope (token order
+    irrelevant; T-TREAT and near-match tokens never count). Every other condition is the ONC
+    scope's. IMPLEMENTED, NOT WIRED: no rule, component or pipeline calls it; activation and
+    the effective date are owner decisions."""
+    return _treatment_scope_signal(
+        purposes_raw, npi_raw, active_raw, participation_raw, assessment_date=assessment_date,
+        requirement_effective=requirement_effective, combined_purposes=True)
+
+
+def _treatment_scope_signal(
+    purposes_raw: Optional[str],
+    npi_raw: Optional[str],
+    active_raw: Optional[str],
+    participation_raw: Optional[str],
+    *,
+    assessment_date: date,
+    requirement_effective: date,
+    combined_purposes: bool,
+) -> Optional[dict]:
     """The ONC-updated-scope Treatment missing-NPI signal, or None when out of
     scope. A NEW VERSION of the RULE-006 condition (the owner-adopted
     any-combination definition survives as the prior version; this one
@@ -394,13 +444,16 @@ def treatment_onc_scope_missing_npi(
     """
     from app.tefca_registry.rce.field_map import normalize_active
 
+    assessment_date = _require_assessment_date(assessment_date)
     if assessment_date < requirement_effective:
         return None
     if normalize_active(active_raw) != "1":
         return None
     assignment = assign_case(purposes_raw, npi_raw)
     # Sole purpose: exactly one parsed token, and it is T-TRTMNT.
-    if not (assignment.tokens == (TOKEN_TRTMNT,) and not assignment.npi_supplied):
+    token_in_scope = (assignment.has_trtmnt if combined_purposes
+                      else assignment.tokens == (TOKEN_TRTMNT,))
+    if not (token_in_scope and not assignment.npi_supplied):
         return None
     participation = normalize_participation_level(participation_raw)
     if participation is None:
@@ -408,8 +461,11 @@ def treatment_onc_scope_missing_npi(
 
     return {
         "status": True,
-        "reason_code": "TREATMENT_SOLE_PURPOSE_NPI_MISSING_ONC_SCOPE",
-        "scope_basis": "ONC updated Treatment scope (relayed 2026-11-09)",
+        "reason_code": ("TREATMENT_TOKEN_NPI_MISSING_COMBINED_SCOPE" if combined_purposes
+                        else "TREATMENT_SOLE_PURPOSE_NPI_MISSING_ONC_SCOPE"),
+        "scope_basis": ("Methodology v1.3-A combined-purpose Treatment scope (DRAFT; acceptance and "
+                        "effective date not recorded)" if combined_purposes
+                        else "ONC updated Treatment scope (relayed 2026-11-09)"),
         "participation_level": participation,
         "raw_participation_level": (participation_raw or ""),
         "raw_purposes": assignment.raw_purposes,
@@ -420,9 +476,12 @@ def treatment_onc_scope_missing_npi(
         "requirement_effective": requirement_effective.isoformat(),
         "assessment_date": assessment_date.isoformat(),
         "note": ("Active Participant/Sub-Participant record asserting the "
-                 "exact T-TRTMNT exchange purpose as its sole purpose with a "
-                 "blank submitted NPI (ONC updated scope). A supplemental NPI "
-                 "from manual QA, NPPES or IQVIA remains separate evidence "
+                 + ("exact T-TRTMNT exchange purpose, alone or combined with other purposes, with a "
+                    "blank submitted NPI (combined-purpose scope). A supplemental NPI "
+                    if combined_purposes else
+                    "exact T-TRTMNT exchange purpose as its sole purpose with a "
+                    "blank submitted NPI (ONC updated scope). A supplemental NPI ")
+                 + "from manual QA, NPPES or IQVIA remains separate evidence "
                  "and never fills the submitted blank. No initiating-node "
                  "requirement applies."),
     }
@@ -458,6 +517,7 @@ def treatment_field_signals(
     """
     from app.tefca_registry.rce.field_map import normalize_active
 
+    assessment_date = _require_assessment_date(assessment_date)
     fields: dict = {}
     b4_signal = active_treatment_missing_required_npi(
         purposes_raw, npi_raw, active_raw,
@@ -582,6 +642,7 @@ def active_treatment_missing_required_npi(
     """
     from app.tefca_registry.rce.field_map import normalize_active
 
+    assessment_date = _require_assessment_date(assessment_date)
     if assessment_date < requirement_effective:
         return None
     if normalize_active(active_raw) != "1":
@@ -649,3 +710,25 @@ def active_treatment_missing_required_npi(
         "assessment_date": assessment_date.isoformat(),
         "note": note,
     }
+
+
+def compare_treatment_scopes(rows, *, assessment_date: date, requirement_effective: date) -> dict:
+    """IMPACT COMPARISON ONLY (no classification, no activation, no recalculation).
+
+    `rows` are dicts with purposes, npi, active, participation (delivered values). Counts the
+    records the sole-purpose ONC scope selects, the records the combined-purpose scope would
+    select, and those only the combined scope adds. The combined scope is a superset, so
+    `sole_only` must be 0; it is reported so a violation cannot pass silently."""
+    out = {"records": 0, "sole_purpose_scope": 0, "combined_purpose_scope": 0,
+           "added_by_combined": 0, "sole_only": 0}
+    kw = dict(assessment_date=assessment_date, requirement_effective=requirement_effective)
+    for r in rows:
+        out["records"] += 1
+        args = (r.get("purposes"), r.get("npi"), r.get("active"), r.get("participation"))
+        sole = treatment_onc_scope_missing_npi(*args, **kw) is not None
+        comb = treatment_combined_scope_missing_npi(*args, **kw) is not None
+        out["sole_purpose_scope"] += sole
+        out["combined_purpose_scope"] += comb
+        out["added_by_combined"] += comb and not sole
+        out["sole_only"] += sole and not comb
+    return out

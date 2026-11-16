@@ -88,7 +88,8 @@ async def test_exact_npi_match_creates_no_finding_and_no_review_task(promoted_en
 
     issue = await vf.record_from_evidence(
         db, entity_id=entity_id, npi=NPI_VALID_OTHER,
-        evidence=_exact_match_evidence(NPI_VALID_OTHER))
+        evidence=_exact_match_evidence(NPI_VALID_OTHER),
+        source_record_id=curated.source_record_id, intake_id=intake_id)
 
     assert issue is None
     rows = (await db.execute(select(rce_m.RceIssue).where(
@@ -107,7 +108,8 @@ async def test_not_found_npi_evidence_creates_the_correct_finding_with_full_prov
     run_before = None
 
     issue = await vf.record_from_evidence(
-        db, entity_id=entity_id, npi=NPI_VALID_OTHER, evidence=_not_found_evidence())
+        db, entity_id=entity_id, npi=NPI_VALID_OTHER, evidence=_not_found_evidence(),
+        source_record_id=curated.source_record_id, intake_id=intake_id)
 
     assert issue is not None
     assert issue.rule_id == "NPI-005"
@@ -129,7 +131,8 @@ async def test_conflicting_deactivated_npi_evidence_creates_the_correct_finding_
 
     issue = await vf.record_from_evidence(
         db, entity_id=entity_id, npi=NPI_VALID_OTHER,
-        evidence=_deactivated_evidence(NPI_VALID_OTHER))
+        evidence=_deactivated_evidence(NPI_VALID_OTHER),
+        source_record_id=curated.source_record_id, intake_id=intake_id)
 
     assert issue is not None
     assert issue.rule_id == "NPI-006"
@@ -153,9 +156,11 @@ async def test_rerunning_verification_creates_no_duplicate_finding_or_work_item(
     entity_id = curated.canonical_entity_id
 
     first = await vf.record_from_evidence(
-        db, entity_id=entity_id, npi=NPI_VALID_OTHER, evidence=_not_found_evidence())
+        db, entity_id=entity_id, npi=NPI_VALID_OTHER, evidence=_not_found_evidence(),
+        source_record_id=curated.source_record_id, intake_id=intake_id)
     second = await vf.record_from_evidence(
-        db, entity_id=entity_id, npi=NPI_VALID_OTHER, evidence=_not_found_evidence())
+        db, entity_id=entity_id, npi=NPI_VALID_OTHER, evidence=_not_found_evidence(),
+        source_record_id=curated.source_record_id, intake_id=intake_id)
 
     assert first is not None and second is not None
     assert first.id == second.id, "a repeat verification must not duplicate an open finding"
@@ -189,7 +194,9 @@ async def test_cross_delivery_isolation_of_npi_findings(rolled_back_db):
 
     issue = await vf.record_from_evidence(
         db, entity_id=deliveries["B"]["curated"].canonical_entity_id,
-        npi=NPI_VALID_OTHER, evidence=_not_found_evidence())
+        npi=NPI_VALID_OTHER, evidence=_not_found_evidence(),
+        source_record_id=deliveries["B"]["curated"].source_record_id,
+        intake_id=deliveries["B"]["curated"].source_intake_id)
     assert issue is not None
     assert str(issue.source_intake_id) == str(deliveries["B"]["intake_id"])
 
@@ -221,7 +228,8 @@ async def test_malformed_evidence_creates_no_finding_does_not_crash_and_does_not
         {},
     ):
         issue = await vf.record_from_evidence(
-            db, entity_id=entity_id, npi=NPI_VALID_OTHER, evidence=bad_evidence)
+            db, entity_id=entity_id, npi=NPI_VALID_OTHER, evidence=bad_evidence,
+            source_record_id=curated.source_record_id, intake_id=intake_id)
         assert issue is None
 
     rows = (await db.execute(select(rce_m.RceIssue).where(
