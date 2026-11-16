@@ -169,6 +169,21 @@ def exchange_direction_from_record(org_node_type: Optional[str]) -> str:
     return DIRECTION_UNKNOWN
 
 
+class AssessmentDateRequired(ValueError):
+    """A Treatment producer was called without an assessment date. The date is
+    a classification INPUT (BR-NPI-TRTMNT-001 is date-gated); a missing one is
+    refused, never defaulted to the wall clock."""
+
+
+def _require_assessment_date(value) -> date:
+    if value is None or isinstance(value, str) or not isinstance(value, date):
+        raise AssessmentDateRequired(
+            "assessment_date is required and must be a date (use "
+            "rce.assessment_context.resolve_assessment_date); refusing to "
+            "default to today")
+    return value.date() if isinstance(value, datetime) else value
+
+
 def _as_date(value) -> Optional[date]:
     if value is None:
         return None
@@ -394,6 +409,7 @@ def treatment_onc_scope_missing_npi(
     """
     from app.tefca_registry.rce.field_map import normalize_active
 
+    assessment_date = _require_assessment_date(assessment_date)
     if assessment_date < requirement_effective:
         return None
     if normalize_active(active_raw) != "1":
@@ -458,6 +474,7 @@ def treatment_field_signals(
     """
     from app.tefca_registry.rce.field_map import normalize_active
 
+    assessment_date = _require_assessment_date(assessment_date)
     fields: dict = {}
     b4_signal = active_treatment_missing_required_npi(
         purposes_raw, npi_raw, active_raw,
@@ -582,6 +599,7 @@ def active_treatment_missing_required_npi(
     """
     from app.tefca_registry.rce.field_map import normalize_active
 
+    assessment_date = _require_assessment_date(assessment_date)
     if assessment_date < requirement_effective:
         return None
     if normalize_active(active_raw) != "1":

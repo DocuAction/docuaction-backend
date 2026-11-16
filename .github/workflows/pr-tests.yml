@@ -195,10 +195,28 @@ jobs:
             tests/test_sam_extract_visibility_2026_10_31.py \
             tests/test_manual_reconciliation_snapshot_2026_10_31.py \
             tests/test_recheck_enrollment_scope_2026_11_04.py \
+            tests/test_october_review_loader_db_2026_11_12.py \
+            tests/test_october_review_export_db_2026_11_12.py \
+            tests/test_report_export_session_failure_2026_11_15.py \
+            tests/test_extract_row_subject_identifier_2026_11_15.py \
+            tests/test_case_update_import_agt_2026_11_12.py \
+            tests/test_review_lineage_writers_db_2026_11_12.py \
+            tests/test_record_name_identity_db_2026_11_14.py \
+            tests/test_validation_queue_schema_gate_db_2026_11_14.py \
+            tests/test_validation_queue_routes_missing_table_db_2026_11_14.py \
+            tests/test_record_comments_db_2026_11_12.py \
+            tests/test_record_review_package_script_2026_11_12.py \
+            tests/test_comment_migration_downgrade_lock_2026_11_15.py \
+            tests/test_review_single_npi_read_2026_11_15.py \
+            tests/test_npi_outcome_record_anchoring_2026_11_16.py \
+            tests/test_recheck_identity_validation_2026_11_16.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
-      - name: Fail if any isolation test was skipped for want of a database
-        run: |
-          if grep -q 'No database reachable' isolation-results.xml; then echo "::error::database-backed isolation tests were skipped"; exit 1; fi
+      - name: Fail if any isolation test skip is not explicitly permitted
+        # Replaces a case-sensitive `grep 'No database reachable'` that let
+        # lowercase "no database reachable ..." / "no sandbox database ..." skips pass.
+        # Every skip fails unless its test id is in PERMITTED_SKIPS (scripts/ci_skip_guard.py);
+        # permitted skips are printed as warnings so they stay visible.
+        run: python scripts/ci_skip_guard.py isolation-results.xml
       - name: Upload isolation results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
