@@ -93,3 +93,37 @@ def test_a_preflight_block_keeps_its_controlled_message_but_still_masks_embedded
     assert "see preflight-run findings" not in _sanitize_error_value(msg, safe_writer=False)  # unmarked legacy text: still withheld
     leaky = f"PreflightBlockedError: x \"(sqlalchemy.{SECRET})\""
     assert SECRET not in sanitize_stored_error(leaky)
+
+
+# ── Owner-requested exact inputs (2026-11-16): a delivered CamelCase lead-in in front of a class marker ──────────────
+_EXACT = [
+    "SensitiveRecord4711: <class 'builtins.ValueError'>: rejected",
+    f"invalid input syntax for type uuid: \"prefix (sqlalchemy.{SECRET})\"",
+]
+_NEEDLES = {_EXACT[0]: "SensitiveRecord4711", _EXACT[1]: SECRET}
+
+
+@pytest.mark.parametrize("value", _EXACT)
+def test_the_two_exact_inputs_are_withheld_by_every_sanitizer_entry_point(value):
+    from app.core.logging_config import sanitize_stored_error_tree
+    needle = _NEEDLES[value]
+    assert needle not in sanitize_stored_error(value)
+    for writer in (False, True):
+        assert needle not in _sanitize_error_value(value, safe_writer=writer)
+
+
+@pytest.mark.parametrize("value", _EXACT)
+def test_the_two_exact_inputs_are_withheld_by_the_strict_stage_detail_and_dashboard_serializers(value):
+    """delivery_job_model (stage_detail / event detail) and delivery_dashboard call sanitize_stored_error_tree with
+    strict_error_keys=True; exercise that exact call on the nested shapes they receive."""
+    from app.core.logging_config import sanitize_stored_error_tree
+    needle = _NEEDLES[value]
+    for shape in ({"error": value}, {"stage": {"stage_error": value}}, {"events": [{"detail": {"error": value}}]},
+                  {"error": value, "error_writer": "safe_exception_text/1"}):
+        assert needle not in str(sanitize_stored_error_tree(shape, strict_error_keys=True)), shape
+        assert needle not in str(sanitize_stored_error_tree(shape)), shape
+
+
+def test_a_trusted_leading_class_and_a_stage_still_lead_a_real_marker():
+    real = "STAGE: ValueError: <class 'builtins.ValueError'>: rejected"
+    assert sanitize_stored_error(real).startswith("STAGE: ValueError: <class 'builtins.ValueError'>")
