@@ -246,11 +246,15 @@ async def validated_delivery_context(db, *, intake_id, ref, queued_entity_id, en
         return None, "the reference has no registry identity now"
     if queued_entity_id is None or str(resolved_id) != str(queued_entity_id):
         return None, "the reference now resolves to a different entity than the one queued"
-    anchor = await anchor_for_reference(db, intake_id=intake_id, ref=ref, entity_id=queued_entity_id)
+    # Both reads run inside a savepoint: if PostgreSQL rejects one, only the savepoint is rolled back and the error
+    # propagates, so a batch caller that catches a per-item failure keeps a usable session (CodeRabbit 5916281973).
+    # begin_nested flushes pending caller state first; state flushed before the savepoint is not protected by it.
+    async with db.begin_nested():
+        anchor = await anchor_for_reference(db, intake_id=intake_id, ref=ref, entity_id=queued_entity_id)
+        record = await db.get(m.RceSourceRecord, anchor) if anchor is not None else None
     if anchor is None:
         return None, ("the delivery has no single delivered record carrying this reference and linking the queued "
                       "entity (missing, duplicated, or linked to another entity)")
-    record = await db.get(m.RceSourceRecord, anchor)
     if record is None:
         return None, "the delivered record could not be read"
     delivered = delivered_npi_of(record)
