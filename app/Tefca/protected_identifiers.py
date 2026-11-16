@@ -78,7 +78,10 @@ _ID_SUFFIXES = frozenset({"id", "ids", "identifier", "identification", "ident",
 
 #: Token boundaries inside one run of letters and digits: lower/digit -> Upper (camelCase), letter <-> digit.
 _BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Za-z])(?=[0-9])|(?<=[0-9])(?=[A-Za-z])")
-_WORD = re.compile(r"[A-Za-z0-9]+")
+#: THE separator definition: a token is made of these characters and EVERYTHING ELSE separates tokens. Both the tokenizer
+#: (`_WORD`) and the joining of tokens into a name in text (`_JOINER_RUN`, below) are written from this one constant.
+_TOKEN_CHARS = "A-Za-z0-9"
+_WORD = re.compile(rf"[{_TOKEN_CHARS}]+")
 
 
 def _token_spans(text: str):
@@ -162,8 +165,12 @@ def _space_continues(tokens: List[str], nxt: str) -> bool:
 #: (prose `Tax: ID` is not a label), then any run of whitespace, `_ - . /`. Possessive, so linear at any length.
 _SEP = r"(?:[|:](?!\s))?[\s_\-./]*+"
 _PHRASE_SEP = re.compile(_SEP + r"\Z")
-#: The separator between two words of ONE run (`ORG_TAX_ID`, `hco.tin`, `tax|id`): any mix of `_ - . / | :`, no whitespace.
-_JOINER_RUN = re.compile(r"[_\-./|:]+\Z")
+#: The separator between two words of ONE name in text (`ORG_TAX_ID`, `hco.tin`, `tax|id`, `tax#id`, `tax,id`, a zero-width
+#: space): ANY separator of the tokenizer (anything that is not a token character) - except the characters that END a name
+#: in text, because a serialization uses them to delimit a key from what surrounds it: white space (handled by the phrase
+#: rule above), quotes, brackets, `=` and `;`. So `"EIN","NPI":"000000001"` is two names, and `tax#id=000000001` is one.
+_NAME_ENDERS = r"\s\"'`()\[\]{}<>=;"
+_JOINER_RUN = re.compile(rf"[^{_TOKEN_CHARS}{_NAME_ENDERS}]+\Z")
 
 
 def _name_chains(text: str):
@@ -189,7 +196,7 @@ def _name_chains(text: str):
 # ═══ WHAT FOLLOWS A NAME (not name parsing) ═══════════════════════════════════════════════════════════════════════════
 #: The value shapes: nine digits as an EIN (NN-NNNNNNN, NN NNNNNNN, NNNNNNNNN) or in the three-two-four grouping an ITIN is
 #: written in.
-_VALUE = r"(?:\d{2}[-\s]?\d{7}|\d{3}-\d{2}-\d{4})(?![\d\-])"
+_VALUE = r"(?:\d{2}[-\s]?\d{7}|\d{3}-\d{2}-\d{4})(?!\d|-\d)"
 #: What may stand between a name and its value: punctuation of any serialization (quotes, colon, equals, brackets, spaces) and
 #: a joining word. PADDING IS NOT CONTENT: a run of horizontal white space, underscores or hyphens of any length is free
 #: (`_PAD`, possessive, read once and never given back); the limit of 16 counts only the punctuation marks and joining words
@@ -199,6 +206,11 @@ _JOINING = r"(?<![A-Za-z0-9])(?:is|no|number|num|value|val)(?![A-Za-z0-9])"
 _GAP = (rf"{_PAD}(?:(?:[^A-Za-z0-9\s_\-]|{_JOINING}){_PAD})"
         r"{0,16}")
 _GAP_VALUE = re.compile(rf"{_GAP}(?P<val>{_VALUE})", re.IGNORECASE)
+#: A value at the START of a digit token of the chain (see `_value_spans`).
+_VALUE_HERE = re.compile(_VALUE)
+#: A name longer than this keeps a value joined to it by a joiner run of ANY length (the reach of the 1.5.x long-name pass);
+#: for a shorter name the 16-mark limit of `_GAP` applies (`tax_id` + 17 colons is a stated, pinned limit).
+_LONG_NAME = 8
 #: What follows a QUOTED serialized key (JSON/YAML-style): `"EIN PRIMARY": "000000001"`.
 _KEY_TAIL = re.compile(rf"""\s*[:=]\s*["']?(?P<val>{_VALUE})""")
 _KEY_MAX = 80
@@ -207,26 +219,27 @@ _EIN_SHAPE = re.compile(r"(?<![\d\-])\d{2}-\d{7}(?![\d\-])")
 
 
 def _quoted_key_value_spans(text: str):
-    """Value spans after a quoted key the field rule protects. The key runs from an opening quote to the SAME quote
-    character (a serialized backslash escape of it does not close the key), at most 80 characters, on one line, so the other
-    quote character may appear inside it (`{"EIN owner's copy": "000000001"}`). The key is judged by `is_protected_field`:
-    the one parser."""
+    """Value spans after a quoted key the field rule protects. The key starts at a quote and may close at EITHER quote
+    character (the nearest unescaped one of each kind is tried), at most 80 characters, on one line. So the other quote
+    character may appear inside the key (`{"EIN owner's copy": "000000001"}`) and mismatched quotes around a key of several
+    words are still a key (`"EIN PRIMARY': 000000001`). The key is judged by `is_protected_field`: the one parser."""
     for opening in re.finditer(r"[\"']", text):
-        quote, i = opening.group(0), opening.start()
+        i = opening.start()
         stop = i + _KEY_MAX + 2
-        j = text.find(quote, i + 1, stop)
-        while j != -1 and text[j - 1] == "\\":
-            j = text.find(quote, j + 1, stop)
-        if j == -1:
-            continue
-        hit = _KEY_TAIL.match(text, j + 1)            # cheap and usually fails: asked before the key is cut out and judged
-        if not hit:
-            continue
-        key = text[i + 1:j]
-        if "\n" in key or "\r" in key or not key.strip():
-            continue
-        if is_protected_field(key.replace("\\" + quote, quote)):
-            yield hit.span("val")
+        for quote in ("\"", "'"):
+            j = text.find(quote, i + 1, stop)
+            while j != -1 and text[j - 1] == "\\":
+                j = text.find(quote, j + 1, stop)
+            if j == -1:
+                continue
+            hit = _KEY_TAIL.match(text, j + 1)        # cheap and usually fails: asked before the key is cut out and judged
+            if not hit:
+                continue
+            key = text[i + 1:j]
+            if "\n" in key or "\r" in key or not key.strip():
+                continue
+            if is_protected_field(key.replace("\\\"", "\"").replace("\\'", "'")):
+                yield hit.span("val")
 
 
 def _value_spans(text: str):
@@ -244,6 +257,10 @@ def _value_spans(text: str):
             hit = _GAP_VALUE.match(text, tspans[k][1])
             if hit:
                 spans.add(hit.span("val"))
+            elif k + 1 < len(toks) and tspans[k][1] - tspans[0][0] > _LONG_NAME:
+                joined = _VALUE_HERE.match(text, tspans[k + 1][0])      # same chain: only the name's own joiners lie between
+                if joined:
+                    spans.add(joined.span())
     return sorted(spans)
 
 

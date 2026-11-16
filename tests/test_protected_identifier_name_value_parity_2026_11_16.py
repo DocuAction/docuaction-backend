@@ -37,8 +37,7 @@ def _cases():
     rng = random.Random(20261116)
     cases = []
     for name in _names(rng):
-        if not is_protected_field(name):
-            continue
+        assert is_protected_field(name), name            # every generated name is protected: a regressing oracle fails here
         for conn in CONNECTORS:
             cases.append((name, conn, rng.choice(VALUES)))
     return cases
@@ -48,7 +47,7 @@ CASES = _cases()
 
 
 def test_the_case_set_is_not_vacuous():
-    assert len(CASES) > 800 and any(len(n) > 60 for n, _c, _v in CASES)
+    assert len(CASES) == 9 * len(SEEDS) * len(CONNECTORS) == 1638 and any(len(n) > 60 for n, _c, _v in CASES)
 
 
 @pytest.mark.parametrize("name,conn,value", CASES)
@@ -145,16 +144,18 @@ def test_terminal_punctuation_never_hides_a_joined_value(punct, name, conn):
 
 @pytest.mark.parametrize("name", ["EIN", "tin", "FEIN", "ITIN", "tax_id", "taxId", "EIN_a_b_c_d_e_f_g_h_i"])
 def test_a_value_joined_straight_onto_the_name_is_found(name):
+    assert is_protected_field(name), name
     for text in (f"{name}000000001", f"{name}12-3456789", f"x {name}000000001 y"):
-        if is_protected_field(name):
-            assert find_in_text(text), text
-            assert "000000001" not in redact_text(text) and "3456789" not in redact_text(text), text
+        assert find_in_text(text), text
+        assert "000000001" not in redact_text(text) and "3456789" not in redact_text(text), text
 
 
 @pytest.mark.parametrize("text", [
     "tax: id 000000001", "Tax: ID 000000001", "routing_a_b_c_d_e_f_g_h_i:000000001.",
     '{"NPI owner\'s copy": "000000001"}', '{"zip owner\'s copy": "000000001"}', "{'taxonomy code': '000000001'}",
-    "'EIN\" ", "protein_a_b_c_d_e_f_g_h_i|000000001", "einstein: 000000001",
+    "'NPI\": 000000001", "\"zip code': \"000000001\"", "protein_a_b_c_d_e_f_g_h_i|000000001", "einstein: 000000001",
+    "routine 000000001", "listing: 000000001", "continue=000000001", "TIN: 1234567893", "EIN1234567893",
+    "EIN#1234567893", "tax,id: 1234567893", "\"EIN\",\"NPI\":\"000000001\"", "tax_id" + ":" * 17 + "000000001",
 ])
 def test_deliberate_non_matches_are_kept(text):
     assert find_in_text(text) == [], text
@@ -169,18 +170,23 @@ def test_mismatched_quotes_around_a_label_are_still_a_label():
 
 def _timed(make, n):
     text = make(n)
-    started = time.perf_counter()
-    find_in_text(text)
-    redact_text(text)
-    return time.perf_counter() - started
+    best = None
+    for _ in range(2):                                        # best of two: one slow run must not decide
+        started = time.perf_counter()
+        find_in_text(text)
+        redact_text(text)
+        took = time.perf_counter() - started
+        best = took if best is None or took < best else best
+    return best
 
 
-def _assert_linear(make, small, big):
-    """Doubling the input must roughly double the time (a quadratic scan would quadruple it), and stay inside a fixed budget."""
-    _timed(make, small)                                       # warm up
-    t_small, t_big = _timed(make, small), _timed(make, big)
-    assert t_big < 8.0, t_big
-    assert t_big < 3.2 * max(t_small, 0.02) * (big / small) / 2 + 0.5, (t_small, t_big)
+def _assert_linear(make, sizes):
+    """Each size doubles the one before. On the LARGEST pair the time may at most ~double: a quadratic scan quadruples it.
+    The sizes are large enough to measure (the largest must take at least 0.2 s, or the check is vacuous)."""
+    times = [_timed(make, n) for n in sizes]
+    assert times[-1] >= 0.2, ("input too small to measure", sizes, times)
+    assert times[-1] < 15.0, times
+    assert times[-1] / times[-2] < 3.0, (sizes, times)
 
 
 def test_quoted_key_scanning_is_linear():
@@ -188,7 +194,7 @@ def test_quoted_key_scanning_is_linear():
     text = "\"" * 300_000 + "EIN\": \"000000001\"" + "'" * 300_000
     assert find_in_text(text) and "000000001" not in redact_text(text)
     assert time.perf_counter() - started < 8.0
-    _assert_linear(lambda n: ("{\"" + "ein_x " * 12 + "\"") * n, 2_000, 4_000)
+    _assert_linear(lambda n: ("{\"" + "ein_x " * 12 + "\"") * n, [2_500, 5_000, 10_000])
 
 
 def test_a_run_of_values_inside_one_long_chain_is_linear():
@@ -198,7 +204,7 @@ def test_a_run_of_values_inside_one_long_chain_is_linear():
     out = redact_text(text)
     assert "000000001" not in out
     assert time.perf_counter() - started < 8.0
-    _assert_linear(lambda n: "EIN" + "_000000001" * n, 20_000, 40_000)
+    _assert_linear(lambda n: "EIN" + "_000000001" * n, [40_000, 80_000, 160_000])
 
 
 # ── Round 6 (4581709517 / 4581709510): terminal punctuation after the value; the OTHER quote inside a quoted key ──────
@@ -228,16 +234,94 @@ def test_a_value_followed_by_terminal_punctuation_is_still_detected_and_redacted
     assert out.endswith(f"{term} y"), (text, out)                       # the punctuation after the value is preserved
 
 
-QUOTED_KEYS = ["EIN'S", "EIN\"X", "tax_id'", "FEIN\"", "ORG'S_EIN", "employer'identification\"number", "a'b\"EIN"]
+QUOTED_KEYS = ["EIN'S", "EIN\"X", "tax_id'", "FEIN\"", "ORG'S_EIN", "employer'identification\"number", "a'b\"EIN",
+               "NPI'S", "zip\"x", "taxonomy'code", "org's\"name", "routing'number", "tax'status"]
+
+
+def test_the_quoted_key_set_has_both_kinds():
+    kinds = [is_protected_field(k) for k in QUOTED_KEYS]
+    assert kinds.count(True) == 7 and kinds.count(False) == 6
 
 
 @pytest.mark.parametrize("key", QUOTED_KEYS)
 @pytest.mark.parametrize("kq,vq", [('"', '"'), ("'", "'"), ('"', "'"), ("'", '"'), ('"', ""), ("'", "")])
 def test_a_quoted_key_containing_the_other_quote_character_is_judged_by_the_field_rule(key, kq, vq):
-    if kq in key:                                         # a key cannot contain the quote that delimits it
-        pytest.skip("key contains its own delimiter")
     protected = is_protected_field(key)
-    text = f"{{{kq}{key}{kq}: {vq}000000001{vq}}}"
+    shown = key.replace(kq, "\\" + kq)                  # the key's own delimiter is written as a serialized escape
+    text = f"{{{kq}{shown}{kq}: {vq}000000001{vq}}}"
     assert bool(find_in_text(text)) is protected, (text, protected)
     out = redact_text(text)
     assert ("000000001" not in out) is protected, (text, out)
+
+
+# ═══ Follow-up review of the 1.6.0 refactor (2026-11-16) ═══════════════════════════════════════════════════════════════
+MISMATCHED = [("\"", "'"), ("'", "\"")]
+PLAIN_KEY_NAMES = ["EIN", "EIN PRIMARY", "tax id", "Tax Identifier", "TAX_ID", "employer identification number", "taxpayer id",
+                   "org tin", "irs number", "primary contact EIN", "EIN of the parent organisation"]
+
+
+@pytest.mark.parametrize("opening,closing", MISMATCHED)
+@pytest.mark.parametrize("name", PLAIN_KEY_NAMES)
+@pytest.mark.parametrize("sep", [": ", ":", "=", " = "])
+@pytest.mark.parametrize("vq", ["", "\"", "'"])
+def test_a_multi_word_key_in_mismatched_quotes_is_still_judged_by_the_field_rule(opening, closing, name, sep, vq):
+    assert is_protected_field(name), name
+    text = f"{opening}{name}{closing}{sep}{vq}000000001{vq}"
+    assert find_in_text(text), text
+    out = redact_text(text)
+    assert "000000001" not in out and REDACTED in out, (text, out)
+
+
+# The tokenizer splits a name on ANY character that is not a letter or a digit, so the text scanner joins on the same set
+# (minus what ends a name in text: white space, quotes, brackets, `=`, `;`).
+ANY_JOINER = ["#", ",", "\u200b", "&", "@", "*", "+", "~", "\\", "%", "$", "^", "!", "?", "\u00b7", "_", "-", ".", "/", "|", ":"]
+
+
+@pytest.mark.parametrize("joiner", ANY_JOINER)
+@pytest.mark.parametrize("head,tail", [("tax", "id"), ("EIN", "PRIMARY"), ("ORG", "TIN"), ("taxpayer", "number"),
+                                       ("employer", "identification"), ("irs", "no")])
+@pytest.mark.parametrize("conn", ["=", ": ", ":", " "])
+def test_every_separator_the_tokenizer_splits_on_joins_a_name_in_text(joiner, head, tail, conn):
+    name = f"{head}{joiner}{tail}"
+    assert is_protected_field(name), ascii(name)
+    text = f"x {name}{conn}000000001 y"
+    assert find_in_text(text), ascii(text)
+    out = redact_text(text)
+    assert "000000001" not in out and name in out, ascii(out)
+
+
+def test_the_exact_strings_of_the_follow_up_review():
+    for text in ['"EIN PRIMARY\': "000000001"', '"EIN PRIMARY\': 000000001', "tax#id=000000001", "tax,id: 000000001",
+                 "EIN#PRIMARY=000000001", "tax\u200bid: 000000001", "EIN_PRIMARY" + "." * 17 + "000000001",
+                 "EIN: 000000001-", "EIN: 12-3456789-", "tax_id=000000001-."]:
+        assert find_in_text(text), ascii(text)
+        assert "000000001" not in redact_text(text) and "3456789" not in redact_text(text), ascii(text)
+
+
+@pytest.mark.parametrize("text", ["EIN: 000000001-2", "EIN: 000000001-1234", "TIN 123-45-6789-0", "EIN: 0000000012"])
+def test_a_value_that_runs_on_into_more_digits_is_still_not_a_value(text):
+    assert find_in_text(text) == [], text
+
+
+# THE BOUND ON PUNCTUATION BETWEEN A NAME AND ITS VALUE, stated: at most 16 punctuation marks (padding is free) - except
+# that a value JOINED to a name of more than 8 characters by the name's own joiners is found whatever the length of the
+# joiner run (the coverage the 1.5.x long-name pass had). `tax_id` + 17 colons stays a stated limit (pinned in
+# test_protected_identifiers_2026_11_13.py since 2026-11-14).
+@pytest.mark.parametrize("joiner", [".", "/", "|", ":", "#", ","])
+@pytest.mark.parametrize("count", [1, 16, 17, 64, 5_000])
+def test_a_long_joiner_run_between_a_long_name_and_its_value_does_not_hide_it(joiner, count):
+    text = "EIN_PRIMARY" + joiner * count + "000000001"
+    assert find_in_text(text), (joiner, count)
+    assert "000000001" not in redact_text(text)
+
+
+def test_the_bound_for_short_names_is_just_under_and_just_over_sixteen():
+    for joiner in (".", ":", "#"):
+        assert find_in_text("tax_id" + joiner * 16 + "000000001"), joiner
+        assert not find_in_text("tax_id" + joiner * 17 + "000000001"), joiner
+        assert find_in_text("tax_ident" + joiner * 17 + "000000001"), joiner            # nine characters: the long-name rule
+
+
+def test_a_long_joiner_run_is_linear():
+    _assert_linear(lambda n: ("EIN_PRIMARY" + "." * 40 + "000000001 ") * n, [10_000, 20_000, 40_000])
+    _assert_linear(lambda n: "EIN_PRIMARY" + ".#" * n + "000000001", [400_000, 800_000, 1_600_000])
