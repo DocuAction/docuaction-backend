@@ -146,7 +146,8 @@ _EIN_SHAPE = re.compile(r"(?<![\d\-])\d{2}-\d{7}(?![\d\-])")
 #: prose with an unquoted `EIN primary contact 000000001` is NOT treated as a label (stated limit). Bounded: the key is at most
 #: 80 characters, so the scan stays linear.
 _QUOTED_KEY_VALUE = re.compile(
-    rf"""(?P<pre>["'](?P<key>[^"'\
+    rf"""(?P<pre>["'](?P<key>[^"'\
+
 ]{{1,80}})["']\s*[:=]\s*["']?)(?P<val>{_VALUE})""")
 
 
@@ -164,14 +165,26 @@ def _quoted_key_hits(text: str):
 #: keeps its value inside the bounded label above).
 _NAME_RUN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9_\-./|:]*+")
 _VALUE_AFTER_RUN = re.compile(rf"{_GAP}(?P<val>{_VALUE})", re.IGNORECASE)
+#: A VALUE JOINED TO THE NAME by the run's own joiners (`EIN_a_..._i:000000001`, `..._i_000000001`): the run takes the value
+#: in, because digits and joiners are run characters. The value is split off the END of the run BEFORE the field rule judges
+#: the name (CodeRabbit round 5: the run used to be judged and then looked for a value after its end, where there is none).
+_JOINED_TAIL_VALUE = re.compile(rf"(?<=[_\-./|:])(?P<val>{_VALUE})\Z")   # starts only after a joiner: linear on any run
+_JOINERS = "_-./|:"
 
 
-def _name_run_hits(text: str):
+def _name_run_spans(text: str):
+    """(start, end) of each value that follows - or is joined to - a name the FIELD rule protects, for names longer than the
+    bounded label's reach."""
     for run in _NAME_RUN.finditer(text):
-        if len(run.group(0)) > 8 and is_protected_field(run.group(0)):    # shorter names are the bounded label's job
+        word = run.group(0)
+        tail = _JOINED_TAIL_VALUE.search(word)
+        name = word[:tail.start()].rstrip(_JOINERS) if tail else word
+        if len(name) > 8 and is_protected_field(name):    # shorter names are the bounded label's job
+            if tail:
+                yield run.start() + tail.start("val"), run.start() + tail.end("val")
             hit = _VALUE_AFTER_RUN.match(text, run.end())
-            if hit:
-                yield hit
+            if hit and not tail:
+                yield hit.start("val"), hit.end("val")
 
 
 class ProtectedIdentifierEgressRefused(RuntimeError):
@@ -240,7 +253,7 @@ def find_in_text(text: Any) -> List[str]:
     if not isinstance(text, str) or not text:
         return []
     reasons = []
-    if _LABELLED.search(text) or any(True for _ in _quoted_key_hits(text)) or any(True for _ in _name_run_hits(text)):
+    if _LABELLED.search(text) or any(True for _ in _quoted_key_hits(text)) or any(True for _ in _name_run_spans(text)):
         reasons.append("labelled_tax_identifier")
     if _EIN_SHAPE.search(text):
         reasons.append("ein_shaped_value")
@@ -254,7 +267,7 @@ def redact_text(text: str) -> str:
     # The label stays (it says what was withheld); only the value is replaced.
     text = _LABELLED.sub(lambda m: m.group(1) + REDACTED, text)
     spans = [(m.start("val"), m.end("val")) for m in _quoted_key_hits(text)]
-    spans += [(m.start("val"), m.end("val")) for m in _name_run_hits(text)]
+    spans += list(_name_run_spans(text))
     for start, end in sorted(set(spans), reverse=True):
         text = text[:start] + REDACTED + text[end:]
     return _EIN_SHAPE.sub(REDACTED, text)
