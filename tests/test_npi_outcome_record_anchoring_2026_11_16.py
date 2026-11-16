@@ -278,3 +278,30 @@ async def test_record_from_sources_enforces_the_same_anchor_and_scope(rolled_bac
     again = await vf.record_from_sources(db, entity_id=ent, sources=_SOURCES, source_record_id=rec_b.id, intake_id=intake_b)
     assert first is not None and again.id == first.id and first.source_record_id == rec_b.id
     assert len(await _issues(db, rec_b)) == 1 and await _issues(db, rec_a) == []
+
+
+# ── CodeRabbit round 5 (4581490295): the recheck must not write when the reference now resolves to ANOTHER entity ──
+@pytest.mark.parametrize("a_promoted_later", [True, False])
+@pytest.mark.parametrize("resolved", ["another_entity", "no_registry_id"])
+async def test_recheck_writes_nothing_when_the_reference_resolves_to_a_different_entity(
+        rolled_back_db, monkeypatch, a_promoted_later, resolved):
+    from types import SimpleNamespace
+    from app.tefca_registry.rce import rechecks
+    db = rolled_back_db
+    ent, (intake_a, rec_a), (intake_b, rec_b) = await _two_deliveries(db, a_promoted_later=a_promoted_later)
+    other = await seed_entity(db, oid=f"{SYN}-OTHER-{uuid.uuid4().hex[:8]}", name=f"{SYN} other entity", npi="1245319599")
+    monkeypatch.setattr(rechecks, "evidence_sources_for", lambda _sid: ("NPPES",))
+    job = SimpleNamespace(intake_id=intake_b, pinned={}, source_id="nppes", trigger_ref="x")
+    item = SimpleNamespace(entity_ref=rec_b.source_rce_id, entity_id=ent, state=None, outcome=None,
+                           new_disposition=None, processed_at=None, detail={})
+    resolved_dict = _entity_dict(other)
+    if resolved == "no_registry_id":
+        resolved_dict.pop("_registry_entity_id")
+    with patch("app.Tefca.entity_resolution.resolve_entity", new=AsyncMock(return_value=resolved_dict)), \
+            patch("app.Tefca.evidence_service.EvidenceService.build_evidence",
+                  new=AsyncMock(return_value=_not_found_evidence())):
+        await rechecks._recheck_one(db, job, item, local_store=None)
+    # the other entity's NPPES result is never written under the queued entity's anchored record, nor anywhere
+    assert await _issues(db, rec_b) == [] and await _issues(db, rec_a) == []
+    assert (await db.execute(select(m.RceIssue).where(m.RceIssue.issue_type == vf.NPI_NOT_FOUND,
+                                                      m.RceIssue.source_intake_id.in_([intake_a, intake_b])))).scalars().all() == []
