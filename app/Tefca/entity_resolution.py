@@ -87,6 +87,27 @@ def resolver_source() -> str:
     return configured
 
 
+def resolver_configuration_warnings() -> List[Dict[str, str]]:
+    """Expose fixture-capable configuration without changing resolution policy.
+
+    A successful HTTP request with zero cases must not conceal that the
+    default resolver reads bundled fixtures. DB misses remain legitimate
+    unresolved results; no source, rule, flag or runtime setting is changed.
+    """
+    source = resolver_source()
+    if source == SOURCE_DB:
+        return []
+    return [{
+        "code": "REGISTRY_RESOLVER_NOT_EXCLUSIVE",
+        "message": (
+            "Entity resolution is configured to use bundled fixtures"
+            + (" as a fallback" if source == SOURCE_DB_THEN_MOCK else "")
+            + ". This does not establish verification of a delivered registry record. "
+              "The documented registry-only setting is ENTITY_RESOLVER_SOURCE=db."
+        ),
+    }]
+
+
 # ── Registry row -> evidence-layer entity shape ──────────────────────────────
 
 _IDENTIFIER_SYSTEMS = {
