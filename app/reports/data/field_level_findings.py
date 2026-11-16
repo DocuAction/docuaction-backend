@@ -252,6 +252,7 @@ class FieldExportRefused(ValueError):
 def to_xlsx(result: Dict[str, Any]) -> bytes:
     """One sheet, every cell TEXT (identifiers and postal codes are never numerically converted)."""
     from openpyxl import Workbook
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
     wb = Workbook()
     ws = wb.active
@@ -259,6 +260,13 @@ def to_xlsx(result: Dict[str, Any]) -> bytes:
     ws.append(list(result["headers"]))
     for n, r in enumerate(result["rows"], start=1):
         for header, v in zip(result["headers"], r):
+            bad = ILLEGAL_CHARACTERS_RE.search(str(v))
+            if bad is not None:
+                # openpyxl raises IllegalCharacterError (not a ValueError) for control characters other than tab/LF/CR.
+                # Refuse as a controlled outcome and name the code point, never the delivered value; the CSV carries it.
+                raise FieldExportRefused(
+                    f"row {n}, {header}: contains the control character U+{ord(bad.group(0)):04X}, which Excel cannot store; "
+                    f"use the CSV for the exact value")
             if len(str(v)) > XLSX_CELL_LIMIT:
                 raise FieldExportRefused(
                     f"row {n}, {header}: {len(str(v))} characters exceeds Excel's {XLSX_CELL_LIMIT}-character cell limit; "
