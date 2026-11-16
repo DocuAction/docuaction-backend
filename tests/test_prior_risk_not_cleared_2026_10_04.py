@@ -212,11 +212,19 @@ async def test_an_open_blocking_ledger_finding_keeps_the_entity_in_review(db_req
 
     async with async_session_maker() as db:
         from rce_traceability_support import anchor_for_entity
+        from app.tefca_registry.rce import models as _rce_m, verification_findings as _vf
+        anchor = await anchor_for_entity(db, first["entity_id"])
+        # A deactivation is ABOUT an NPI (2026-11-16): report the NPI the anchored record delivered (the seeded
+        # record is given one if it delivers none - a fixture detail; the assertions below are unchanged).
+        record = await db.get(_rce_m.RceSourceRecord, anchor["source_record_id"])
+        if not _vf.delivered_npi_of(record):
+            record.parsed = {**(record.parsed or {}), "NPI": "1234567893"}
+            record.npi = "1234567893"
+            await db.flush()
         await ppv.record_finding(db, entity_id=uuid.UUID(first["entity_id"]),
-                                 outcome=ppv.NPI_DEACTIVATED, npi=None,
+                                 outcome=ppv.NPI_DEACTIVATED, npi=_vf.delivered_npi_of(record),
                                  detail="SYNTHETIC deactivation (test fixture)",
-                                 actor="pytest-prior-risk",
-                                 **await anchor_for_entity(db, first["entity_id"]))
+                                 actor="pytest-prior-risk", **anchor)
         await db.commit()
     assert await _entity_status(first["entity_id"]) == "in_review"
 
