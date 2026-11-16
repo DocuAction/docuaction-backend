@@ -823,3 +823,51 @@ async def test_retrying_only_the_tail_of_a_committed_batch_keeps_each_entry_iden
     assert [r["status"] for r in tail["results"]] == ["already_present"], tail["results"]
     n = (await db.execute(select(func.count()).select_from(RceRecordComment))).scalar()
     assert n == 2
+
+
+async def test_a_nul_character_in_provenance_text_rejects_that_entry_and_imports_the_rest(rolled_back_db):
+    """CodeRabbit on #233 (round 3, record_comments.py:192): PostgreSQL cannot store NUL in a text column; a NUL in
+    source.sheet/column/file_name passed validation and the data error (not an IntegrityError) aborted the whole call."""
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, arc="9.99.779.19")
+    bad_sheet = _entry(recs[1], body="bad sheet", source={"file_name": "src.xlsx", "file_sha256": SHA,
+                                                           "sheet": "S\x00", "column": "QA Comments", "row": 2})
+    bad_col = _entry(recs[1], kind="QA_IZAAN", body="bad column", source={"file_name": "src.xlsx", "file_sha256": SHA,
+                                                                          "sheet": "S1", "column": "C\x00", "row": 2})
+    bad_file = _entry(recs[1], kind="REPORT_CLARIFICATION", body="bad file", source={"file_name": "s\x00.xlsx",
+                      "file_sha256": SHA, "sheet": "S1", "column": "QA Comments", "row": 2})
+    good = _entry(recs[2], body="valid beside the bad ones")
+    out = await _import(db, intake_id, [bad_sheet, bad_col, bad_file, good])
+    statuses = [r["status"] for r in out["results"]]
+    assert statuses == [rc.REJECTED, rc.REJECTED, rc.REJECTED, rc.INSERTED], out["results"]
+    assert all("NUL" in r["reason"] for r in out["results"][:3])
+    stored = (await db.execute(select(func.count()).select_from(RceRecordComment).where(
+        RceRecordComment.source_intake_id == intake_id))).scalar()
+    assert stored == 1
+
+
+async def test_a_shifted_tail_that_also_holds_never_imported_entries_is_refused_before_any_write(rolled_back_db):
+    """CodeRabbit on #233 (round 3, record_comments.py:306). Batch X = [A, B, C, D]; A and B import, C and D fail
+    validation. Re-sending [B, C', D'] (corrected C', D') under X shifts every position: B is recognised, C' is
+    rejected, but D' was INSERTED under C's position key, after which the corrected C could never import under X.
+    The documented contract is: such a tail is refused for the whole call, with nothing written."""
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, n=4, arc="9.99.779.20")
+    blank = {"file_name": "src.xlsx", "file_sha256": SHA, "sheet": "", "column": "QA Comments", "row": 1}
+    a, b = _entry(recs[1], body="alpha"), _entry(recs[2], body="beta")
+    c_bad, d_bad = _entry(recs[3], body="gamma", source=dict(blank)), _entry(recs[4], body="delta", source=dict(blank))
+    first = await _import(db, intake_id, [a, b, c_bad, d_bad])
+    assert [r["status"] for r in first["results"]] == [rc.INSERTED, rc.INSERTED, rc.REJECTED, rc.REJECTED]
+    before = (await db.execute(select(func.count()).select_from(RceRecordComment))).scalar()
+    c, d = _entry(recs[3], body="gamma"), _entry(recs[4], body="delta")
+
+    with pytest.raises(rc.CommentRefused, match="whole batch"):
+        await _import(db, intake_id, [b, c, d], batch_id=first["batch_id"])
+    assert (await db.execute(select(func.count()).select_from(RceRecordComment))).scalar() == before   # nothing written
+
+    # unchanged behaviour: a tail whose entries are ALL imported is still answered per entry ...
+    tail = await _import(db, intake_id, [b], batch_id=first["batch_id"])
+    assert [r["status"] for r in tail["results"]] == [rc.ALREADY_PRESENT]
+    # ... and the corrected FULL batch still imports the new entries under the same batch id.
+    full = await _import(db, intake_id, [a, b, c, d], batch_id=first["batch_id"])
+    assert [r["status"] for r in full["results"]] == [rc.ALREADY_PRESENT, rc.ALREADY_PRESENT, rc.INSERTED, rc.INSERTED]

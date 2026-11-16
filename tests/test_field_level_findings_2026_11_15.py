@@ -256,3 +256,19 @@ async def _async_obj():
         async def get(self, *_a, **_k):
             return None
     return _D()
+
+
+def test_an_xlsx_cell_with_a_control_character_is_refused_as_a_controlled_outcome_not_an_uncontrolled_error():
+    """CodeRabbit on #233 (round 3, field_level_findings.py:266): openpyxl raises IllegalCharacterError (not a
+    ValueError) for ASCII control characters other than tab/LF/CR. The package script treats only FieldExportRefused
+    as controlled, so a delivered value with such a character crashed it although the CSV can carry the value."""
+    bad = "ab\x0bcd"
+    out = build([fact(1)], [issue(1, "NPI_REQUIRED", "NPI", original_value=bad)])
+    with pytest.raises(fl.FieldExportRefused) as exc:
+        fl.to_xlsx(out)
+    msg = str(exc.value)
+    assert "row 1" in msg and "Submitted_Value" in msg and "U+000B" in msg and "CSV" in msg
+    assert "Zq9" not in msg        # the delivered value itself is never echoed into the message
+    assert bad in fl.to_csv(out).decode("utf-8-sig"), "the CSV still carries the value unaltered"
+    ok = build([fact(1)], [issue(1, "NPI_REQUIRED", "NPI", original_value="tab\there\nline\r")])
+    fl.to_xlsx(ok)                                      # tab, LF and CR are legal and keep working
