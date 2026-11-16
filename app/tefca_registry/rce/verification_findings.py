@@ -343,7 +343,7 @@ async def record_npi_outcome(db, *, entity_id, npi: Optional[str], outcome: str,
         # The identifier-status change and the ledger row succeed or fail TOGETHER: a savepoint owned by the writer, so
         # a caller without its own (arc_pipeline, review_service) cannot commit a flushed status change without its row.
         issue = await _write_npi_outcome(db, entity_id=entity_id, npi=npi, outcome=outcome, curated=curated,
-                                             detail_text=detail_text, deactivation_date=deactivation_date)
+                                         detail_text=detail_text, deactivation_date=deactivation_date)
     if commit and issue is not None:
         await db.commit()
     return issue

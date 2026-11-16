@@ -539,8 +539,8 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
         # Neither representation is authoritative over the other. Refuse even formatting-only disagreements;
         # choosing or normalising an identifier here would introduce a new identity rule.
         item.state, item.outcome, item.processed_at = rm.ITEM_DONE, rm.OUTCOME_IDENTITY_REFUSED, now
-        item.detail = {"reason": "the RCE NPI and FHIR identifier NPI disagree; no source was asked",
-                       "persisted": False}
+        item.detail = {"reason": "the entity carries conflicting NPI values (RCE NPI / FHIR NPI identifiers); "
+                                 "no source was asked", "persisted": False}
         return
     identifier_npi = next(iter(identifier_npis), "")
     probe_npi = rce_npi or identifier_npi
