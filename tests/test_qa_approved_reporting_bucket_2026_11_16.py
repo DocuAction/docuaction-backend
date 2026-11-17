@@ -5,8 +5,11 @@ release authorization). Methodology revision 1.3-A (DRAFT). Synthetic rows only;
 every database test runs inside a rolled-back transaction.
 
 What is demonstrated
-  * approved reclassification of a B4 record to B1/B2/B3 -> final bucket and
-    totals; automated bucket, basis, decision events and status are preserved
+  * approved reclassification of a B4 record to B2/B3 -> final bucket and
+    totals; an approved move to B1 is NOT applied unless saved evidence
+    establishes B1 (owner authorization 2026-11-17; see
+    test_b1_evidence_gate_2026_11_17.py) - the decision and approval stay
+    visible; automated bucket, basis, decision events and status are preserved
     and nothing is written; an approved move the methodology does not describe
     (from a non-B4 bucket, or into B4) is stated and NOT applied;
   * pending, returned, superseded and after-cutoff decisions never move a bucket;
@@ -140,17 +143,18 @@ async def test_only_an_eligible_qa_approved_reclassification_moves_the_reporting
     rows, s = _rows(ds), ds["summary"]
 
     final = {i: _c(rows[i], "Bucket") for i in rows}
-    assert final == {1: "B1", 2: "B4", 3: "B4", 4: "B4", 5: "B4", 6: "B4", 7: "B1", 8: "B2", 9: "B2", 10: "B4", 11: "B4"}
+    assert final == {1: "B4", 2: "B4", 3: "B4", 4: "B4", 5: "B4", 6: "B4", 7: "B1", 8: "B2", 9: "B2", 10: "B4", 11: "B4"}
     # the original automated bucket is kept, separately, for every record
     assert {i: _c(rows[i], AUTO) for i in rows} == AUTOMATED
     for i in rows:
         assert "Persisted classification: rule RULE-001 v2" in _c(rows[i], "Bucket Basis") or i == 6
         assert "rationale for REV-" in _c(rows[i], "Reasons")
-    # 1: applied, attributable and marked
-    assert "Reporting annotation: QA-approved reclassification B4 -> B1" in _c(rows[1], "Bucket Basis")
-    assert "in-app QA APPROVE #2 by a different recorded user" in _c(rows[1], "Bucket Basis")
-    assert "RECLASSIFIED (QA-approved) B4 -> B1" in _c(rows[1], "Flag")
+    # 1: approved B4 -> B1 with no saved evidence establishing B1: NOT applied, reason stated, decision preserved
+    assert "B4 -> B1 recorded but NOT applied: saved evidence at the cutoff does not establish B1" in _c(rows[1], "Bucket Basis")
+    assert "stores no classifier input" in _c(rows[1], "Bucket Basis")
+    assert "RECLASSIFIED" not in _c(rows[1], "Flag")
     assert _c(rows[1], "Reviewed Disposition (QA-approved only)") == "Reclassified B4 -> B1"
+    assert _c(rows[1], "Analyst/QA Status") == rd.APPROVED
     # 2-5: nothing moved and nothing claimed
     assert _c(rows[2], "Analyst/QA Status") == rd.AWAITING_QA
     assert _c(rows[3], "Analyst/QA Status") == rd.QA_RETURNED
@@ -172,34 +176,36 @@ async def test_only_an_eligible_qa_approved_reclassification_moves_the_reporting
     assert "RECLASSIFIED" not in _c(rows[9], "Flag")
 
     # totals: every record once; automated and reporting totals reconcile
-    assert s["buckets"] == {"B1": 2, "B2": 2, "B3": 0, "B4": 7}
+    assert s["buckets"] == {"B1": 1, "B2": 2, "B3": 0, "B4": 8}
     assert s["automated_buckets"] == {"B1": 1, "B2": 1, "B3": 0, "B4": 9}
     assert sum(s["buckets"].values()) == sum(s["automated_buckets"].values()) == s["unique_records"] == 11
     assert s["held_inside_b4"] == 1 and s["unclassified_non_held_count"] == 0
-    assert s["reclassification_transitions"] == {"B4 -> B1": 1, "B4 -> B2": 1} and s["qa_approved_reclassifications"] == 2
+    assert s["reclassification_transitions"] == {"B4 -> B2": 1} and s["qa_approved_reclassifications"] == 1
     ids = [r[COLS.index("AGT_Record_ID")] for r in ds["sheets"]["Records"]["rows"]]
     assert len(ids) == len(set(ids)) == 11, "no record lost or duplicated"
 
     # the CSV is the same dataset: its rows recount to the summary and its first line states the move
     lines = list(csv.reader(io.StringIO(ds_mod.to_csv(ds).decode("utf-8-sig"))))
-    assert "B1 2, B2 2, B3 0, B4 7, Not classified 0 = 11 (1 HELD inside B4; 2 moved by QA-approved reclassification)" in lines[0][0]
+    assert "B1 1, B2 2, B3 0, B4 8, Not classified 0 = 11 (1 HELD inside B4; 1 moved by QA-approved reclassification)" in lines[0][0]
     recount = {b: 0 for b in ds_mod.BUCKETS}
     for row in lines[2:]:
         recount[row[lines[1].index("Bucket")]] += 1
     assert recount == s["buckets"]
     summary = dict(ds["sheets"]["Summary"]["rows"])
-    assert summary[ds_mod.RECLASSIFIED_SUMMARY_ROW] == "2" and summary["  moved B4 -> B1"] == "1"
+    assert summary[ds_mod.RECLASSIFIED_SUMMARY_ROW] == "1" and summary["  moved B4 -> B2"] == "1"
+    assert "  moved B4 -> B1" not in summary
     assert summary[ds_mod.AUTOMATED_SUMMARY_ROW] == "B1 1 / B2 1 / B3 0 / B4 9"
     page = ds_mod.to_html(ds)
-    assert "kept in its own Excel/CSV column" in page and "RECLASSIFIED (QA-approved) B4 -&gt; B1" in page
+    assert "kept in its own Excel/CSV column" in page and "RECLASSIFIED (QA-approved) B4 -&gt; B2" in page
     # the workbook is the same dataset too
     from openpyxl import load_workbook
     sheet = load_workbook(io.BytesIO(ds_mod.to_xlsx(ds)))["Records"]
     grid = [[c.value for c in row] for row in sheet.iter_rows()]
     head = next(i for i, row in enumerate(grid) if "AGT_Record_ID" in row)
     xl = {row[grid[head].index("AGT_Record_ID")]: row for row in grid[head + 1:] if row[grid[head].index("AGT_Record_ID")]}
-    one = xl[_c(rows[1], "AGT_Record_ID")]
-    assert (one[grid[head].index("Bucket")], one[grid[head].index(AUTO)]) == ("B1", "B4") and len(xl) == 11
+    one, eight = xl[_c(rows[1], "AGT_Record_ID")], xl[_c(rows[8], "AGT_Record_ID")]
+    assert (one[grid[head].index("Bucket")], one[grid[head].index(AUTO)]) == ("B4", "B4") and len(xl) == 11
+    assert (eight[grid[head].index("Bucket")], eight[grid[head].index(AUTO)]) == ("B2", "B4")
 
     # stored classification, status and history are exactly as they were
     stored = {int(r.review_id.split("-")[-1]): (r.classification_bucket, r.reclassified_to) for r in (
@@ -210,10 +216,15 @@ async def test_only_an_eligible_qa_approved_reclassification_moves_the_reporting
 async def test_the_same_delivery_at_a_later_cutoff_shows_the_later_approval_and_still_reconciles(rolled_back_db):
     db = rolled_back_db
     intake_id = await _scenarios(db, "9.99.777.81")
-    early = (await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=CUTOFF, report_id="SYN-A"))["summary"]
-    late = (await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=datetime(2026, 11, 11), report_id="SYN-B"))["summary"]
-    assert early["buckets"] == {"B1": 2, "B2": 2, "B3": 0, "B4": 7}
-    assert late["buckets"] == {"B1": 3, "B2": 2, "B3": 0, "B4": 6}, "record 5's approval is visible at the later cutoff"
+    early_ds = await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=CUTOFF, report_id="SYN-A")
+    late_ds = await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=datetime(2026, 11, 11), report_id="SYN-B")
+    early, late = early_ds["summary"], late_ds["summary"]
+    assert early["buckets"] == {"B1": 1, "B2": 2, "B3": 0, "B4": 8}
+    # record 5's approval (to B1) becomes VISIBLE at the later cutoff, and is still not applied without B1 evidence
+    assert late["buckets"] == {"B1": 1, "B2": 2, "B3": 0, "B4": 8}
+    assert _c(_rows(early_ds)[5], "Analyst/QA Status") == rd.AWAITING_QA
+    assert _c(_rows(late_ds)[5], "Analyst/QA Status") == rd.APPROVED
+    assert "B4 -> B1 recorded but NOT applied: saved evidence at the cutoff does not establish B1" in _c(_rows(late_ds)[5], "Bucket Basis")
     assert early["automated_buckets"] == late["automated_buckets"]
     assert sum(late["buckets"].values()) == late["unique_records"] == 11
 
@@ -259,7 +270,8 @@ async def test_a_researched_npi_never_assigns_b1_and_the_missing_npi_finding_sur
     assert fl[0] == flf.FIELD_HEADERS and len(fl[0]) == 18
     assert sorted(r[flf.FIELD_HEADERS.index("NPI")] for r in fl[1:]) == ["", ""] and len(fl) == 3
 
-    # B. analyst reclassifies to B1, a DIFFERENT person approves: only then does the reporting bucket move
+    # B. analyst reclassifies to B1 and a DIFFERENT person approves: a researched NPI plus that approval still
+    #    does not establish B1 - the record stays B4, and the decision and approval stay visible
     await qa_gate.record_analyst_determination(db, review_id, user=izaan, determination="RECLASSIFY", determined_bucket="B1",
                                                rationale="synthetic: identity and location confirmed against the researched NPI")
     head, b4, hold, fl = await package("pending")
@@ -271,11 +283,13 @@ async def test_a_researched_npi_never_assigns_b1_and_the_missing_npi_finding_sur
     before = await _fingerprint(db, intake_id)
     head, b4, hold, fl = await package("approved")
     assert await _fingerprint(db, intake_id) == before
-    assert (b4["Bucket"], b4[AUTO]) == ("B1", "B4") and "RECLASSIFIED (QA-approved) B4 -> B1" in b4["Flag"]
+    assert (b4["Bucket"], b4[AUTO]) == ("B4", "B4") and "RECLASSIFIED" not in b4["Flag"]
+    assert "B4 -> B1 recorded but NOT applied: saved evidence at the cutoff does not establish B1" in b4["Bucket Basis"]
+    assert b4["Reviewed Disposition (QA-approved only)"] == "Reclassified B4 -> B1" and b4["Analyst/QA Status"] == rd.APPROVED
     assert (b4[NPI], b4[SUP]) == ("", "1234567893"), "the submitted blank is never filled by the researched NPI"
     assert "automated Treatment B4 candidate" in b4["Reasons"] and "rule RULE-006 v4" in b4["Bucket Basis"]
     assert (hold["Bucket"], hold["Status"], hold[NPI]) == ("B4", "HELD", "")
-    assert "B1 1, B2 0, B3 0, B4 1, Not classified 0 = 2 (1 HELD inside B4; 1 moved by QA-approved reclassification)" in head
+    assert "B1 0, B2 0, B3 0, B4 2, Not classified 0 = 2 (1 HELD inside B4" in head and "moved by QA-approved" not in head
     # the separate field-level export still reports the missing submitted NPI for both records
     F = lambda row, name: row[flf.FIELD_HEADERS.index(name)]                               # noqa: E731
     assert len(fl) == 3 and {F(r, "Issue_Type") for r in fl[1:]} == {"MISSING_ENTRY"}
@@ -320,7 +334,8 @@ def _f(i, bucket="B1", status="CLEAN", **kw):
 
 
 def test_held_and_unclassified_records_are_never_moved_and_totals_reconcile():
-    facts = [_f(1, "B4", approved_bucket="B1", approved_note="QA-approved reclassification B4 -> B1 (x)"),
+    facts = [_f(1, "B4", approved_bucket="B1", approved_note="QA-approved reclassification B4 -> B1 (x)",
+                approved_b1_established=True),      # the dataset contract only; the loader never sets this today
              _f(2, "B4"),
              _f(3, "B1", status="HELD", held_reason="blocking identity", approved_bucket="B2"),
              _f(4, None, approved_bucket="B1"),

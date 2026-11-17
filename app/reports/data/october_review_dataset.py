@@ -46,7 +46,13 @@ RULES IT ENFORCES (and the records that carry them)
       record (HELD stays B4, once, not released), to a REJECTED / not-curated
       record, to a record with no persisted classification, to a non-B4
       record, or INTO B4; each such approval is stated as "NOT applied" in the
-      Bucket Basis. The automated bucket keeps its own column and the Bucket
+      Bucket Basis. B1 EVIDENCE GATE (owner authorization 2026-11-17): a move
+      to B1 is applied only when the fact says saved evidence establishes B1
+      (`approved_b1_established is True`); anything else - including a fact
+      that says nothing - keeps B4 and prints `approved_b1_reason`. The loader
+      never sets it True today (no as-of evaluator; see
+      reviewed_disposition.b1_evidence_verdict). The analyst decision and QA
+      approval stay in their own columns. The automated bucket keeps its own column and the Bucket
       Basis names the reclassification as a reporting annotation; nothing is
       written back. Totals count each record once, by the reporting bucket, and
       the summary shows the automated distribution and every move so the two
@@ -61,7 +67,7 @@ import io
 import re
 from typing import Any, Dict, Iterable, List, Optional
 
-DATASET_VERSION = "1.1.0"
+DATASET_VERSION = "1.2.0"
 BUCKETS = ("B1", "B2", "B3", "B4")
 STATUS_HELD = "HELD"
 USPS_UNAVAILABLE = "Not checked—unavailable"
@@ -237,6 +243,11 @@ def _reclassification(fact: Dict[str, Any], status: str) -> tuple:
     if fact.get("bucket") != RECLASSIFIABLE_FROM or target not in RECLASSIFIABLE_TO:
         return "", (f"QA-approved reclassification {fact.get('bucket')} -> {target} recorded but NOT applied: the "
                     "methodology provides only for a B4 record to be reclassified to B1, B2 or B3")
+    if target == "B1" and fact.get("approved_b1_established") is not True:
+        why = _s(fact.get("approved_b1_reason")) or "no evaluation of saved evidence was supplied"
+        return "", ("QA-approved reclassification B4 -> B1 recorded but NOT applied: saved evidence at the cutoff "
+                    f"does not establish B1 - {why}. The analyst decision and QA approval are preserved in "
+                    "their own columns")
     return target, note or f"QA-approved reclassification {fact.get('bucket')} -> {target}"
 
 
@@ -932,10 +943,11 @@ def to_html(dataset: Dict[str, Any]) -> str:
     review_html = (
         f"<h2>{PDF_REVIEW_HEADING}</h2>"
         f"<p class='note'>Status in the tables above is unchanged. Bucket is the reporting bucket: the automated "
-        f"classification, replaced by an analyst reclassification of a B4 record to B1, B2 or B3 ONLY after an "
+        f"classification, replaced by an analyst reclassification of a B4 record to B2 or B3 ONLY after an "
         f"in-app QA APPROVE by a different user that "
         f"follows it, at or before the report cutoff (marked in Flag; the original automated bucket is kept in "
-        f"its own Excel/CSV column and in Bucket Basis). An analyst "
+        f"its own Excel/CSV column and in Bucket Basis). An approved move to B1 is not applied unless saved "
+        f"evidence establishes B1; Bucket Basis states why. An analyst "
         f"determination is shown as a reviewed disposition ONLY after a QA APPROVE that follows it, at or "
         f"before the report cutoff; pending, returned, escalated and superseded decisions are never shown as "
         f"approved and never change a bucket. A HELD record stays HELD, stays in B4 and is not released by this "

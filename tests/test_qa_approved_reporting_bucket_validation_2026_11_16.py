@@ -5,13 +5,12 @@ Companion to test_qa_approved_reporting_bucket_2026_11_16.py. Owner request of
 cutoff handling and HELD protection, and that a same-user approval cannot move a
 bucket at the write path or at the report path.
 
-KNOWN GAP, ASSERTED AS CURRENT BEHAVIOUR (not as correct behaviour): the report
-applies an approved B4 -> B1 reclassification WITHOUT checking that the record's
-stored evidence meets the B1 rule (RULE-001: NPPES verified, OIG LEIE clear,
-PECOS verified, NPI check digit not flagged; no SAM exclusion). Record 2 below has
-a blank submitted NPI and no source evidence and is still reported B1 once QA
-approves. The test pins that so the gap cannot change silently; closing it is a
-policy decision that has not been made.
+GAP CLOSED FAIL-CLOSED (owner authorization 2026-11-17): an approved B4 -> B1 is
+reported as B1 only when saved evidence establishes B1. The report has no as-of
+evaluator for evidence saved after the review, so BOTH B1 examples below stay B4
+with the reason in Bucket Basis - including record 1, whose four source cells
+read PASS. That is the stated limitation, not a claim that record 1 fails B1.
+The analyst decision and QA approval stay visible in their own columns.
 """
 from __future__ import annotations
 
@@ -101,25 +100,29 @@ async def seed_validation_examples(db, arc):
     return intake_id
 
 
-async def test_b4_to_b1_is_reported_beside_the_evidence_and_the_evidence_gap_is_pinned(rolled_back_db):
+async def test_an_approved_b4_to_b1_is_not_applied_without_established_b1_evidence(rolled_back_db):
     db = rolled_back_db
     intake_id = await seed_validation_examples(db, "9.99.777.90")
     rows = _rows(await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=CUTOFF, report_id="SYN-VAL"))
 
-    # 1: the reader can check the B1 rule against the row - every source cell carries its recorded result
+    # 1: source cells read PASS, but the review stores no classifier input and later evidence is not re-evaluated
     one = rows[1]
-    assert (_c(one, "Bucket"), _c(one, AUTO)) == ("B1", "B4") and _c(one, "Submitted NPI (original, verbatim)") != ""
+    assert (_c(one, "Bucket"), _c(one, AUTO)) == ("B4", "B4") and _c(one, "Submitted NPI (original, verbatim)") != ""
     for col in SOURCES:
         assert _c(one, col).startswith("PASS"), col
-    assert "rule RULE-005 v2" in _c(one, "Bucket Basis") and "QA-approved reclassification B4 -> B1" in _c(one, "Bucket Basis")
-
-    # 2: THE GAP - blank submitted NPI, no evidence for any source, and the report still says B1 after QA approval
+    # 2: blank submitted NPI, no evidence for any source
     two = rows[2]
     assert _c(two, "Submitted NPI (original, verbatim)") == ""
     assert not any(_c(two, col).startswith("PASS") for col in SOURCES), "no source evidence exists for this record"
-    assert (_c(two, "Bucket"), _c(two, AUTO)) == ("B1", "B4"), (
-        "current behaviour: QA approval alone moves the reporting bucket; the report does not check B1 evidence")
+    assert (_c(two, "Bucket"), _c(two, AUTO)) == ("B4", "B4")
     assert "rule RULE-006 v2" in _c(two, "Bucket Basis"), "the automated Treatment-B4 basis stays visible"
+    for row in (one, two):
+        basis = _c(row, "Bucket Basis")
+        assert "B4 -> B1 recorded but NOT applied: saved evidence at the cutoff does not establish B1" in basis
+        assert "stores no classifier input" in basis and "NOT re-evaluated by this report" in basis
+        assert "RECLASSIFIED" not in _c(row, "Flag")
+        assert _c(row, "Reviewed Disposition (QA-approved only)") == "Reclassified B4 -> B1"
+        assert _c(row, "Analyst/QA Status") == rd.APPROVED
 
 
 async def test_b4_to_b3_respects_the_cutoff_and_never_moves_a_held_record(rolled_back_db):
@@ -139,8 +142,8 @@ async def test_b4_to_b3_respects_the_cutoff_and_never_moves_a_held_record(rolled
         assert (_c(rows[5], "Bucket"), _c(rows[5], "Status")) == ("B4", "HELD")
         assert "NOT applied: the record remains HELD" in _c(rows[5], "Bucket Basis")
         assert "RECLASSIFIED" not in _c(rows[5], "Flag")
-    assert early["summary"]["buckets"] == {"B1": 2, "B2": 0, "B3": 1, "B4": 3}
-    assert late["summary"]["buckets"] == {"B1": 2, "B2": 0, "B3": 2, "B4": 2}
+    assert early["summary"]["buckets"] == {"B1": 0, "B2": 0, "B3": 1, "B4": 5}
+    assert late["summary"]["buckets"] == {"B1": 0, "B2": 0, "B3": 2, "B4": 4}
     for s in (early["summary"], late["summary"]):
         assert s["automated_buckets"] == {"B1": 0, "B2": 0, "B3": 0, "B4": 6}
         assert sum(s["buckets"].values()) == s["unique_records"] == 6 and s["held_inside_b4"] == 1

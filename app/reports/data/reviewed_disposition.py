@@ -85,7 +85,7 @@ def final_bucket_decision(events: Iterable[Any], *, automated_bucket: Optional[s
 
     Fail-closed: the approval must come from a recorded actor different from the
     analyst's recorded actor. HELD and unclassified records are decided by the
-    dataset builder, not here.
+    dataset builder, not here. A B1 target additionally needs `b1_evidence_verdict`.
     """
     ordered = sorted(events, key=lambda e: (e.sequence_number, _ts(e.occurred_at)))
     superseded = {e.supersedes_decision_id for e in ordered if e.supersedes_decision_id}
@@ -112,6 +112,87 @@ def final_bucket_decision(events: Iterable[Any], *, automated_bucket: Optional[s
         f"QA-approved reclassification {automated_bucket or 'unclassified'} -> {target} "
         f"(analyst determination #{gov.sequence_number} at {_ts(gov.occurred_at)}; in-app QA APPROVE "
         f"#{last_qa.sequence_number} by a different recorded user at {_ts(last_qa.occurred_at)})")}
+
+
+#: Exclusion sources whose pending candidate (disposition REVIEW / state possible_match) blocks B1.
+B1_CANDIDATE_SOURCES = ("sam_gov", "oig_leie", "cms_revocation", "sam_extract")
+B1_NO_LATER_EVIDENCE = ("evidence saved after that review is NOT re-evaluated by this report "
+                        "(no approved as-of evaluator exists)")
+
+
+def b1_evidence_verdict(review: Any, *, rules: Optional[List[dict]], policy_active: bool,
+                        cutoff_rows: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """May an approved B4 -> B1 move be REPORTED as B1? {"established": bool, "reason": str}.
+
+    Owner authorization 2026-11-17: B1 only when saved evidence at the cutoff
+    establishes it under the recorded rule version and the source-applicability
+    policy, with no unresolved B4 condition; otherwise B4 is kept and the reason
+    is stated. No rule is restated here and nothing live is called.
+
+    REUSED, NOT REBUILT
+      * `shadow_reassessment.classifier_input` - the classifier input the
+        governing review STORED when it was written (the loader only selects a
+        review created at or before the cutoff);
+      * `BucketClassifier.classify` over the rule rows stored at the review's own
+        rule version (`shadow_reassessment.rules_for_version`, loaded by the
+        caller);
+      * `shadow_reassessment.risk_signals` for open exclusion / identity signals.
+
+    LIMITATION, STATED RATHER THAN APPROXIMATED
+      That input is the REVIEW-TIME snapshot. No existing function rebuilds a
+      classifier input from evidence saved later, as of a cutoff, with the
+      pipeline's record-identity and worst-state-wins rules. So this verdict can
+      explain why B1 is not established, and it NEVER returns established=True:
+      a record the stored evidence classified B4 reproduces B4. Establishing B1
+      from later evidence needs that evaluator, under its own authorization.
+    """
+    from app.tefca_registry.bucket_classifier import BucketClassifier
+    from app.tefca_registry.rce import shadow_reassessment as sh
+
+    why: List[str] = []
+    rid = getattr(review, "review_id", "?")
+    vr = getattr(review, "verification_results", None) or {}
+    inp = sh.classifier_input(vr)
+    version = getattr(review, "classification_rule_version", None)
+    if inp is None:
+        why.append(f"review {rid} stores no classifier input, so its saved evidence cannot be evaluated")
+    elif version is None:
+        why.append(f"review {rid} records no rule version")
+    elif not rules:
+        why.append(f"no rules are stored at rule version {version}")
+    else:
+        result = BucketClassifier().classify(inp, rules=rules)
+        recorded = (getattr(review, "classification_bucket", None), getattr(review, "classification_rule", None))
+        if (result.bucket, result.rule_code) != recorded:
+            why.append(f"the stored input of review {rid} does not reproduce its recorded classification under "
+                       f"rule version {version} (re-evaluated {result.bucket} by {result.rule_code or 'no rule'}); "
+                       "left for a person")
+        else:
+            matched = "; ".join(result.matched_conditions) or "conditions met"
+            why.append(f"the saved evidence of review {rid} classifies {result.bucket} under {result.rule_code} "
+                       f"v{version} ({matched}) and that condition is not resolved in the saved evidence")
+        signals = sh.risk_signals(inp)
+        if signals:
+            why.append("open risk signal(s): " + ", ".join(signals))
+    pending = []
+    for name, state in sh.source_states(inp or {}).items():
+        if name in B1_CANDIDATE_SOURCES and (state.get("status") == "possible_match"
+                                             or str(state.get("disposition") or "").upper() == "REVIEW"):
+            pending.append(f"{name} (stored input)")
+    for label, row in (cutoff_rows or {}).items():
+        if row is not None and str(getattr(row, "disposition", "") or "").upper() == "REVIEW":
+            pending.append(f"{label} (evidence row at the cutoff)")
+    if pending:
+        why.append("pending exclusion candidate with no recorded determination: " + ", ".join(sorted(set(pending)))
+                   + "; a clear SAM extract never clears a live SAM candidate")
+    for key, text in (("prior_risk_not_cleared", "an earlier risk signal on the entity has not been cleared"),
+                      ("analyst_review_dimensions", "the review routed evidence dimension(s) to analyst review")):
+        if vr.get(key):
+            why.append(text)
+    if not policy_active:
+        why.append("no source-applicability policy row is active, so the mandatory-source policy was not evaluated")
+    why.append(B1_NO_LATER_EVIDENCE)
+    return {"established": False, "reason": "; ".join(why)}
 
 
 async def load_for_reviews(db, review_ids: List[str], cutoff) -> Dict[str, List[Any]]:
