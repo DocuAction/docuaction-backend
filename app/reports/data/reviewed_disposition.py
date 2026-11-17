@@ -114,6 +114,88 @@ def final_bucket_decision(events: Iterable[Any], *, automated_bucket: Optional[s
         f"#{last_qa.sequence_number} by a different recorded user at {_ts(last_qa.occurred_at)})")}
 
 
+MANUAL_CHECK_DATE_NOT_RECORDED = "not recorded"
+
+
+def _identifier(event: Any) -> str:
+    """The actor exactly as the decision event stored it; nothing is looked up or reformatted."""
+    return (f"{getattr(event, 'actor_email', '') or '(no email stored)'} "
+            f"(user id {getattr(event, 'actor_user_id', '') or 'not stored'}; "
+            f"role {getattr(event, 'actor_role', '') or 'not stored'})")
+
+
+def decision_details(events: Iterable[Any]) -> Dict[str, str]:
+    """Who decided and what they wrote, for the record-level master (owner authorization 2026-11-17, part (a)).
+
+    Same visibility rule as `summarize`: the governing (non-superseded) determination among the events the caller
+    passes (already bounded by the cutoff) and the latest QA event after it. The two texts are returned VERBATIM
+    from the stored rows and are never logged. No manual check date is stored for a determination, so the value
+    is the literal "not recorded" - the time the decision was saved is NOT a check date and is never substituted.
+    """
+    ordered = sorted(events, key=lambda e: (e.sequence_number, _ts(e.occurred_at)))
+    superseded = {e.supersedes_decision_id for e in ordered if e.supersedes_decision_id}
+    determinations = [e for e in ordered
+                      if e.event_type in ("ANALYST_DETERMINATION", "SUPERSEDING_DETERMINATION")
+                      and e.id not in superseded]
+    if not determinations:
+        return {"analyst": "", "qa_reviewer": "", "analyst_rationale": "", "qa_reason": "", "manual_check_date": ""}
+    gov = determinations[-1]
+    qa = [e for e in ordered if e.event_type == "QA_REVIEW" and e.sequence_number > gov.sequence_number]
+    last_qa = qa[-1] if qa else None
+    return {"analyst": _identifier(gov),
+            "qa_reviewer": _identifier(last_qa) if last_qa is not None else "",
+            "analyst_rationale": getattr(gov, "rationale", None) or "",
+            "qa_reason": (getattr(last_qa, "qa_reason", None) or "") if last_qa is not None else "",
+            "manual_check_date": MANUAL_CHECK_DATE_NOT_RECORDED}
+
+
+#: Exclusion sources whose STORED pending candidate keeps an approved B4 -> B2 at B4 (SAM and LEIE only).
+B2_CANDIDATE_SOURCES = ("sam_gov", "sam_extract", "oig_leie")
+
+
+def stored_pending_candidates(review: Any) -> Dict[str, Any]:
+    """Pending SAM / LEIE candidates in the review's STORED snapshot:
+    {"evaluated": bool, "pending": [names], "undetermined": [names]}.
+
+    Owner authorization 2026-11-17, part (a): an approved B4 -> B2 on a record whose governing review stored a
+    pending SAM or LEIE candidate stays B4. Reuses `shadow_reassessment.classifier_input` / `source_states`. A
+    candidate is a stored status `possible_match` or a stored disposition REVIEW. BOTH stored shapes are read:
+    the delivery path keeps the disposition beside the status; the single-record path
+    (`review_service.apply_persisted_exclusion_evidence`) keeps it under `persisted_evidence` (or
+    `persisted_evidence_seen` when the live answer was kept). With the possible-match state flag off a pending hit
+    is stored as `not_found`, so the disposition is what tells a pending hit from a clean screen.
+
+    `undetermined` names a source stored as `not_found` with NO disposition in any of those places: the snapshot
+    cannot say whether that was a clean screen or a pending hit (the repo's own `risk_signals` calls this
+    "potential_hit_or_unknown_origin"). It is reported as not determinable - never as "none".
+
+    NOTHING saved after the review is read (no evidence rows, no live call), so a later candidate is invisible
+    here - stated, not approximated. `evaluated` is False when the review stores no classifier input.
+    """
+    from app.tefca_registry.rce import shadow_reassessment as sh
+
+    inp = sh.classifier_input(getattr(review, "verification_results", None) or {})
+    if inp is None:
+        return {"evaluated": False, "pending": [], "undetermined": []}
+    raw_sources = inp.get("sources") or {}
+    pending, undetermined = [], []
+    for name, state in sh.source_states(inp).items():
+        if name not in B2_CANDIDATE_SOURCES:
+            continue
+        raw = raw_sources.get(name) if isinstance(raw_sources.get(name), dict) else {}
+        dispositions = {str(state.get("disposition") or "").upper()}
+        for key in ("persisted_evidence", "persisted_evidence_seen"):
+            if isinstance(raw.get(key), dict):
+                dispositions.add(str(raw[key].get("disposition") or "").upper())
+        dispositions.discard("")
+        status = str(state.get("status") or "").lower()
+        if status == "possible_match" or "REVIEW" in dispositions:
+            pending.append(name)
+        elif status == "not_found" and not dispositions:
+            undetermined.append(name)
+    return {"evaluated": True, "pending": sorted(pending), "undetermined": sorted(undetermined)}
+
+
 #: Exclusion sources whose pending candidate (disposition REVIEW / state possible_match) blocks B1.
 B1_CANDIDATE_SOURCES = ("sam_gov", "oig_leie", "cms_revocation", "sam_extract")
 B1_NO_LATER_EVIDENCE = ("evidence saved after that review is NOT re-evaluated by this report "

@@ -86,7 +86,7 @@ from sqlalchemy import and_, exists, func, or_, select, text
 from app.reports.data import reviewed_disposition as rd
 from app.reports.data.october_review_dataset import STORED_COMMENT_KEY
 
-LOADER_VERSION = "1.2.0"
+LOADER_VERSION = "1.3.0"
 BATCH_SIZE = 2000
 BUCKETS = ("B1", "B2", "B3", "B4")
 
@@ -509,6 +509,13 @@ async def load_record_facts(
                     cutoff_rows={"SAM_GOV": evidence.get((ent, "SAM_GOV")), "OIG_LEIE": evidence.get((ent, "OIG_LEIE")),
                                  "SAM extract": evidence.get((ent, "SAM_EXTRACT_SUPPLEMENTARY"))} if ent else None)
 
+            # Part (a), owner authorization 2026-11-17: an approved B4 -> B2 is checked against the governing
+            # review's STORED snapshot for a pending SAM / LEIE candidate (nothing saved later is read), and the
+            # governing determination's actors and texts are carried verbatim to their own columns.
+            b2 = (rd.stored_pending_candidates(rev) if approved["bucket"] == "B2" and bucket == "B4"
+                  else {"evaluated": None, "pending": [], "undetermined": []})
+            details = rd.decision_details(decisions.get(rev.review_id, []) if rev is not None else [])
+
             fact: Dict[str, Any] = {
                 "agt_record_id": agt,
                 "source_line": rec.line_number,
@@ -541,6 +548,9 @@ async def load_record_facts(
                 # A B1 target is reported only when saved evidence establishes it; today it never does (see
                 # reviewed_disposition.b1_evidence_verdict) and the reason is carried to the Bucket Basis.
                 "approved_b1_established": b1["established"], "approved_b1_reason": b1["reason"],
+                "approved_b2_candidate_evaluated": b2["evaluated"], "approved_b2_pending": list(b2["pending"]),
+                "approved_b2_undetermined": list(b2["undetermined"]),
+                **{"decision_" + k: v for k, v in details.items()},
                 "provisional": bool(ann.get("provisional")),
                 "bucket_annotation": _s(ann.get("bucket_annotation")),
                 "nppes": cells["nppes"], "pecos": cells["pecos"],
@@ -646,6 +656,12 @@ async def load_record_facts(
             "B4 with the reason in Bucket Basis and the analyst decision and QA approval in their own "
             "columns. The persisted bucket is kept in its own column; no spreadsheet analysis is "
             "substituted.",
+            "An approved B4 -> B2 stays B4 when the governing review's STORED snapshot holds a pending SAM or "
+            "LEIE candidate; that check does not see a candidate added after the review was saved. Every "
+            "applied B2 move is marked PROVISIONAL. Analyst and QA reviewer identifiers, the analyst rationale "
+            "and the QA reason are shown verbatim as stored. No finding type, evidence reference or manual "
+            "check date is captured for a determination: the manual check date reads 'not recorded' and an "
+            "applied move is flagged 'finding details not recorded'.",
             "Stored comments (rce_record_comments) are read verbatim by kind when the "
             "store exists; caller-supplied annotations/comments are inputs from retained "
             "files. Comments are commentary only and decide nothing.",
