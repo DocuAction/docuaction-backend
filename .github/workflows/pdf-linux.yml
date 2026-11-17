@@ -288,6 +288,43 @@ jobs:
             tests/test_october_review_dataset_2026_11_11.py \
             -v --tb=short -rs --junitxml=record-review-results.xml
 
+      # EVIDENCE BRANCH ONLY - not for merge. One synthetic delivery through the real
+      # routes and workers, with the PDF rendered by the WeasyPrint installed above.
+      # External source connectors are STUBBED by tests/journey/journey_server.py.
+      - name: Continuous synthetic journey with real WeasyPrint (connectors STUBBED)
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:isolationtest@postgres:5432/journey
+          ENABLE_IQVIA_SOURCES: 'true'
+          ENABLE_IQVIA_AFFILIATION_CONSUMPTION: 'true'
+          ENTITY_RESOLVER_SOURCE: db
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import asyncio, asyncpg
+          BASE = "postgresql://postgres:isolationtest@postgres:5432/"
+          async def run(db, statements):
+              conn = await asyncpg.connect(BASE + db)
+              try:
+                  for statement in statements:
+                      await conn.execute(statement)
+              finally:
+                  await conn.close()
+          asyncio.run(run("postgres", ["CREATE DATABASE journey OWNER docuaction_owner",
+                                       "ALTER DATABASE journey SET timezone = 'UTC'"]))
+          asyncio.run(run("journey", ["ALTER SCHEMA public OWNER TO docuaction_owner",
+                                      "GRANT ALL ON SCHEMA public TO docuaction_owner",
+                                      "GRANT USAGE, CREATE ON SCHEMA public TO docuaction_app"]))
+          PY
+          python -m alembic upgrade head
+          mkdir -p record-review-out/journey
+          python tests/journey/journey_server.py 8000 > record-review-out/journey/server.log 2>&1 &
+          for i in $(seq 1 90); do
+            python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)" 2>/dev/null && break
+            sleep 1
+          done
+          python tests/journey/seed_users.py > /tmp/journey-tokens.json
+          python tests/journey/journey.py /tmp/journey-tokens.json record-review-out/journey http://127.0.0.1:8000 pdf,xlsx,csv
+
       - name: Fail if any test was skipped
         if: always()
         run: python scripts/ci_skip_guard.py record-review-results.xml

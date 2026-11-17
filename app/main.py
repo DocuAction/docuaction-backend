@@ -706,6 +706,9 @@ safe_load("app.tefca_registry.rce.delivery_routes", "tefca-rce-deliveries")
 safe_load("app.tefca_registry.rce.iqvia_routes", "tefca-rce-iqvia")
 # Advisory HCP_AFFIL consumption: router is empty unless ENABLE_IQVIA_AFFILIATION_CONSUMPTION.
 safe_load("app.tefca_registry.rce.iqvia_affiliation_routes", "tefca-rce-iqvia-affiliation")
+# Review Hub: one read-only overview (capabilities, run history, readiness) for
+# /tefca-arc/insights. GET only; every act keeps its own gate in its own module.
+safe_load("app.tefca_registry.review_hub", "tefca-review-hub")
 
 # DEF-004 governed original-artifact restoration: DEV-only, admin-only,
 # feature-flagged restore of a delivery's preserved original from a

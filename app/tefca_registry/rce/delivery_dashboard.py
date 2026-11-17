@@ -187,8 +187,10 @@ def _status(job, recon) -> Dict[str, Any]:
         return {"state": "PROCESSING", "stage": job.stage,
                 "detail": "The delivery is being processed."}
     if job is not None and job.state == "FAILED":
+        from app.core.logging_config import sanitize_stored_error
+
         return {"state": "FAILED", "stage": job.stage,
-                "detail": job.error_reason or "Processing did not complete."}
+                "detail": sanitize_stored_error(job.error_reason) or "Processing did not complete."}
     if recon is None:
         return {"state": "NOT_RECONCILED", "stage": None,
                 "detail": ("The delivery exists in Area 1 but reconciliation "
