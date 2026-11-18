@@ -215,6 +215,10 @@ PDF_REVIEW_HEADING = "Reviewed dispositions and SAM public-extract results"
 PDF_REVIEW_COLUMNS = [("AGT_Record_ID", 13.0), ("Analyst/QA Status", 14.0),
                       ("Reviewed Disposition (QA-approved only)", 22.0), ("Reviewed Disposition Date", 9.0),
                       ("Reviewed Disposition Basis", 20.0), (SAM_EXTRACT_COLUMN, 22.0)]
+#: Review finding 2026-11-17: a QA-approved move that is NOT applied showed its reason only in the Excel/CSV
+#: (Bucket Basis). Listed per record under the review table, only when such a move exists. Widths sum to 100.
+PDF_NOT_APPLIED_HEADING = "Approved moves not applied"
+PDF_NOT_APPLIED_COLUMNS = [("AGT_Record_ID", 16.0), ("Why not applied", 24.0), ("Explanation (as in Bucket Basis)", 60.0)]
 _NO_ANALYST_RECORD = "No analyst determination recorded"
 _CLEAN_EXTRACT = "No candidate match in the extract"
 #: The monospace identifier cells (td.mono). DejaVu Sans Mono advances 0.602 em,
@@ -475,7 +479,9 @@ def build_record_row(fact: Dict[str, Any],
     flag = _s(fact.get("flag"))
     if fact.get("provisional") and "PROVISIONAL" not in flag.upper():
         flag = (flag + "; " if flag else "") + "PROVISIONAL B2"
-    if applied == "B2" and "PROVISIONAL" not in flag.upper():
+    # The COMPLETE marker, as its own token: other text that merely contains the word ("PROVISIONAL address
+    # correction") does not stand in for it. Existing text is kept as written; the marker is never added twice.
+    if applied == "B2" and PROVISIONAL_B2_FLAG not in [t.strip().upper() for t in flag.split(";")]:
         flag = (flag + "; " if flag else "") + PROVISIONAL_B2_FLAG
     if applied:
         flag = (flag + "; " if flag else "") + f"{RECLASSIFIED_FLAG} {fact.get('bucket')} -> {applied}"
@@ -577,10 +583,15 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
     # either applied (it is then a transition above) or not applied for exactly one stated reason.
     not_applied: Dict[str, int] = {}
     b2_moves = unstructured = unstructured_applied = applied_moves = 0
+    not_applied_moves: List[Dict[str, str]] = []
     for f in facts:
         f_applied, _n, f_reason = _reclassification_outcome(f, _s(f.get("status")).strip())
         if f_reason:
             not_applied[f_reason] = not_applied.get(f_reason, 0) + 1
+            # Kept per record so the HTML / PDF can say WHY that record stayed where it is (the Excel/CSV say it
+            # in Bucket Basis). Same text as Bucket Basis; nothing is added or decided here.
+            not_applied_moves.append({"agt_record_id": _s(f.get("agt_record_id")), "reason": f_reason,
+                                      "explanation": _s(_n)})
         applied_moves += 1 if f_applied else 0
         if f_applied or f_reason:
             b2_moves += 1 if f.get("approved_bucket") == "B2" else 0
@@ -710,6 +721,7 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
         "classification": classification, "banner": banner,
         "summary": summary, "sheet_order": order, "sheets": sheets,
         "load_meta": load_meta or {},
+        "not_applied_moves": not_applied_moves,
     }
 
 
@@ -1082,6 +1094,31 @@ def to_html(dataset: Dict[str, Any]) -> str:
         if review_rows else
         f"<h2>{PDF_REVIEW_HEADING}</h2><p class='note'>No record in this dataset has analyst/QA activity or a "
         f"SAM public-extract result other than a clean or not-established one.</p>")
+
+    # -- approved moves that were NOT applied: the reason, per record (the PDF renders this same HTML) --
+    na_moves = dataset.get("not_applied_moves") or []
+    if na_moves:
+        na_rows = []
+        for mv in na_moves:
+            slices_by_col = [split_for_rows(mv[key], _chars_per_line(w, PDF_DETAIL_FONT_PT), PDF_DETAIL_MAX_LINES)
+                             for key, (_c, w) in zip(("reason", "explanation"), PDF_NOT_APPLIED_COLUMNS[1:])]
+            parts = _row_parts(slices_by_col)
+            for part in range(parts):
+                first = (e(mv["agt_record_id"]) if part == 0
+                         else continued(mv["agt_record_id"], part + 1, parts))
+                na_rows.append(
+                    f"<tr{'' if part == 0 else chr(32) + 'class=' + chr(39) + 'continuation' + chr(39)}>"
+                    f"<td class='mono'>{first}</td>"
+                    + "".join(f"<td class='verbatim'>{e(sl[part] if part < len(sl) else '')}</td>"
+                              for sl in slices_by_col) + "</tr>")
+        review_html += (
+            f"<h3>{PDF_NOT_APPLIED_HEADING} ({len(na_moves)})</h3>"
+            "<p class='note'>Each record below has a QA-approved reclassification that this report did NOT "
+            "apply. Its Bucket is unchanged. The analyst decision and the QA approval are preserved.</p>"
+            "<table><colgroup>" + "".join(f"<col style='width:{w}%'>" for _c, w in PDF_NOT_APPLIED_COLUMNS)
+            + "</colgroup><thead><tr>"
+            + "".join(f"<th scope='col'>{_th(c)}</th>" for c, _w in PDF_NOT_APPLIED_COLUMNS)
+            + f"</tr></thead><tbody>{''.join(na_rows)}</tbody></table>")
 
     # -- unclassified list (the summary refers to it; it must be in the PDF too) --
     uncls_html = ""

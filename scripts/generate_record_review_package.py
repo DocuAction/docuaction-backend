@@ -153,17 +153,34 @@ def compare_baseline(saved: Dict[str, Any], summary: Dict[str, Any], baseline: D
         if got != want:
             diffs.append({"item": key, "baseline": want, "saved": got, "difference": got - want})
     if diffs:
-        why = []
+        unexplained = "no recorded explanation - investigate before relying on the package"
+        common = []
         if summary["unclassified_non_held_count"]:
-            why.append(f"{summary['unclassified_non_held_count']} non-HELD record(s) have NO usable persisted "
-                       f"classification and are shown as NOT CLASSIFIED (listed on the Unclassified sheet); "
-                       f"no bucket was assigned to match the baseline")
-        if summary.get("qa_approved_reclassifications"):
-            moves = ", ".join(f"{k}: {v}" for k, v in summary["reclassification_transitions"].items())
-            why.append(f"{summary['qa_approved_reclassifications']} record(s) are reported under a QA-approved "
-                       f"reclassification ({moves}); a baseline of automated buckets does not include those moves")
+            common.append(f"{summary['unclassified_non_held_count']} non-HELD record(s) have NO usable persisted "
+                          f"classification and are shown as NOT CLASSIFIED (listed on the Unclassified sheet); "
+                          f"no bucket was assigned to match the baseline")
+        # A reclassification moves a record between two buckets and keeps the record count. It can therefore
+        # explain a difference in the buckets it touches, by its net effect there, and nothing else: never TOTAL,
+        # never HELD, never a bucket no move touches (review finding, 2026-11-17).
+        moved_in, moved_out, touching = {}, {}, {}
+        for key, n in (summary.get("reclassification_transitions") or {}).items():
+            before, _arrow, after = key.partition(" -> ")
+            moved_out[before] = moved_out.get(before, 0) + n
+            moved_in[after] = moved_in.get(after, 0) + n
+            for b in (before, after):
+                touching.setdefault(b, []).append(f"{key}: {n}")
         for d in diffs:
-            d["explanation"] = "; ".join(why) or "no recorded explanation - investigate before relying on the package"
+            why = list(common)
+            item = d["item"]
+            if item in touching:
+                net = moved_in.get(item, 0) - moved_out.get(item, 0)
+                why.append(f"QA-approved reclassification changes {item} by {net:+d} ({', '.join(touching[item])}); "
+                           f"a baseline of automated buckets does not include those moves")
+                rest = d["difference"] - net
+                if rest and not common:
+                    why.append(f"the remaining difference of {rest:+d} has no recorded explanation - "
+                               f"investigate before relying on the package")
+            d["explanation"] = "; ".join(why) or unexplained
     return diffs
 
 

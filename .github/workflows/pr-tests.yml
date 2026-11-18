@@ -15,7 +15,7 @@
 
 on:
   pull_request:
-    branches: [main, 'feat/mandatory-source-parity-assessment-date-2026-11-11', 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06', 'feat/proposed-rules-v4-inactive-2026-11-07', 'test/iqvia-settings-shadowing-fix-2026-11-08']
+    branches: [main, 'feat/mandatory-source-parity-assessment-date-2026-11-11', 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06', 'feat/proposed-rules-v4-inactive-2026-11-07', 'test/iqvia-settings-shadowing-fix-2026-11-08', 'feat/supplemental-npi-research-2026-11-15']
   push:
     branches: [main]
 
