@@ -56,8 +56,8 @@ def test_every_move_that_is_not_applied_shows_its_reason_in_the_html():
     ds = s.build(facts, report_id="RECORD-REVIEW-SYNTHETIC-NOT-APPLIED")
     assert ds["summary"]["moves_not_applied_total"] == 3 and ds["summary"]["moves_applied"] == 1
     section = _review_section(d.to_html(ds))
-    assert "Approved moves not applied (3)" in section
-    block = section.split("Approved moves not applied (3)", 1)[1].split("</table>", 1)[0]
+    assert f"{d.PDF_NOT_APPLIED_HEADING} (3)" in section
+    block = section.split(f"{d.PDF_NOT_APPLIED_HEADING} (3)", 1)[1].split("</table>", 1)[0]
     for i, needles in ((5, ("NOT applied", "pending exclusion candidate", "sam_gov", "does not see a candidate")),
                        (6, ("NOT applied", "remains HELD")),
                        (8, ("NOT applied", "does not establish B1", "SYNTHETIC evidence gap"))):
@@ -71,7 +71,7 @@ def test_every_move_that_is_not_applied_shows_its_reason_in_the_html():
 
 def test_the_not_applied_block_is_absent_when_no_move_was_refused():
     html = d.to_html(s.build(s.base14_facts(), report_id="RECORD-REVIEW-SYNTHETIC-NO-MOVES"))
-    assert "Approved moves not applied" not in html
+    assert d.PDF_NOT_APPLIED_HEADING not in html
 
 
 def test_the_pdf_path_is_handed_the_same_html_including_the_reasons(monkeypatch):
@@ -87,7 +87,7 @@ def test_the_pdf_path_is_handed_the_same_html_including_the_reasons(monkeypatch)
     ds = s.build(_facts(), report_id="RECORD-REVIEW-SYNTHETIC-NOT-APPLIED-PDF")
     assert d.to_pdf(ds) == b"%PDF-not-rendered"
     assert seen["html"] == d.to_html(ds)
-    assert "Approved moves not applied (3)" in seen["html"] and "pending exclusion candidate" in seen["html"]
+    assert f"{d.PDF_NOT_APPLIED_HEADING} (3)" in seen["html"] and "pending exclusion candidate" in seen["html"]
 
 
 def _flag(**fact):
@@ -147,3 +147,51 @@ def test_a_bucket_difference_larger_than_the_moves_keeps_the_warning_for_the_res
     # B1 is not part of any recorded move: the moves explain nothing about it
     assert diffs["B1"]["explanation"].startswith("no recorded explanation")
     assert "reclassification" not in diffs["B1"]["explanation"]
+
+
+# -- closeout 2026-11-17 (second review of the correction) -------------------------------------------------
+
+SAME_PERSON_NOTE = ("RECLASSIFY to B2 recorded; the QA action is NOT an approval: the QA reviewer is "
+                    "not recorded as a different person from the analyst")
+
+
+def test_the_not_applied_rows_are_described_as_recorded_actions_never_as_independent_approval():
+    facts = _facts()
+    # record 3: a same-person QA action. It is listed, with its reason, and its bucket is unchanged.
+    facts[2].update(bucket="B4", status="CLEAN", approved_note=SAME_PERSON_NOTE)
+    ds = s.build(facts, report_id="RECORD-REVIEW-SYNTHETIC-SAME-PERSON")
+    assert ds["summary"]["moves_not_applied"][d.NA_NOT_INDEPENDENT] == 1
+    row = next(r for r in ds["sheets"]["Records"]["rows"] if r[0] == facts[2]["agt_record_id"]
+               or facts[2]["agt_record_id"] in r)
+    assert row[d.RECORD_COLUMNS.index("Bucket")] == "B4", "the bucket is unchanged"
+    section = _review_section(d.to_html(ds))
+    assert d.PDF_NOT_APPLIED_HEADING == "Recorded reclassification actions not applied"
+    block = section.split(f"{d.PDF_NOT_APPLIED_HEADING} (4)", 1)[1].split("</table>", 1)[0]
+    intro = block.split("<table>", 1)[0]
+    assert "recorded reclassification action" in intro and "Its Bucket is unchanged" in intro
+    assert "is not an independent approval" in intro
+    for wrong in ("QA-approved reclassification", "the QA approval", "Approved moves"):
+        assert wrong not in intro, wrong
+    same = next(r for r in block.split("<tr") if facts[2]["agt_record_id"] in r)
+    assert d.NA_NOT_INDEPENDENT in same and "not recorded as a different person" in same
+
+
+def test_an_unexplained_remainder_keeps_its_warning_even_when_unclassified_records_exist():
+    saved = {"buckets": {"B1": 4, "B2": 3, "B3": 1, "B4": 6}, "rows": 14, "held_in_b4": 0}
+    summary = {**_summary(B4_B2=1), "unclassified_non_held_count": 1}
+    diffs = {x["item"]: x for x in pkg.compare_baseline(
+        saved, summary, {"B2": 0, "B3": 3, "B4": 7, "TOTAL": 15})}
+    # B2: +3 against one recorded move (+1): context kept, move stated, the other +2 still flagged
+    b2 = diffs["B2"]["explanation"]
+    assert "NO usable persisted classification" in b2 and "QA-approved reclassification" in b2
+    assert "+2" in b2 and INVESTIGATE in b2
+    # B3: no move touches it; the unclassified context alone does not account for a number
+    assert "NO usable persisted classification" in diffs["B3"]["explanation"]
+    assert INVESTIGATE in diffs["B3"]["explanation"]
+    # TOTAL: never explained by a move; context kept, warning kept
+    assert "NO usable persisted classification" in diffs["TOTAL"]["explanation"]
+    assert INVESTIGATE in diffs["TOTAL"]["explanation"] and "reclassification changes" not in diffs["TOTAL"]["explanation"]
+    # B4: 7 -> 6 is exactly the one recorded move: fully explained, no warning, context still shown
+    b4 = diffs["B4"]["explanation"]
+    assert "QA-approved reclassification" in b4 and "NO usable persisted classification" in b4
+    assert INVESTIGATE not in b4

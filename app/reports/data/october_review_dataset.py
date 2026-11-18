@@ -215,9 +215,9 @@ PDF_REVIEW_HEADING = "Reviewed dispositions and SAM public-extract results"
 PDF_REVIEW_COLUMNS = [("AGT_Record_ID", 13.0), ("Analyst/QA Status", 14.0),
                       ("Reviewed Disposition (QA-approved only)", 22.0), ("Reviewed Disposition Date", 9.0),
                       ("Reviewed Disposition Basis", 20.0), (SAM_EXTRACT_COLUMN, 22.0)]
-#: Review finding 2026-11-17: a QA-approved move that is NOT applied showed its reason only in the Excel/CSV
+#: Review finding 2026-11-17: a recorded reclassification that is NOT applied showed its reason only in the Excel/CSV
 #: (Bucket Basis). Listed per record under the review table, only when such a move exists. Widths sum to 100.
-PDF_NOT_APPLIED_HEADING = "Approved moves not applied"
+PDF_NOT_APPLIED_HEADING = "Recorded reclassification actions not applied"
 PDF_NOT_APPLIED_COLUMNS = [("AGT_Record_ID", 16.0), ("Why not applied", 24.0), ("Explanation (as in Bucket Basis)", 60.0)]
 _NO_ANALYST_RECORD = "No analyst determination recorded"
 _CLEAN_EXTRACT = "No candidate match in the extract"
@@ -1113,8 +1113,10 @@ def to_html(dataset: Dict[str, Any]) -> str:
                               for sl in slices_by_col) + "</tr>")
         review_html += (
             f"<h3>{PDF_NOT_APPLIED_HEADING} ({len(na_moves)})</h3>"
-            "<p class='note'>Each record below has a QA-approved reclassification that this report did NOT "
-            "apply. Its Bucket is unchanged. The analyst decision and the QA approval are preserved.</p>"
+            "<p class='note'>Each record below has a recorded reclassification action that this report did NOT "
+            "apply, for the reason shown. Its Bucket is unchanged. The recorded analyst and QA actions are "
+            "preserved. A QA action by the same person who made the determination is not an independent "
+            "approval.</p>"
             "<table><colgroup>" + "".join(f"<col style='width:{w}%'>" for _c, w in PDF_NOT_APPLIED_COLUMNS)
             + "</colgroup><thead><tr>"
             + "".join(f"<th scope='col'>{_th(c)}</th>" for c, _w in PDF_NOT_APPLIED_COLUMNS)

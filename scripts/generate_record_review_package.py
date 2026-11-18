@@ -169,18 +169,22 @@ def compare_baseline(saved: Dict[str, Any], summary: Dict[str, Any], baseline: D
             moved_in[after] = moved_in.get(after, 0) + n
             for b in (before, after):
                 touching.setdefault(b, []).append(f"{key}: {n}")
+        # The unclassified count is CONTEXT, not an account of any number: it does not say which bucket a record
+        # would have been in. So whatever the recorded moves do not account for keeps its warning, with or
+        # without that context. The warning is left out only when the moves account for the whole difference.
         for d in diffs:
             why = list(common)
             item = d["item"]
+            net = 0
             if item in touching:
                 net = moved_in.get(item, 0) - moved_out.get(item, 0)
                 why.append(f"QA-approved reclassification changes {item} by {net:+d} ({', '.join(touching[item])}); "
                            f"a baseline of automated buckets does not include those moves")
-                rest = d["difference"] - net
-                if rest and not common:
-                    why.append(f"the remaining difference of {rest:+d} has no recorded explanation - "
-                               f"investigate before relying on the package")
-            d["explanation"] = "; ".join(why) or unexplained
+            rest = d["difference"] - net
+            if rest:
+                why.append(f"the remaining difference of {rest:+d} has no recorded explanation - "
+                           f"investigate before relying on the package" if why else unexplained)
+            d["explanation"] = "; ".join(why)
     return diffs
 
 
