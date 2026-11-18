@@ -24,6 +24,7 @@ therefore after the test run and the "early" cutoff (9 Nov 2026) is before it.
 from __future__ import annotations
 
 import logging
+import sys
 import uuid
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -315,3 +316,80 @@ def test_the_dataset_rules_for_b2_hold_for_any_fact_and_the_field_export_is_unto
     assert new <= set(COLS) and COLS[-1] == AUTO
     assert len(flf.FIELD_HEADERS) == 18 and not (new & set(flf.FIELD_HEADERS))
     assert flf.FIELD_HEADERS[0] == "Snapshot_Date" and flf.FIELD_HEADERS[-1] == "Purpose_of_Use"
+
+
+async def test_a_failed_export_never_writes_the_analyst_or_qa_text_to_the_log(rolled_back_db, monkeypatch, caplog):
+    """Closeout 2026-11-17 (tests only). Synthetic export failures at three points; fake texts must stay out of the
+    log and out of the job's stored failure reason.
+
+    What this does NOT prove: `run_record_review_export_job` logs the exception text by design
+    (`logger.exception`). A library error whose own message quotes a cell value would therefore be logged. The one
+    such error known here (openpyxl's illegal-character error quotes the value) is exercised below with a real
+    control character and does not occur, because the workbook engine strips those characters first.
+    """
+    import uuid as _uuid
+
+    import openpyxl.workbook.workbook as wbmod
+
+    from app.reports import routes as report_routes
+    from app.reports.data import artifact_registry
+    from app.reports.data.export_job_model import ReportExportJob
+    from app.reports.export_runner import run_record_review_export_job
+
+    db = rolled_back_db
+    fake_rationale = "SYNTHETIC-LEAK-MARKER-ANALYST fake finding text " + chr(11) + " with a control character"
+    fake_reason = "SYNTHETIC-LEAK-MARKER-QA fake approval reason text"
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "RATIONALE", fake_rationale)
+    monkeypatch.setattr(module, "QA_REASON", fake_reason)
+    lead = SimpleNamespace(email="qalead@synthetic-test.docuaction.invalid")
+    registered = []
+
+    async def _register(_db, **kw):
+        registered.append(kw)
+        return {"artifact_id": _uuid.uuid4(), "artifact_version": 1, "rendered_sha256": "f" * 64,
+                "size_bytes": len(kw["content"])}
+
+    async def _register_fails(_db, **_kw):
+        raise RuntimeError("synthetic registration failure")
+
+    def _save_fails(self, _target):
+        raise OSError(28, "synthetic: no space left on device")
+
+    async def _export(fmt):
+        out = await report_routes.export_record_review(
+            report_routes.RecordReviewExportRequest(intake_id=str(intake_id), format=fmt,
+                                                    evidence_cutoff=late_cutoff().isoformat()), db=db, user=lead)
+        job = await db.get(ReportExportJob, _uuid.UUID(out["job_id"]))
+        state = await run_record_review_export_job(db, job)
+        return state, (await db.get(ReportExportJob, job.id)).error_reason or ""
+
+    with caplog.at_level(logging.DEBUG):
+        intake_id, _recs, _a, _q = await seed_b2_b3_examples(db, "9.99.778.13")
+        await db.commit()                      # the runner rolls back on failure; keep the seeded rows (savepoint)
+        # the texts really are in the dataset being exported
+        ds = await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=late_cutoff(), report_id="SYN-LEAK")
+        assert _c(_rows(ds)[1], ds_mod.ANALYST_RATIONALE_COLUMN) == fake_rationale
+        assert _c(_rows(ds)[1], ds_mod.QA_REASON_COLUMN) == fake_reason
+
+        # 1. the renderer fails while writing the workbook
+        monkeypatch.setattr(artifact_registry, "finalize_artifact", _register)
+        with monkeypatch.context() as mp:
+            mp.setattr(wbmod.Workbook, "save", _save_fails)
+            state1, reason1 = await _export("xlsx")
+        # 2. registration fails after a complete CSV holding both texts was rendered
+        monkeypatch.setattr(artifact_registry, "finalize_artifact", _register_fails)
+        state2, reason2 = await _export("csv")
+        # 3. a control character in the analyst text does NOT make the workbook fail (it would quote the cell)
+        monkeypatch.setattr(artifact_registry, "finalize_artifact", _register)
+        state3, reason3 = await _export("xlsx")
+
+    assert (state1, state2) == (ReportExportJob.STATE_FAILED, ReportExportJob.STATE_FAILED)
+    assert "OSError" in reason1 and "RuntimeError" in reason2
+    assert state3 == ReportExportJob.STATE_SUCCEEDED and reason3 == "" and len(registered) == 1
+    logged = caplog.text
+    assert "record-review export job" in logged and "synthetic registration failure" in logged, "failures were logged"
+    assert logged.count("Traceback") >= 2
+    for text in (logged, reason1, reason2):
+        assert "SYNTHETIC-LEAK-MARKER" not in text
+        assert "fake finding text" not in text and "fake approval reason text" not in text
