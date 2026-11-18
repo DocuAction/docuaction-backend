@@ -109,3 +109,73 @@ def test_rendered_review_table_has_no_clipped_stacked_or_unreadably_small_text_a
         assert not small, f"page {number}: text below {s.MIN_READABLE_PT} pt: {small[:5]}"
     heading_page = next(i for i, p in enumerate(pages) if "Revieweddispositionsand" in s.squash(" ".join(w["text"] for w in p["words"])))
     assert "Analyst/QAStatus" in s.squash(" ".join(w["text"] for w in pages[heading_page]["words"]))
+
+
+def test_rendered_pdf_lists_each_reclassification_that_was_not_applied_with_its_reason():
+    """Closeout 2026-11-17. A REAL render (required in CI): the block under the review table is in the PDF, with
+    each record and its reason. The PDF is saved as a CI artifact so a person can open it."""
+    if not pdf_available():
+        if REQUIRE:
+            pytest.fail("RECORD_REVIEW_REQUIRE_REAL_RENDER=1 but WeasyPrint cannot render here: " + unavailable_reason())
+        pytest.skip("WeasyPrint native libraries are not available here")
+    f = s.base14_facts()
+    approved = dict(reviewed_qa_status="Approved by QA", reviewed_date="2026-11-08T12:00:00", reviewed_basis=APPROVED_NOTE)
+    f[5].update(approved, approved_bucket="B2", approved_b2_candidate_evaluated=True, approved_b2_pending=["sam_gov"],
+                reviewed_disposition="Reclassified B4 -> B2")
+    f[6].update(approved, approved_bucket="B3", reviewed_disposition="Reclassified B4 -> B3")
+    f[8].update(approved, approved_bucket="B1", approved_b1_reason="SYNTHETIC evidence gap",
+                reviewed_disposition="Reclassified B4 -> B1")
+    f[2].update(bucket="B4", status="CLEAN", approved_note="RECLASSIFY to B2 recorded; the QA action is NOT an approval: "
+                "the QA reviewer is not recorded as a different person from the analyst")
+    ds = s.build(f, report_id="RECORD-REVIEW-SYNTHETIC-NOT-APPLIED")
+    assert len(ds["not_applied_moves"]) == 4
+    pdf = d.to_pdf(ds)
+    out = os.getenv("RECORD_REVIEW_PDF_OUT")
+    if out:
+        from pathlib import Path
+        Path(out).mkdir(parents=True, exist_ok=True)
+        (Path(out) / "weasyprint-reclassifications-not-applied.pdf").write_bytes(pdf)
+    assert pdf.startswith(b"%PDF-")
+    intro, columns = _not_applied_block(pdf, 4)
+    assert s.squash("is not an independent approval") in intro
+    assert s.squash("Its Bucket is unchanged") in intro
+    for i in (2, 5, 6, 8):
+        assert s.squash(f[i]["agt_record_id"]) in columns[0], f[i]["agt_record_id"]
+    assert s.squash(d.NA_NOT_INDEPENDENT) in columns[1] and s.squash(d.NA_HELD) in columns[1]
+    for needle in ("pending exclusion candidate", "sam_gov", "remains HELD", "does not establish B1",
+                   "SYNTHETIC evidence gap", "not recorded as a different person"):
+        assert s.squash(needle) in columns[2], needle
+
+
+def _not_applied_block(pdf: bytes, count: int):
+    """(intro text, [text of each of the three columns]) of the not-applied block, whitespace removed.
+
+    Read COLUMN BY COLUMN: a phrase that wraps inside its cell is rebuilt in reading order. A flat run of the
+    page's words interleaves the neighbouring column and cannot be compared (how wide a line is depends on the
+    fonts of the machine that renders)."""
+    heading = s.squash(f"{d.PDF_NOT_APPLIED_HEADING} ({count})")
+    header = s.squash(d.PDF_NOT_APPLIED_COLUMNS[0][0])      # the header row starts with the first column name
+    widths = [w for _c, w in d.PDF_NOT_APPLIED_COLUMNS]
+    intro, cells, state = [], [[], [], []], "before"
+    for page in s.read_pdf(pdf):
+        _top, body, _bottom = s.split_furniture(page)
+        bands = s._bands(page["w"], widths)
+        for line in s._lines(body):
+            text = s.squash("".join(w["text"] for w in line))
+            if state == "before":
+                state = "intro" if text.startswith(heading) else state
+            elif state == "intro":
+                if text.startswith(header):
+                    state = "table"
+                else:
+                    intro.append(text)
+            elif text.startswith(s.squash("Unclassified records (")):
+                state = "done"
+            elif state == "table":
+                for w in line:
+                    mid = (w["x0"] + w["x1"]) / 2.0
+                    col = next((i for i, (left, right) in enumerate(bands) if left <= mid < right), None)
+                    assert col is not None, ("a word is outside the table", w["text"])
+                    cells[col].append(s.squash(w["text"]))
+    assert state in ("table", "done"), "the heading and the column header are in the rendered PDF"
+    return "".join(intro), ["".join(c) for c in cells]

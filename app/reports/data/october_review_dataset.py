@@ -36,6 +36,38 @@ RULES IT ENFORCES (and the records that carry them)
       distinguishable: "Bucket Basis" begins "Persisted classification" or
       "Reporting annotation" and never mixes the two.
     * B2 stays labelled provisional when the fact says so.
+    * FINAL REPORTING BUCKET (owner authorization 2026-11-16, synthetic testing
+      only; methodology revision 1.3-A, DRAFT). "Bucket" is the reporting
+      bucket: the persisted automated bucket, replaced by an analyst RECLASSIFY
+      only when the loader states an independent QA approval visible at the
+      cutoff (`approved_bucket`). ELIGIBLE means what methodology 1.3-A
+      describes and nothing wider: a CLEAN/CORRECTED record whose automated
+      bucket is B4, reclassified to B1, B2 or B3. It is never applied to a HELD
+      record (HELD stays B4, once, not released), to a REJECTED / not-curated
+      record, to a record with no persisted classification, to a non-B4
+      record, or INTO B4; each such approval is stated as "NOT applied" in the
+      Bucket Basis. B1 EVIDENCE GATE (owner authorization 2026-11-17): a move
+      to B1 is applied only when the fact says saved evidence establishes B1
+      (`approved_b1_established is True`); anything else - including a fact
+      that says nothing - keeps B4 and prints `approved_b1_reason`. The loader
+      never sets it True today (no as-of evaluator; see
+      reviewed_disposition.b1_evidence_verdict). The analyst decision and QA
+      approval stay in their own columns. B2 CONTROLS (owner authorization
+      2026-11-17, part (a), report layer only): a move to B2 is NOT applied
+      when the fact names a pending SAM / LEIE candidate in the governing
+      review's stored snapshot (`approved_b2_pending`); the reason states that
+      the check does not see candidates added after that review. Every applied
+      B2 move is flagged PROVISIONAL and still counted in B2. Every applied
+      move is flagged "finding details not recorded" (no structured finding is
+      captured) and is NOT held at B4 for that. Analyst / QA reviewer
+      identifiers, analyst rationale and QA reason are shown verbatim in their
+      own columns; the manual check date reads "not recorded". The summary
+      counts moves applied, moves not applied by reason, and moves with no
+      structured finding. The automated bucket keeps its own column and the Bucket
+      Basis names the reclassification as a reporting annotation; nothing is
+      written back. Totals count each record once, by the reporting bucket, and
+      the summary shows the automated distribution and every move so the two
+      reconcile.
 Nothing here is QA approval. Every output is labelled DRAFT.
 """
 from __future__ import annotations
@@ -46,7 +78,7 @@ import io
 import re
 from typing import Any, Dict, Iterable, List, Optional
 
-DATASET_VERSION = "1.0.0"
+DATASET_VERSION = "1.3.0"
 BUCKETS = ("B1", "B2", "B3", "B4")
 STATUS_HELD = "HELD"
 USPS_UNAVAILABLE = "Not checked—unavailable"
@@ -66,6 +98,33 @@ DRAFT_BANNER = ("CURRENT REVIEW / DRAFT / NOT FINAL - INDEPENDENT QA PENDING. "
 PROHIBITED_PECOS_PHRASES = ("lost-identifier/outage family",)
 
 SAM_EXTRACT_COLUMN = "SAM Public Extract (supplementary; candidate only)"
+#: The persisted automated bucket, kept beside the reporting "Bucket" (2026-11-16).
+AUTOMATED_BUCKET_COLUMN = "Automated Bucket (original; unchanged by review)"
+NO_PERSISTED_BUCKET = "None persisted"
+RECLASSIFIED_FLAG = "RECLASSIFIED (QA-approved)"
+#: Curated statuses whose record may carry a reclassified reporting bucket (fail-closed: nothing else).
+RECLASSIFIABLE_STATUSES = ("CLEAN", "CORRECTED")
+#: Methodology 1.3-A: "a B4 record may remain in B4 or be reclassified to B1, B2 or B3".
+RECLASSIFIABLE_FROM, RECLASSIFIABLE_TO = "B4", ("B1", "B2", "B3")
+#: Part (a), owner authorization 2026-11-17: record-level master only (never the 18-column field export).
+ANALYST_COLUMN = "Analyst (identifier as stored)"
+QA_REVIEWER_COLUMN = "QA Reviewer (identifier as stored)"
+ANALYST_RATIONALE_COLUMN = "Analyst Rationale (verbatim)"
+QA_REASON_COLUMN = "QA Reason (verbatim)"
+MANUAL_CHECK_DATE_COLUMN = "Manual Check Date (of the finding; decision save time is never substituted)"
+PROVISIONAL_B2_FLAG = "PROVISIONAL B2"
+NO_STRUCTURED_FINDING_FLAG = "finding details not recorded"
+B2_SNAPSHOT_LIMITATION = ("this check reads the stored snapshot of the governing review only and does not see a "
+                          "candidate added after that review was saved")
+#: Reasons an approved move is not applied, as itemized in the summary.
+NA_HELD = "record is HELD (reported once in B4)"
+NA_UNCLASSIFIED = "record has no persisted classification"
+NA_STATUS = "record status is not CLEAN or CORRECTED"
+NA_OUTSIDE = "move is not B4 to B1, B2 or B3"
+NA_B1 = "B4 to B1: saved evidence does not establish B1 (manual B4 to B1 is blocked)"
+NA_B2_CANDIDATE = "B4 to B2: pending SAM or LEIE candidate in the stored review snapshot"
+NA_NOT_INDEPENDENT = "QA reviewer is not recorded as a different person from the analyst"
+NA_NO_TARGET = "no valid target bucket recorded"
 RECORD_COLUMNS = [
     "Source_Line", "AGT_Record_ID", "QHIN Number", "HCID", "Tefca Id",
     "Organization", "Participation Level",
@@ -82,8 +141,11 @@ RECORD_COLUMNS = [
     # Analyst/QA disposition, reported SEPARATELY from the automated Bucket above.
     "Reviewed Disposition (QA-approved only)", "Reviewed Disposition Date",
     "Analyst/QA Status", "Reviewed Disposition Basis",
+    ANALYST_COLUMN, QA_REVIEWER_COLUMN, ANALYST_RATIONALE_COLUMN, QA_REASON_COLUMN,
+    MANUAL_CHECK_DATE_COLUMN,
     SAM_EXTRACT_COLUMN,
     "Supplemental NPI Research (stored entry; NOT an accepted correction)",
+    AUTOMATED_BUCKET_COLUMN,
 ]
 TEXT_COLUMNS = list(range(len(RECORD_COLUMNS)))   # identifiers stay text
 #: Compact subset for the PDF's main table; the full column set is in the Excel/CSV.
@@ -153,6 +215,10 @@ PDF_REVIEW_HEADING = "Reviewed dispositions and SAM public-extract results"
 PDF_REVIEW_COLUMNS = [("AGT_Record_ID", 13.0), ("Analyst/QA Status", 14.0),
                       ("Reviewed Disposition (QA-approved only)", 22.0), ("Reviewed Disposition Date", 9.0),
                       ("Reviewed Disposition Basis", 20.0), (SAM_EXTRACT_COLUMN, 22.0)]
+#: Review finding 2026-11-17: a recorded reclassification that is NOT applied showed its reason only in the Excel/CSV
+#: (Bucket Basis). Listed per record under the review table, only when such a move exists. Widths sum to 100.
+PDF_NOT_APPLIED_HEADING = "Recorded reclassification actions not applied"
+PDF_NOT_APPLIED_COLUMNS = [("AGT_Record_ID", 16.0), ("Why not applied", 24.0), ("Explanation (as in Bucket Basis)", 60.0)]
 _NO_ANALYST_RECORD = "No analyst determination recorded"
 _CLEAN_EXTRACT = "No candidate match in the extract"
 #: The monospace identifier cells (td.mono). DejaVu Sans Mono advances 0.602 em,
@@ -176,15 +242,83 @@ class DatasetRefused(ValueError):
     """The dataset could not be built honestly, and the reason is stated."""
 
 
-def reporting_bucket(bucket: Optional[str], status: Optional[str]) -> str:
-    """HELD -> B4 (once). Otherwise the record's own classified bucket."""
+def reporting_bucket(bucket: Optional[str], status: Optional[str],
+                     approved_bucket: Optional[str] = None) -> str:
+    """HELD -> B4 (once). Otherwise the record's own classified bucket, or the
+    independently QA-approved reclassification of it when one is supplied."""
     if (status or "").strip().upper() == STATUS_HELD:
         return "B4"
     if bucket not in BUCKETS:
         # No usable persisted classification: never guess one. The dataset
         # reports itself INCOMPLETE and lists the record (see build_dataset).
         return NOT_CLASSIFIED
+    if approved_bucket in BUCKETS:
+        return approved_bucket
     return bucket
+
+
+def _reclassification(fact: Dict[str, Any], status: str) -> tuple:
+    """(applied target or '', annotation text or '') for the Bucket Basis.
+
+    The annotation is stated whenever a QA-approved reclassification exists,
+    including when it is NOT applied (HELD, unclassified, non-independent QA)."""
+    return _reclassification_outcome(fact, status)[:2]
+
+
+def _b2_check_text(fact: Dict[str, Any]) -> str:
+    """What the stored-snapshot candidate check could say for an APPLIED B2 move. Never "none" unless it is."""
+    if fact.get("approved_b2_candidate_evaluated") is not True:
+        return "NOT POSSIBLE, the governing review stores no classifier input"
+    unknown = [_s(u) for u in (fact.get("approved_b2_undetermined") or []) if _s(u)]
+    if unknown:
+        return ("NOT DETERMINABLE for " + ", ".join(unknown) + " (stored as not_found without the disposition "
+                "that tells a clean screen from a pending hit); none recorded for the other SAM/LEIE sources")
+    return "none in the stored review snapshot"
+
+
+def _reclassification_outcome(fact: Dict[str, Any], status: str) -> tuple:
+    """(applied target or '', annotation text or '', not-applied reason or '').
+
+    The third value is one of the NA_* constants when a QA-approved reclassification is recorded but not
+    applied; it is what the summary itemizes. It is '' when a move is applied or when there is no move."""
+    target, note = fact.get("approved_bucket"), _s(fact.get("approved_note"))
+    if target not in BUCKETS:
+        if not note:
+            return "", "", ""
+        return "", note, (NA_NOT_INDEPENDENT if "different person" in note else NA_NO_TARGET)
+    if status.upper() == STATUS_HELD:
+        return "", (f"QA-approved reclassification to {target} recorded but NOT applied: the record remains "
+                    "HELD and is reported once in B4"), NA_HELD
+    if fact.get("bucket") not in BUCKETS:
+        return "", (f"QA-approved reclassification to {target} recorded but NOT applied: the record has no "
+                    "persisted classification"), NA_UNCLASSIFIED
+    if target == fact.get("bucket"):
+        return "", "", ""
+    if status.upper() not in RECLASSIFIABLE_STATUSES:
+        return "", (f"QA-approved reclassification to {target} recorded but NOT applied: record status is "
+                    f"{status or 'not recorded'}"), NA_STATUS
+    if fact.get("bucket") != RECLASSIFIABLE_FROM or target not in RECLASSIFIABLE_TO:
+        return "", (f"QA-approved reclassification {fact.get('bucket')} -> {target} recorded but NOT applied: the "
+                    "methodology provides only for a B4 record to be reclassified to B1, B2 or B3"), NA_OUTSIDE
+    if target == "B1" and fact.get("approved_b1_established") is not True:
+        why = _s(fact.get("approved_b1_reason")) or "no evaluation of saved evidence was supplied"
+        return "", ("QA-approved reclassification B4 -> B1 recorded but NOT applied: saved evidence at the cutoff "
+                    f"does not establish B1 - {why}. The analyst decision and QA approval are preserved in "
+                    "their own columns"), NA_B1
+    note = note or f"QA-approved reclassification {fact.get('bucket')} -> {target}"
+    if target == "B2":
+        pending = [_s(p) for p in (fact.get("approved_b2_pending") or []) if _s(p)]
+        if pending:
+            return "", ("QA-approved reclassification B4 -> B2 recorded but NOT applied: the stored snapshot of "
+                        "the governing review holds a pending exclusion candidate with no recorded determination "
+                        f"({', '.join(pending)}); {B2_SNAPSHOT_LIMITATION}. The analyst decision and QA approval "
+                        "are preserved in their own columns"), NA_B2_CANDIDATE
+        note += ("; reported as PROVISIONAL B2 (identity status is not recorded for the finding); pending "
+                 "SAM/LEIE candidate check: "
+                 + _b2_check_text(fact)
+                 + f"; {B2_SNAPSHOT_LIMITATION}")
+    return target, (note + f"; {NO_STRUCTURED_FINDING_FLAG} (no finding type, evidence reference or manual "
+                    "check date is captured)"), ""
 
 
 def _s(v: Any) -> str:
@@ -193,17 +327,22 @@ def _s(v: Any) -> str:
 
 def _basis(fact: Dict[str, Any], status: str) -> str:
     """Persisted decision and reporting annotation are never blended."""
+    _target, reclass = _reclassification(fact, status)
     if status.upper() == STATUS_HELD:
         reason = _s(fact.get("held_reason")) or "reason not recorded"
-        return ("Reporting annotation: HELD counted once in B4; no persisted "
-                f"classification (blocked assessment: {reason})")
+        kept = ("no persisted classification" if fact.get("bucket") not in BUCKETS else
+                f"persisted classification {fact.get('bucket')} kept in its own column, not reported")
+        return (f"Reporting annotation: HELD counted once in B4; {kept} "
+                f"(blocked assessment: {reason})"
+                + (f"; {reclass}" if reclass else ""))
     base = _s(fact.get("bucket_basis"))
     if fact.get("bucket") not in BUCKETS:
         return ("No usable persisted classification" +
-                (f" ({base})" if base else ""))
+                (f" ({base})" if base else "") + (f"; {reclass}" if reclass else ""))
     note = _s(fact.get("bucket_annotation"))
     if fact.get("provisional") and not note:
         note = "provisional"
+    note = "; ".join(n for n in (note, reclass) if n)
     out = base or "Persisted classification"
     return out + (f"; Reporting annotation: {note}" if note else "")
 
@@ -246,6 +385,15 @@ _COMMENT_KINDS = (
      "report_clarifications_source"),
 )
 PROVENANCE_INCOMPLETE = "COMMENT PROVENANCE INCOMPLETE"
+RECLASSIFIED_SUMMARY_ROW = ("Records whose Bucket is a QA-approved reclassification (in-app QA APPROVE by a "
+                            "different user than the analyst; already inside the totals above; each record "
+                            "counted once)")
+AUTOMATED_SUMMARY_ROW = ("Automated reporting buckets before reclassification (HELD counted in B4; same records, "
+                         "same total)")
+MOVES_APPLIED_ROW = "QA-approved moves applied to the reporting Bucket (B4 to B2 or B3)"
+MOVES_NOT_APPLIED_ROW = "QA-approved moves recorded but NOT applied (record keeps its automated reporting bucket)"
+MOVES_UNSTRUCTURED_ROW = ("QA-approved moves with no structured finding (finding type, evidence reference and "
+                          "manual check date are not captured; applied and not applied together)")
 PROVENANCE_SUMMARY_ROW = ("Stored comments with incomplete source provenance "
                           "(marked in Flag; text verbatim)")
 _PROVENANCE_FIELDS = ("file", "sha256", "sheet", "column")
@@ -311,7 +459,8 @@ def build_record_row(fact: Dict[str, Any],
                      stored: Optional[Dict[str, Any]] = None) -> List[str]:
     stored = stored or {}
     status = _s(fact.get("status")).strip()
-    bucket = reporting_bucket(fact.get("bucket"), status)
+    applied, _note = _reclassification(fact, status)
+    bucket = reporting_bucket(fact.get("bucket"), status, applied or None)
     pecos = _s(fact.get("pecos"))
     for phrase in PROHIBITED_PECOS_PHRASES:
         if phrase in pecos.lower():
@@ -330,6 +479,13 @@ def build_record_row(fact: Dict[str, Any],
     flag = _s(fact.get("flag"))
     if fact.get("provisional") and "PROVISIONAL" not in flag.upper():
         flag = (flag + "; " if flag else "") + "PROVISIONAL B2"
+    # The COMPLETE marker, as its own token: other text that merely contains the word ("PROVISIONAL address
+    # correction") does not stand in for it. Existing text is kept as written; the marker is never added twice.
+    if applied == "B2" and PROVISIONAL_B2_FLAG not in [t.strip().upper() for t in flag.split(";")]:
+        flag = (flag + "; " if flag else "") + PROVISIONAL_B2_FLAG
+    if applied:
+        flag = (flag + "; " if flag else "") + f"{RECLASSIFIED_FLAG} {fact.get('bucket')} -> {applied}"
+        flag += f"; {NO_STRUCTURED_FINDING_FLAG}"
     # The marker goes in Flag, never in the comment cell: the text stays verbatim.
     for _kind, column, gap in _provenance_marks(fact, stored):
         flag = ((flag + "; " if flag else "") + f"{PROVENANCE_INCOMPLETE}: {column} "
@@ -355,8 +511,12 @@ def build_record_row(fact: Dict[str, Any],
         _reviewed_cell(fact, status), _s(fact.get("reviewed_date")),
         _s(fact.get("reviewed_qa_status")) or "No analyst determination recorded",
         _s(fact.get("reviewed_basis")),
+        _s(fact.get("decision_analyst")), _s(fact.get("decision_qa_reviewer")),
+        _s(fact.get("decision_analyst_rationale")), _s(fact.get("decision_qa_reason")),
+        _s(fact.get("decision_manual_check_date")),
         _s(fact.get("sam_extract")) or NOT_ESTABLISHED,
         _s(fact.get("supplemental_research")),
+        fact.get("bucket") if fact.get("bucket") in BUCKETS else NO_PERSISTED_BUCKET,
     ]
 
 
@@ -401,6 +561,50 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                 held_no_reason += 1
     if sum(counts.values()) + len(unclassified) != len(rows):   # guard
         raise DatasetRefused("bucket counts do not sum to the record count")
+    # Reconciliation of the reporting buckets with the automated ones: every record is in exactly one automated
+    # reporting bucket and exactly one final reporting bucket; a move changes which, never how many.
+    auto_idx = RECORD_COLUMNS.index(AUTOMATED_BUCKET_COLUMN)
+    automated = {b: 0 for b in BUCKETS}
+    transitions: Dict[str, int] = {}
+    for r in rows:
+        before = reporting_bucket(r[auto_idx], r[s_idx])
+        if before in automated:
+            automated[before] += 1
+        if before != r[b_idx]:
+            if (before != RECLASSIFIABLE_FROM or r[b_idx] not in RECLASSIFIABLE_TO
+                    or r[s_idx].upper() not in RECLASSIFIABLE_STATUSES
+                    or f"{RECLASSIFIED_FLAG} {before} -> {r[b_idx]}" not in r[b_idx + 3]):
+                raise DatasetRefused("a reporting bucket differs from the automated one without an eligible "
+                                     "QA-approved reclassification")
+            key = f"{before} -> {r[b_idx]}"
+            transitions[key] = transitions.get(key, 0) + 1
+    reclassified = sum(transitions.values())
+    # Move accounting (part (a), 2026-11-17). A "move" is a QA-approved RECLASSIFY visible at the cutoff. It is
+    # either applied (it is then a transition above) or not applied for exactly one stated reason.
+    not_applied: Dict[str, int] = {}
+    b2_moves = unstructured = unstructured_applied = applied_moves = 0
+    not_applied_moves: List[Dict[str, str]] = []
+    for f in facts:
+        f_applied, _n, f_reason = _reclassification_outcome(f, _s(f.get("status")).strip())
+        if f_reason:
+            not_applied[f_reason] = not_applied.get(f_reason, 0) + 1
+            # Kept per record so the HTML / PDF can say WHY that record stayed where it is (the Excel/CSV say it
+            # in Bucket Basis). Same text as Bucket Basis; nothing is added or decided here.
+            not_applied_moves.append({"agt_record_id": _s(f.get("agt_record_id")), "reason": f_reason,
+                                      "explanation": _s(_n)})
+        applied_moves += 1 if f_applied else 0
+        if f_applied or f_reason:
+            b2_moves += 1 if f.get("approved_bucket") == "B2" else 0
+            # No structured finding (finding type, evidence reference, manual check date) is captured by the
+            # application, so every recorded move lacks one unless a fact explicitly states otherwise.
+            if f.get("finding_structured") is not True:
+                unstructured += 1
+                unstructured_applied += 1 if f_applied else 0
+    moves_not_applied = sum(not_applied.values())
+    if applied_moves != reclassified:                           # guard: the two counts are the same records
+        raise DatasetRefused("applied moves do not reconcile with the bucket transitions")
+    if sum(automated.values()) != sum(counts.values()):         # guard: nothing lost, nothing duplicated
+        raise DatasetRefused("automated and reporting bucket totals do not reconcile")
     incomplete = bool(unclassified)
     banner = DRAFT_BANNER
     if incomplete:
@@ -413,6 +617,18 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
             gaps[kind] += 1
     gaps["total"] = gaps["original"] + gaps["izaan"] + gaps["clarification"]
     limitations: List[str] = []
+    move_limitations: List[str] = []
+    if b2_moves:
+        move_limitations.append(
+            "B2 pending-candidate check: an approved B4 -> B2 stays B4 only when the governing review's STORED "
+            f"snapshot holds a pending SAM or LEIE candidate; {B2_SNAPSHOT_LIMITATION}. Every applied B2 move is "
+            "marked PROVISIONAL.")
+    if reclassified or moves_not_applied:
+        move_limitations.append(
+            "No finding type, evidence reference or manual check date is captured for an analyst determination: "
+            "the manual check date reads 'not recorded' (the decision save time is not a check date) and an "
+            f"applied move is flagged '{NO_STRUCTURED_FINDING_FLAG}'. QA approval is not tied to a specific "
+            "evidence set. Manual B4 -> B1 remains blocked.")
     if gaps["total"]:
         limitations.append(
             f"{gaps['total']} stored comment(s) have incomplete source provenance "
@@ -444,6 +660,9 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                 comment_sources[kind].append(lab)
     summary = {
         "unique_records": len(rows), "buckets": counts,
+        "automated_buckets": automated,
+        "qa_approved_reclassifications": reclassified,
+        "reclassification_transitions": dict(sorted(transitions.items())),
         "held_inside_b4": held, "held_without_recorded_reason": held_no_reason,
         "field_findings": None if findings_count is None else int(findings_count),
         "findings_counted_in_buckets": False,
@@ -454,6 +673,12 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
         "comment_sources": comment_sources,
         "comments_with_incomplete_provenance": gaps,
         "limitations": limitations,
+        "moves_applied": reclassified,
+        "moves_not_applied": dict(sorted(not_applied.items())),
+        "moves_not_applied_total": moves_not_applied,
+        "moves_without_structured_finding": unstructured,
+        "moves_without_structured_finding_applied": unstructured_applied,
+        "move_limitations": move_limitations,
         "curated_status_basis": "generation_time" if held_or_rejected else "not_applicable",
     }
     summary_rows = ([[b, str(counts[b])] for b in BUCKETS]
@@ -466,7 +691,19 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                         FINDINGS_NOT_INCLUDED if findings_count is None
                         else str(int(findings_count))],
                        ["Assessment date (D-12)", assessment_date]]
-                    + ([[PROVENANCE_SUMMARY_ROW, str(gaps["total"])]] if gaps["total"] else []))
+                    + ([[PROVENANCE_SUMMARY_ROW, str(gaps["total"])]] if gaps["total"] else [])
+                    + ([[RECLASSIFIED_SUMMARY_ROW, str(reclassified)]]
+                       + [[f"  moved {k}", str(v)] for k, v in sorted(transitions.items())]
+                       + [[AUTOMATED_SUMMARY_ROW, " / ".join(f"{b} {automated[b]}" for b in BUCKETS)]]
+                       if reclassified else [])
+                    + ([[MOVES_APPLIED_ROW, str(reclassified)],
+                        [MOVES_NOT_APPLIED_ROW, str(moves_not_applied)]]
+                       + [[f"  not applied: {k}", str(v)] for k, v in sorted(not_applied.items())]
+                       + [[MOVES_UNSTRUCTURED_ROW,
+                           f"{unstructured} (applied and flagged in the Flag column: {unstructured_applied}; "
+                           f"not applied: {unstructured - unstructured_applied})"]]
+                       + [[f"Limitation {i}", text] for i, text in enumerate(move_limitations, 1)]
+                       if reclassified or moves_not_applied else []))
     sheets: Dict[str, Any] = {
         "Summary": {"columns": ["Measure", "Value"], "rows": summary_rows,
                     "note": banner},
@@ -484,6 +721,7 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
         "classification": classification, "banner": banner,
         "summary": summary, "sheet_order": order, "sheets": sheets,
         "load_meta": load_meta or {},
+        "not_applied_moves": not_applied_moves,
     }
 
 
@@ -504,7 +742,9 @@ def to_csv(dataset: Dict[str, Any]) -> bytes:
         # (review finding, #233, 2026-11-15).
         + f", Not classified {dataset['summary']['unclassified_non_held_count']}"
         + f" = {dataset['summary']['unique_records']} "
-        f"({dataset['summary']['held_inside_b4']} HELD inside B4). "
+        f"({dataset['summary']['held_inside_b4']} HELD inside B4"
+        + (f"; {dataset['summary']['qa_approved_reclassifications']} moved by QA-approved reclassification"
+           if dataset['summary'].get('qa_approved_reclassifications') else "") + "). "
         "Field findings counted separately: "
         + (FINDINGS_NOT_INCLUDED.lower() if dataset['summary']['field_findings'] is None
            else str(dataset['summary']['field_findings'])) + ". "
@@ -835,10 +1075,16 @@ def to_html(dataset: Dict[str, Any]) -> str:
     review_head = "".join(f"<th scope='col'>{_th(c)}</th>" for c, _w in PDF_REVIEW_COLUMNS)
     review_html = (
         f"<h2>{PDF_REVIEW_HEADING}</h2>"
-        f"<p class='note'>The automated Bucket and Status in the tables above are unchanged. An analyst "
+        f"<p class='note'>Status in the tables above is unchanged. Bucket is the reporting bucket: the automated "
+        f"classification, replaced by an analyst reclassification of a B4 record to B2 or B3 ONLY after an "
+        f"in-app QA APPROVE by a different user that "
+        f"follows it, at or before the report cutoff (marked in Flag; the original automated bucket is kept in "
+        f"its own Excel/CSV column and in Bucket Basis). An approved move to B1 is not applied unless saved "
+        f"evidence establishes B1; Bucket Basis states why. An analyst "
         f"determination is shown as a reviewed disposition ONLY after a QA APPROVE that follows it, at or "
         f"before the report cutoff; pending, returned, escalated and superseded decisions are never shown as "
-        f"approved. A HELD record stays HELD and is not released by this report. The SAM public-extract result "
+        f"approved and never change a bucket. A HELD record stays HELD, stays in B4 and is not released by this "
+        f"report. The SAM public-extract result "
         f"is a candidate screen against a dated extract, supplementary to the live SAM.gov API check; a "
         f"candidate is never a confirmed exclusion. Records with no analyst activity and a clean or "
         f"not-established extract result are not listed here; the Excel/CSV carry every record.</p>"
@@ -848,6 +1094,33 @@ def to_html(dataset: Dict[str, Any]) -> str:
         if review_rows else
         f"<h2>{PDF_REVIEW_HEADING}</h2><p class='note'>No record in this dataset has analyst/QA activity or a "
         f"SAM public-extract result other than a clean or not-established one.</p>")
+
+    # -- approved moves that were NOT applied: the reason, per record (the PDF renders this same HTML) --
+    na_moves = dataset.get("not_applied_moves") or []
+    if na_moves:
+        na_rows = []
+        for mv in na_moves:
+            slices_by_col = [split_for_rows(mv[key], _chars_per_line(w, PDF_DETAIL_FONT_PT), PDF_DETAIL_MAX_LINES)
+                             for key, (_c, w) in zip(("reason", "explanation"), PDF_NOT_APPLIED_COLUMNS[1:])]
+            parts = _row_parts(slices_by_col)
+            for part in range(parts):
+                first = (e(mv["agt_record_id"]) if part == 0
+                         else continued(mv["agt_record_id"], part + 1, parts))
+                na_rows.append(
+                    f"<tr{'' if part == 0 else chr(32) + 'class=' + chr(39) + 'continuation' + chr(39)}>"
+                    f"<td class='mono'>{first}</td>"
+                    + "".join(f"<td class='verbatim'>{e(sl[part] if part < len(sl) else '')}</td>"
+                              for sl in slices_by_col) + "</tr>")
+        review_html += (
+            f"<h3>{PDF_NOT_APPLIED_HEADING} ({len(na_moves)})</h3>"
+            "<p class='note'>Each record below has a recorded reclassification action that this report did NOT "
+            "apply, for the reason shown. Its Bucket is unchanged. The recorded analyst and QA actions are "
+            "preserved. A QA action by the same person who made the determination is not an independent "
+            "approval.</p>"
+            "<table><colgroup>" + "".join(f"<col style='width:{w}%'>" for _c, w in PDF_NOT_APPLIED_COLUMNS)
+            + "</colgroup><thead><tr>"
+            + "".join(f"<th scope='col'>{_th(c)}</th>" for c, _w in PDF_NOT_APPLIED_COLUMNS)
+            + f"</tr></thead><tbody>{''.join(na_rows)}</tbody></table>")
 
     # -- unclassified list (the summary refers to it; it must be in the PDF too) --
     uncls_html = ""
