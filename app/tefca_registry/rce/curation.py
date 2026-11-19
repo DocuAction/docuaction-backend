@@ -811,7 +811,8 @@ async def _flag_review_case_escalated(db, issue, *, actor: str, reason: str) -> 
 
 async def apply_disposition(db, issue_id, *, decision: str, reason: str,
                             actor: str, corrected_value: Optional[str] = None,
-                            actor_id=None, qa_actor: Optional[str] = None
+                            actor_id=None, qa_actor: Optional[str] = None,
+                            pending_row=None, defer_consequences: bool = False
                             ) -> Dict[str, Any]:
     """One analyst decision about one issue, end to end.
 
@@ -837,6 +838,16 @@ async def apply_disposition(db, issue_id, *, decision: str, reason: str,
     released it is re-promoted through the idempotent drain with a HUMAN
     disposition event (reason ANALYST_DISPOSITION) and a reconciliation
     snapshot is persisted with trigger DISPOSITION. Area 1 is never touched.
+
+    DEFERRED CONSEQUENCE (2026-11-18). With `defer_consequences=True` the
+    decision above is applied exactly as before - nothing in it is skipped or
+    reordered - but the re-promotion, reconciliation and snapshot are NOT run
+    here: `disposition_followups` runs them from a worker. `pending_row` is
+    the caller's RECEIVED follow-up row; it is added to this session after
+    every refusal that precedes a side effect and BEFORE the first statement
+    that changes anything, so the decision's first commit also persists the
+    accepted work. If the decision is refused before any commit, the caller's
+    rollback discards the row with everything else.
     """
     decision = (decision or "").strip().upper()
     if decision not in DISPOSITION_DECISIONS:
@@ -878,6 +889,10 @@ async def apply_disposition(db, issue_id, *, decision: str, reason: str,
     identifier_event = None
     correction = None
     escalated_case = None
+
+    if pending_row is not None:
+        pending_row.record_status_before = status_before
+        db.add(pending_row)
 
     # ── the identifier decision, when the issue is a conflict ──
     if is_conflict and decision in _CONFLICT_DECISION:
@@ -938,13 +953,35 @@ async def apply_disposition(db, issue_id, *, decision: str, reason: str,
             await db.commit()
 
     # ── hold, re-promotion, snapshot ──
-    hold = await recompute_hold_status(db, intake_id)
+    if defer_consequences:
+        # Deferred path: re-derive THIS record's hold only, with a guarded
+        # update. The delivery-wide recomputation is a read-modify-write over
+        # every record and overwrote concurrent corrections (2026-11-18); it
+        # also released other records, including one whose approved correction
+        # was never applied. See `disposition_followups.rederive_record_hold`.
+        from app.tefca_registry.rce import disposition_followups as _followups
+
+        hold = await _followups.rederive_record_hold(db, intake_id, issue.source_record_id)
+    else:
+        hold = await recompute_hold_status(db, intake_id)
     if curated is not None:
         await db.refresh(curated)
     status_after = curated.record_status if curated is not None else None
     promotion_result = None
     snapshot_id = None
-    if curated is not None and status_after != status_before:
+    status_changed = curated is not None and status_after != status_before
+    consequence_deferred = bool(defer_consequences and status_changed)
+    if defer_consequences and curated is not None and not consequence_deferred:
+        # Queue on the STATE, not only on the status difference. A promotion
+        # that was already running can put a just-released record back to HELD
+        # before this request re-reads it, so before == after although the
+        # decision is complete. A settled finding on a record that is unblocked
+        # and not yet promoted still needs the delivery work.
+        await db.refresh(issue)
+        if (curated.canonical_entity_id is None and curated.record_status != REJECTED
+                and is_terminal_resolution(issue.resolution) and not hold.get("blocking")):
+            consequence_deferred = True
+    if status_changed and not consequence_deferred:
         from app.tefca_registry.rce import promotion as promotion_module
         from app.tefca_registry.rce import reconciliation
         from app.tefca_registry.rce.delivery_jobs import job_for_intake
@@ -983,4 +1020,6 @@ async def apply_disposition(db, issue_id, *, decision: str, reason: str,
                       if promotion_result else None),
         "disposition_event": disposition_event,
         "snapshot_id": snapshot_id,
+        "record_status_changed": bool(status_changed),
+        "consequence_deferred": consequence_deferred,
     }

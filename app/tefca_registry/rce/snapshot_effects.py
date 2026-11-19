@@ -497,6 +497,8 @@ async def approval_gates(db, intake_id) -> Dict[str, Any]:
     tip = await snapshot_tip(db, intake_id)
     job = await jobs.job_for_intake(db, intake_id)
     recon = await reconciliation.latest_snapshot(db, job.id if job else None)
+    from app.tefca_registry.rce import disposition_followups
+    processing = await disposition_followups.summary(db, intake_id)
     gates = {
         "effects_completed": tip is not None and tip.status != sm.SNAPSHOT_FAILED,
         "tip_pending": tip is not None and tip.status == sm.SNAPSHOT_PENDING,
@@ -504,6 +506,10 @@ async def approval_gates(db, intake_id) -> Dict[str, Any]:
         "reconciliation_after_effects": bool(
             recon is not None and tip is not None and recon.created_at is not None
             and tip.created_at is not None and recon.created_at >= tip.created_at),
+        # 2026-11-18: a recorded analyst decision whose delivery processing is
+        # pending or failed means the persisted reconciliation predates it.
+        "no_disposition_processing_outstanding": bool(
+            processing.get("reconciliation_current", True)),
     }
     return {"gates": gates, "all": all(gates.values()),
             "tip_status": tip.status if tip else None, "tip_id": str(tip.id) if tip else None,

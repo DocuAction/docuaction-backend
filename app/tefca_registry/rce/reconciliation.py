@@ -557,12 +557,18 @@ async def _migration_revision_isolated() -> str:
 
 async def persist_snapshot(db, intake_id, result: Dict[str, Any], *, job_id,
                            actor: str, trigger: str,
-                           reconstructed: bool = False) -> tm.RceReconciliationSnapshot:
+                           reconstructed: bool = False,
+                           extra_evidence: Optional[Dict[str, Any]] = None
+                           ) -> tm.RceReconciliationSnapshot:
     """Write one `RceReconciliationSnapshot` from a `reconcile_delivery` result.
 
     `sequence` is max+1 for the job. `source_evidence` records the population
     numbers and ids the verdict was computed from, so the snapshot can be
     re-verified against the rows later. Commits.
+
+    `extra_evidence` adds caller facts to `source_evidence` (which is outside
+    the snapshot hash): the deferred disposition worker records which accepted
+    decisions one snapshot covers. It cannot replace a computed key.
     """
     if job_id is None:
         raise ValueError("a reconciliation snapshot must belong to a delivery job")
@@ -608,6 +614,8 @@ async def persist_snapshot(db, intake_id, result: Dict[str, Any], *, job_id,
             "corrections": result.get("corrections") or {},
             "area1_record_hashes": (result.get("area1_integrity") or {}).get(
                 "record_hashes"),
+            **{k: v for k, v in (extra_evidence or {}).items()
+               if k in ("disposition_followups",)},
         },
         actor=(actor or "SYSTEM")[:320], trigger=trigger,
         hash=snapshot_hash(equation, dimensions, checks),

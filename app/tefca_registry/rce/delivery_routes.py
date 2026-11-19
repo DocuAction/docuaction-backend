@@ -74,6 +74,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 
 from sqlalchemy.exc import IntegrityError
 
@@ -447,9 +448,11 @@ async def _fallback_status(db, job) -> Dict[str, Any]:
         outcome_code=outcome["code"],
         snapshot_passed=bool(snapshot_dict and snapshot_dict.get("passed")),
         **review)
+    from app.tefca_registry.rce import disposition_followups as _followups
     return {"processing_outcome": outcome, "review_state": review_state,
             "derived_by": "delivery_routes._fallback_status",
-            "snapshot": snapshot_dict, "timeline_summary": summary}
+            "snapshot": snapshot_dict, "timeline_summary": summary,
+            "disposition_processing": await _followups.summary(db, intake_id)}
 
 
 async def _unresolved_findings(db, intake_id) -> int:
@@ -770,6 +773,9 @@ async def delivery_job_detail(
         else:
             deferred_blocks.append("audit")
 
+    from app.tefca_registry.rce import disposition_followups as _followups
+    disposition_processing = await _followups.summary(db, intake_id)
+
     availability = {
         block: _availability(block, job_state=job_state, intake_id=intake_id,
                              reviewer_ok=reviewer_ok,
@@ -793,7 +799,13 @@ async def delivery_job_detail(
                    "derived_by": status.get("derived_by")},
         "counts": counts_block,
         "timeline": events,
-        "reconciliation": {"snapshot": snapshot_dict, "history_count": history_count},
+        "reconciliation": {
+            "snapshot": snapshot_dict, "history_count": history_count,
+            # Analyst decisions whose delivery processing has not completed:
+            # while any exist the snapshot above predates them (2026-11-18).
+            "disposition_processing": disposition_processing,
+            "current": bool(disposition_processing.get("reconciliation_current", True)),
+        },
         "dispositions": disposition_block,
         "exceptions": blocks["exceptions"],
         "records": blocks["records"],
@@ -1512,6 +1524,21 @@ async def list_exceptions_route(
             disposition=disposition, all_runs=all_runs, limit=limit, offset=offset)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
+    # Delivery processing that follows a decision (2026-11-18): each row says
+    # what state its own processing is in, and the page says whether the
+    # delivery's reconciliation is current. Read-only; absent table = nothing.
+    from app.tefca_registry.rce import disposition_followups as followups
+    items = result.get("items") if isinstance(result, dict) else None
+    if isinstance(items, list):
+        by_issue = await followups.latest_by_issue(
+            db, [_as_uuid(row.get("issue_id")) for row in items])
+        for row in items:
+            row["processing"] = by_issue.get(str(row.get("issue_id")))
+    result["disposition_processing"] = {
+        **(await followups.summary(db, intake.id)),
+        # Lets the page word its in-request notice for the mode in force.
+        "deferred_enabled": await followups.active(db),
+    }
     result["correlation"] = {"request_id": request_context.get("request_id")}
     return result
 
@@ -2129,8 +2156,13 @@ DISPOSITION_IN_FLIGHT_MESSAGE = (
 DISPOSITION_IN_FLIGHT_CODE = "DISPOSITION_IN_FLIGHT"
 
 
+#: The delivery whose decision slot the guard should also take, or None.
+_GUARD_DECISION_INTAKE: ContextVar[Optional[str]] = ContextVar(
+    "disposition_guard_decision_intake", default=None)
+
+
 @asynccontextmanager
-async def _issue_disposition_guard(issue_id):
+async def _issue_disposition_guard(issue_id, decision_intake_id=None):
     """One disposition chain per finding at a time (DEF-005 §7).
 
     A hold-releasing disposition re-promotes and reconciles the WHOLE delivery
@@ -2152,8 +2184,11 @@ async def _issue_disposition_guard(issue_id):
     from app.core.database import engine
 
     key = f"issue-disposition:{issue_id}"
+    if decision_intake_id is None:
+        decision_intake_id = _GUARD_DECISION_INTAKE.get()
     conn = await engine.connect()
     acquired = False
+    slot = False
     try:
         acquired = bool((await conn.execute(
             text("SELECT pg_try_advisory_lock(hashtextextended(:k, 0))"),
@@ -2162,8 +2197,29 @@ async def _issue_disposition_guard(issue_id):
             refusal = HTTPException(409, DISPOSITION_IN_FLIGHT_MESSAGE)
             refusal.code = DISPOSITION_IN_FLIGHT_CODE
             raise refusal
+        if decision_intake_id is not None:
+            # Deferred processing (2026-11-18): decisions for ONE delivery are
+            # recorded one at a time, on this same dedicated connection (no
+            # extra pooled connection per waiting request). Bounded wait, then
+            # a refusal that has written nothing. It is not the worker's lock:
+            # a decision never waits for promotion or reconciliation.
+            from app.tefca_registry.rce import disposition_followups as followups
+
+            slot = await followups.acquire_decision_slot(conn, decision_intake_id)
+            if not slot:
+                refusal = HTTPException(409, followups.DELIVERY_DECISION_BUSY_MESSAGE)
+                refusal.code = followups.DELIVERY_DECISION_BUSY_CODE
+                raise refusal
         yield
     finally:
+        if slot:
+            try:
+                from app.tefca_registry.rce import disposition_followups as followups
+
+                await followups.release_decision_slot(conn, decision_intake_id)
+            except Exception:  # noqa: BLE001 - never return a still-locked conn
+                await conn.invalidate()
+                acquired = False
         if acquired:
             try:
                 await conn.execute(
@@ -2208,19 +2264,70 @@ async def post_issue_disposition(
         "resolution": issue.resolution,
     }
     apply = getattr(curation, "apply_disposition", None)
+
+    # Deferred delivery processing (2026-11-18). The idempotency lookup comes
+    # BEFORE the guard and before anything is written: a repeated submission
+    # (lost response, double click, browser retry) is answered from the stored
+    # row and applies nothing a second time.
+    from app.tefca_registry.rce import disposition_followup_models as fum
+    from app.tefca_registry.rce import disposition_followups as followups
+
+    deferred = apply is not None and await followups.active(db)
+    pending_row = None
+    if deferred:
+        idem_key = followups.clean_key(request.headers.get("Idempotency-Key"))
+        payload_fp = followups.fingerprint(decision, body.reason, body.corrected_value)
+        earlier = await followups.find_by_key(db, issue.id, idem_key)
+        if earlier is not None:
+            if earlier.payload_fingerprint != payload_fp:
+                raise HTTPException(422, IDEMPOTENCY_KEY_REUSED_MESSAGE)
+            return _replayed_disposition_response(earlier)
+        pending_row = followups.new_row(
+            kind=fum.KIND_ISSUE_DISPOSITION, intake_id=issue.source_intake_id,
+            issue_id=issue.id, source_record_id=issue.source_record_id,
+            decision=decision, reason=body.reason.strip(), actor=actor,
+            actor_id=actor_id, attribution=fum.ATTRIBUTION_HUMAN,
+            idempotency_key=idem_key, payload_fingerprint=payload_fp)
+    pending_id = pending_row.id if pending_row is not None else None
+
+    async def _close_pending(state: str, code: str, exc: BaseException) -> None:
+        """Every exit after a possible partial commit takes the row out of
+        RECEIVED, on a fresh session (this one was just rolled back). A row
+        that was never committed does not exist and nothing happens."""
+        if pending_id is None:
+            return
+        try:
+            await followups.settle(pending_id, state=state, error_code=code,
+                                   error_detail=type(exc).__name__)
+        except Exception as settle_exc:  # noqa: BLE001 - the sweeper will close it
+            logger.warning("could not settle disposition follow-up: %s",
+                           type(settle_exc).__name__)
+
     # DEF-005 §7 — the guard spans the WHOLE chain including the audit write,
     # so a duplicate for the same finding is refused (409, fixed message)
     # rather than starting a second promotion/reconciliation. The terminal
     # refusal inside apply_disposition stays the FIRST check once the guard is
     # held (§8): a settled finding is refused before any side effect.
+    # Deferred processing: the guard also takes the delivery's decision slot,
+    # on its own connection. Passed by context so the guard's call (pinned by
+    # tests/test_def005_disposition_inflight_guard.py) stays exactly as it was.
+    _GUARD_DECISION_INTAKE.set(issue_facts["intake_id"] if deferred else None)
     async with _issue_disposition_guard(issue.id):
         try:
             if apply is not None:
                 # curation.DISPOSITION_DECISIONS are the same words in lower case
                 # (accept, reject, correct, confirm_existing, ...).
-                result = await apply(db, issue.id, decision=decision.lower(),
-                                     reason=body.reason.strip(), actor=actor,
-                                     corrected_value=body.corrected_value, actor_id=actor_id)
+                if deferred:
+                    result = await apply(db, issue.id, decision=decision.lower(),
+                                         reason=body.reason.strip(), actor=actor,
+                                         corrected_value=body.corrected_value,
+                                         actor_id=actor_id, pending_row=pending_row,
+                                         defer_consequences=True)
+                else:
+                    result = await apply(db, issue.id, decision=decision.lower(),
+                                         reason=body.reason.strip(), actor=actor,
+                                         corrected_value=body.corrected_value,
+                                         actor_id=actor_id)
                 path = "curation.apply_disposition"
             else:
                 result = await _fallback_apply_disposition(
@@ -2229,6 +2336,7 @@ async def post_issue_disposition(
                 path = "delivery_routes._fallback_apply_disposition"
         except curation.CorrectionRefused as exc:
             await db.rollback()
+            await _close_pending(fum.STATE_REFUSED, followups.CODE_DECISION_REFUSED, exc)
             if str(exc) == curation.TERMINAL_FINDING_MESSAGE:
                 # The attempt is itself evidence; the finding is not touched. The
                 # rollback expired every row in the session, the caller's own
@@ -2245,14 +2353,38 @@ async def post_issue_disposition(
             # Includes identifier_decisions.IdentifierAlreadyRegistered (409) and
             # the value/conflict refusals (422) from the decision gate.
             await db.rollback()
+            await _close_pending(fum.STATE_REFUSED, followups.CODE_DECISION_REFUSED, exc)
             from app.tefca_registry.rce import identifier_decisions as _idd
             if isinstance(exc, _idd.IdentifierAlreadyRegistered):
                 raise HTTPException(409, str(exc))
             raise HTTPException(422, str(exc))
-        except IntegrityError:
+        except IntegrityError as exc:
             await db.rollback()
+            await _close_pending(fum.STATE_REFUSED, followups.CODE_DECISION_REFUSED, exc)
             raise HTTPException(409, "A concurrent change was recorded for this record; "
                                      "refresh and review the current state.")
+        except Exception as exc:  # noqa: BLE001 - re-raised; only the row is closed
+            if pending_id is not None:
+                try:
+                    await db.rollback()
+                except Exception as rollback_exc:  # noqa: BLE001
+                    logger.warning("rollback after a failed disposition failed: %s",
+                                   type(rollback_exc).__name__)
+                await _close_pending(fum.STATE_FAILED, followups.CODE_DECISION_ERROR, exc)
+            raise
+
+        processing = None
+        if pending_id is not None:
+            # The decision is committed. Now say what became of the delivery
+            # work: QUEUED for the worker when a record status changed,
+            # NOT_REQUIRED otherwise. Persisted BEFORE the request is answered.
+            processing = await followups.settle(
+                pending_id,
+                state=(fum.STATE_QUEUED if result.get("consequence_deferred")
+                       else fum.STATE_NOT_REQUIRED),
+                record_status_before=result.get("record_status_before"),
+                record_status_after=result.get("record_status_after"),
+                decision_result=_stored_decision_result(result, decision))
 
         await _audit(db, "analyst_disposition", user, request, {
             "issue_id": str(issue.id), "issue_code": issue.issue_code,
@@ -2262,10 +2394,138 @@ async def post_issue_disposition(
             "decision": decision, "reason": body.reason.strip(),
             "corrected_value_supplied": body.corrected_value is not None,
             "applied_by": path, "correlation_id": request_context.correlation_id(),
+            **({"processing_id": processing["id"],
+                "processing_state": processing["state"]} if processing else {}),
         })
-    return {"issue_id": str(issue.id), "decision": decision,
-            "applied_by": path, "result": result,
+    payload = {"issue_id": str(issue.id), "decision": decision,
+               "applied_by": path, "result": result,
+               "correlation": {"request_id": request_context.get("request_id")}}
+    if processing is None:
+        return payload
+    payload["processing"] = processing
+    return _processing_response(payload, processing)
+
+
+#: The same key with a different decision is a client error, never a replay.
+IDEMPOTENCY_KEY_REUSED_MESSAGE = (
+    "This Idempotency-Key was already used for a different decision on this "
+    "finding. Nothing was recorded. Refresh the finding and submit again.")
+
+
+def _stored_decision_result(result: dict[str, Any], decision: str) -> dict[str, Any]:
+    """What a replayed submission is told. States and references only - never
+    the corrected value, the delivered value or the reviewer's text."""
+    return {
+        "issue_id": result.get("issue_id"), "issue_code": result.get("issue_code"),
+        "decision": decision, "resolution": result.get("resolution"),
+        "registry_changed": bool(result.get("registry_changed")),
+        "correction_applied": result.get("correction") is not None,
+        "record_status_before": result.get("record_status_before"),
+        "record_status_after": result.get("record_status_after"),
+        "hold_released": bool(result.get("hold_released")),
+        "record_status_changed": bool(result.get("record_status_changed")),
+        "consequence_deferred": bool(result.get("consequence_deferred")),
+    }
+
+
+def _processing_response(payload: dict[str, Any], processing: dict[str, Any]):
+    """202 while delivery processing is outstanding; 200 once nothing is.
+
+    202 means exactly "accepted, not finished": the decision is recorded and
+    durable, and the promotion/reconciliation it requires has not completed.
+    A client must not present it as a completed save.
+    """
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(status_code=202 if processing.get("pending") else 200,
+                        content=jsonable_encoder(payload))
+
+
+def _replayed_disposition_response(row):
+    """Answer a repeated submission from the stored row. Applies nothing."""
+    from app.tefca_registry.rce import disposition_followup_models as fum
+    from app.tefca_registry.rce import disposition_followups as followups
+
+    processing = followups.dto(row)
+    if row.state in (fum.STATE_REFUSED,) or (
+            row.state == fum.STATE_FAILED
+            and row.error_code in (followups.CODE_DECISION_INTERRUPTED,
+                                   followups.CODE_DECISION_ERROR)):
+        refusal = HTTPException(409, processing["safe_explanation"])
+        raise refusal
+    payload = {"issue_id": str(row.issue_id) if row.issue_id else None,
+               "decision": row.decision, "applied_by": "replayed",
+               "replayed": True, "result": row.decision_result,
+               "processing": processing,
+               "correlation": {"request_id": request_context.get("request_id")}}
+    return _processing_response(payload, processing)
+
+
+@router.get("/disposition-processing/{processing_id}",
+            summary="State of the delivery processing that follows one analyst decision")
+async def get_disposition_processing(
+    processing_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    from app.tefca_registry.rce import disposition_followups as followups
+
+    row_id = _as_uuid(processing_id)
+    row = await followups.get(db, row_id) if row_id else None
+    if row is None:
+        raise HTTPException(404, "No such processing record.")
+    return {"processing": followups.dto(row),
+            "delivery": await followups.summary(db, row.intake_id),
             "correlation": {"request_id": request_context.get("request_id")}}
+
+
+@router.get("/deliveries/{intake_id}/disposition-processing",
+            summary="Analyst decisions whose delivery processing is pending or failed")
+async def list_disposition_processing(
+    intake_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    from app.tefca_registry.rce import disposition_followups as followups
+
+    intake = await _intake_or_404(db, intake_id)
+    summary = await followups.summary(db, intake.id)
+    items = (await followups.list_for_intake(db, intake.id, limit=limit)
+             if summary.get("store_present") else [])
+    return {"intake_id": str(intake.id), "summary": summary, "items": items,
+            "deferred_processing_enabled": followups.enabled(),
+            "correlation": {"request_id": request_context.get("request_id")}}
+
+
+@router.post("/disposition-processing/{processing_id}/retry",
+             summary="Retry the delivery processing of a failed record (never the decision)")
+async def retry_disposition_processing(
+    processing_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(EVIDENCE_ROLE)),
+):
+    from app.tefca_registry.rce import disposition_followups as followups
+
+    row_id = _as_uuid(processing_id)
+    if row_id is None:
+        raise HTTPException(404, "No such processing record.")
+    actor = getattr(user, "email", None) or "SYSTEM"
+    try:
+        processing = await followups.retry(db, row_id, actor=actor)
+    except followups.FollowupRefused as exc:
+        await db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    await _audit(db, "disposition_processing_retry_requested", user, request, {
+        "processing_id": processing["id"], "intake_id": processing["intake_id"],
+        "issue_id": processing["issue_id"],
+        "correlation_id": request_context.correlation_id(),
+    })
+    return _processing_response(
+        {"processing": processing,
+         "correlation": {"request_id": request_context.get("request_id")}}, processing)
 
 
 async def _fallback_apply_disposition(db, issue, *, decision: str, reason: str,
@@ -2321,6 +2581,38 @@ class IdentifierDecisionBody(BaseModel):
                                             description="The delivered line, if known.")
 
 
+async def _identifier_decision_slot(body: IdentifierDecisionBody,
+                                    db: AsyncSession = Depends(get_db),
+                                    user=Depends(require_role(EVIDENCE_ROLE))):
+    """Deferred processing: one decision per delivery at a time, for this route
+    too. Held for the whole request. The delivery is named by the finding or
+    the delivered line the decision is about; a decision that names neither
+    (the route allows it) cannot be scoped and is not serialized."""
+    from app.tefca_registry.rce import disposition_followups as followups
+    from app.tefca_registry.rce import models as m
+
+    if not await followups.active(db):
+        yield None
+        return
+    intake_id = None
+    issue_uuid, record_uuid = _as_uuid(body.issue_id), _as_uuid(body.source_record_id)
+    if issue_uuid is not None:
+        issue = await db.get(m.RceIssue, issue_uuid)
+        intake_id = issue.source_intake_id if issue is not None else None
+    if intake_id is None and record_uuid is not None:
+        record = await db.get(m.RceSourceRecord, record_uuid)
+        intake_id = record.source_intake_id if record is not None else None
+    if intake_id is None:
+        yield None
+        return
+    async with followups.decision_slot(intake_id) as acquired:
+        if not acquired:
+            refusal = HTTPException(409, followups.DELIVERY_DECISION_BUSY_MESSAGE)
+            refusal.code = followups.DELIVERY_DECISION_BUSY_CODE
+            raise refusal
+        yield intake_id
+
+
 @router.post("/identifier-decisions",
              summary="Decide an identifier conflict raised by promotion")
 async def post_identifier_decision(
@@ -2328,6 +2620,7 @@ async def post_identifier_decision(
     request: Request,
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role(EVIDENCE_ROLE)),
+    _decision_slot=Depends(_identifier_decision_slot),
 ):
     """Append the decision; then release the hold, re-promote and re-snapshot.
 
@@ -2380,16 +2673,54 @@ async def post_identifier_decision(
     intake_id = _as_uuid(event.get("intake_id"))
     follow_up: Dict[str, Any] = {"hold_recomputed": None, "repromotion": None,
                                  "snapshot": None}
-    if decided.get("releases_hold") and intake_id is not None:
+    from app.tefca_registry.rce import disposition_followup_models as fum
+    from app.tefca_registry.rce import disposition_followups as followups
+
+    releasing = bool(decided.get("releases_hold") and intake_id is not None)
+    pending_id = None
+    if releasing and await followups.active(db):
+        # Added to the session BEFORE the first commit below, so the decision
+        # event and the accepted delivery work are persisted together. The
+        # attribution stays SYSTEM: that is what this route's re-promotion has
+        # always written (`_repromote` passes no human attribution).
+        pending = followups.new_row(
+            kind=fum.KIND_IDENTIFIER_DECISION, intake_id=intake_id,
+            issue_id=_as_uuid(body.issue_id),
+            source_record_id=_as_uuid(body.source_record_id),
+            decision=decision, reason=body.reason.strip(), actor=actor,
+            actor_id=actor_id, attribution=fum.ATTRIBUTION_SYSTEM,
+            idempotency_key=None, payload_fingerprint=None)
+        db.add(pending)
+        pending_id = pending.id
+    processing = None
+    if releasing:
         try:
-            follow_up["hold_recomputed"] = await curation.recompute_hold_status(db, intake_id)
+            scoped_record = (_as_uuid(event.get("source_record_id"))
+                             or _as_uuid(body.source_record_id))
+            if pending_id is not None and scoped_record is not None:
+                # Deferred path: this record only, guarded (see
+                # `disposition_followups.rederive_record_hold`).
+                follow_up["hold_recomputed"] = await followups.rederive_record_hold(
+                    db, intake_id, scoped_record)
+            else:
+                follow_up["hold_recomputed"] = await curation.recompute_hold_status(db, intake_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("hold recompute failed after identifier decision: %s",
                            type(exc).__name__, exc_info=True)
             await db.rollback()
             follow_up["hold_recomputed"] = {"error_class": type(exc).__name__}
-        follow_up["repromotion"] = await _repromote(db, intake_id, actor, actor_id)
-        follow_up["snapshot"] = await _try_persist_snapshot(db, intake_id, actor)
+        if pending_id is not None:
+            processing = await followups.settle(pending_id, state=fum.STATE_QUEUED)
+        if processing is not None:
+            deferred_note = {"ran": False, "deferred": True,
+                             "processing_id": processing["id"]}
+            follow_up["repromotion"] = dict(deferred_note)
+            follow_up["snapshot"] = dict(deferred_note)
+        else:
+            # Flag off, or the row was lost with a rolled-back recompute: the
+            # original inline behaviour, unchanged.
+            follow_up["repromotion"] = await _repromote(db, intake_id, actor, actor_id)
+            follow_up["snapshot"] = await _try_persist_snapshot(db, intake_id, actor)
     else:
         await db.commit()
 
@@ -2400,9 +2731,15 @@ async def post_identifier_decision(
         "intake_id": str(intake_id) if intake_id else None,
         "registry_changed": decided.get("registry_changed"),
         "correlation_id": request_context.correlation_id(),
+        **({"processing_id": processing["id"],
+            "processing_state": processing["state"]} if processing else {}),
     })
-    return {"decision": decided, "follow_up": follow_up,
-            "correlation": {"request_id": request_context.get("request_id")}}
+    payload = {"decision": decided, "follow_up": follow_up,
+               "correlation": {"request_id": request_context.get("request_id")}}
+    if processing is None:
+        return payload
+    payload["processing"] = processing
+    return _processing_response(payload, processing)
 
 
 async def _repromote(db, intake_id, actor, actor_id) -> Dict[str, Any]:

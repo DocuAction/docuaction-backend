@@ -436,6 +436,9 @@
   written {{ ts(reconciliation.created_at) }} UTC by build {{ (reconciliation.build_sha or '')[:12] }} at migration {{ reconciliation.migration_revision }}.
   Result: {{ flag(reconciliation.passed, 'PASSED', 'FAILED') }}
 </p>
+{% if reconciliation.disposition_processing and reconciliation.disposition_processing.notice %}
+<p class="insufficient-data"><b>Reconciliation not current.</b> {{ reconciliation.disposition_processing.notice }}</p>
+{% endif %}
 <table class="dp-fixed dp-keep">
   {{ cols([30, 20, 50]) }}
   <caption>Accounting equation as persisted in the pinned snapshot: Received = Created + Updated + Matched/Unchanged + Held + Rejected + Missing Key + Excluded</caption>

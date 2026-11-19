@@ -451,7 +451,7 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
                            actor_id: Optional[uuid.UUID] = None,
                            disposition_actor_type: str = "SYSTEM",
                            disposition_reason: Optional[str] = None,
-                           job_id=None) -> Dict[str, Any]:
+                           job_id=None, human_attribution=None) -> Dict[str, Any]:
     """Promote every promotable curated record for one delivery.
 
     Two passes, because a Subparticipant's parent may be curated after it.
@@ -463,6 +463,15 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
     disposition flow (`curation.apply_disposition`): when a human decision
     releases a record and this drain re-promotes it, the resulting disposition
     is a HUMAN event carrying ANALYST_DISPOSITION and the decision text.
+
+    `human_attribution` (2026-11-18) is the same thing decided PER RECORD, for
+    the deferred path where one drain can cover several analysts' decisions:
+    an async `(db, source_record_id) -> {"actor", "actor_id", "reason"} | None`.
+    When it is given, a promoted record that has an attribution is written
+    exactly as a HUMAN run would write it - disposition event, entity version
+    and registry audit row all carry THAT analyst - and a record without one
+    keeps its natural SYSTEM reason code. It is asked at the moment the record
+    is promoted, never preloaded. Callers that pass nothing behave as before.
     """
     intake = await db.get(m.RceSourceIntake, intake_id)
     if intake is None:
@@ -487,11 +496,19 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
     written: Dict[str, int] = {d: 0 for d in disp.tm.DISPOSITIONS}
 
     async def dispose(row, disposition: str, reason_code: str, reason: str, *,
-                      entity_id=None, changed_fields=None) -> None:
+                      entity_id=None, changed_fields=None, attribution=None) -> None:
         if current_disposition.get(row.source_record_id) == disposition:
             return
-        if disposition_actor_type == "HUMAN":
-            reason = (f"{disposition_reason or 'analyst decision'} — "
+        event_actor, event_actor_type = actor_name, disposition_actor_type
+        human_reason = disposition_reason
+        if human_attribution is not None:
+            # Per record: only a record a person released is a HUMAN event.
+            event_actor_type = "HUMAN" if attribution else "SYSTEM"
+            if attribution:
+                event_actor = attribution.get("actor") or actor_name
+                human_reason = attribution.get("reason")
+        if event_actor_type == "HUMAN":
+            reason = (f"{human_reason or 'analyst decision'} — "
                       f"{reason_code}: {reason}")
             reason_code_out = disp.REASON_ANALYST
         else:
@@ -500,8 +517,8 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
             db, intake_id=intake_id, source_record_id=row.source_record_id,
             disposition=disposition, reason_code=reason_code_out, reason=reason,
             curated_record_id=row.id, job_id=job_id, entity_id=entity_id,
-            changed_fields=changed_fields, actor=actor_name,
-            actor_type=disposition_actor_type)
+            changed_fields=changed_fields, actor=event_actor,
+            actor_type=event_actor_type)
         current_disposition[row.source_record_id] = disposition
         written[disposition] += 1
 
@@ -752,6 +769,14 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
             entity_type = _HL7_ROLE_TO_ENTITY_TYPE.get(
                 (row.hl7_org_role or "").strip(), DEFAULT_ENTITY_TYPE)
 
+            # Who this record's promotion is attributed to. Asked only now,
+            # for a record that IS being promoted (never for a HELD write).
+            attribution = (await human_attribution(db, row.source_record_id)
+                           if human_attribution is not None else None)
+            row_actor = (attribution or {}).get("actor") or actor
+            row_actor_id = ((attribution or {}).get("actor_id")
+                            if attribution else actor_id)
+
             if entity_id is None:
                 entity_id = uuid.uuid4()
                 db.add(reg.TefcaRegEntity(
@@ -838,10 +863,10 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
                         "is_test_record": bool(row.is_test_record),
                         "transformation_version": row.transformation_version,
                     },
-                    change_reason="initial_import", changed_by=actor_id))
+                    change_reason="initial_import", changed_by=row_actor_id))
                 db.add(reg.TefcaRegAuditLog(
                     id=uuid.uuid4(), entity_id=entity_id, action="entity_created",
-                    actor_email=actor,
+                    actor_email=row_actor,
                     metadata_={"source": "rce_promotion",
                                "intake_id": str(intake_id),
                                "source_record_id": str(row.source_record_id),
@@ -851,7 +876,7 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
                 await dispose(row, disp.CREATED, disp.REASON_CREATED,
                               "No registry entity carried this rce_org_oid; a new "
                               "entity was created from the curated record.",
-                              entity_id=entity_id)
+                              entity_id=entity_id, attribution=attribution)
             else:
                 entity = await db.get(reg.TefcaRegEntity, entity_id)
                 if entity is None:
@@ -895,10 +920,10 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
                         change_reason="rce_promotion_update",
                         change_summary=(f"Delivery updated {len(changed)} material "
                                         f"field(s): {', '.join(changed)}"),
-                        changed_by=actor_id))
+                        changed_by=row_actor_id))
                     db.add(reg.TefcaRegAuditLog(
                         id=uuid.uuid4(), entity_id=entity_id, action="entity_updated",
-                        actor_id=actor_id, actor_email=actor,
+                        actor_id=row_actor_id, actor_email=row_actor,
                         metadata_={"source": "rce_promotion",
                                    "intake_id": str(intake_id),
                                    "source_record_id": str(row.source_record_id),
@@ -912,14 +937,15 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
                                   f"material fields differed and were updated: "
                                   f"{', '.join(changed)}. Version {version_number} "
                                   f"records the before/after values.",
-                                  entity_id=entity_id, changed_fields=changed)
+                                  entity_id=entity_id, changed_fields=changed,
+                                  attribution=attribution)
                 else:
                     unchanged += 1
                     await dispose(row, disp.MATCHED_UNCHANGED, disp.REASON_UNCHANGED,
                                   f"Matched entity {entity_id} by rce_org_oid; no "
                                   f"material field differs. Nothing was written to "
                                   f"the entity.",
-                                  entity_id=entity_id)
+                                  entity_id=entity_id, attribution=attribution)
 
             row.canonical_entity_id = entity_id
             row.promoted_at = datetime.utcnow()
