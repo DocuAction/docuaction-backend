@@ -17,11 +17,15 @@ for this, and an in-memory task dies with the process.
 
 Job bookkeeping only (references, states, the reviewer's own decision text
 already stored on the issue). The application updates progress on it, so the
-runtime role gets SELECT/INSERT/UPDATE and no DELETE - the same shape as
-`rce_recheck_job`.
+runtime role gets SELECT/INSERT/UPDATE and no DELETE. The table stays owned
+by the migration (owner) role - PROD-convergence FINALIZE keeps it there, as
+it does `rce_delivery_jobs` - because an owning runtime role would hold DELETE
+regardless of this grant.
 
-ADDITIVE AND INERT. Nothing reads or writes the table unless
-ENABLE_DEFERRED_DISPOSITION_PROCESSING is set. Prepared and tested against a
+ADDITIVE. No ROW is written unless ENABLE_DEFERRED_DISPOSITION_PROCESSING is
+set. Once the table exists the application reads it on every save (is earlier
+work outstanding?) and the worker polls it, flag on or off, so accepted work is
+always finished. Prepared and tested against a
 disposable local database only; NOT applied to any shared database.
 """
 
@@ -167,8 +171,9 @@ def downgrade() -> None:
         ).scalar()
         if n:
             raise DispositionFollowupsPreconditionError(
-                f"{TABLE} holds {n} row(s); downgrade refused. Turn "
-                "ENABLE_DEFERRED_DISPOSITION_PROCESSING off instead - the table "
-                "is inert without it."
+                f"{TABLE} holds {n} row(s); downgrade refused. The table must "
+                "stay: it is the record of accepted work. Turning "
+                "ENABLE_DEFERRED_DISPOSITION_PROCESSING off stops NEW deferred "
+                "saves only - the worker still finishes work already accepted."
             )
     op.execute(f'DROP TABLE IF EXISTS "{TABLE}"')

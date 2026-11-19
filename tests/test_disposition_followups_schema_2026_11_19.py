@@ -13,8 +13,8 @@ Readiness closeout 2026-11-19 (owner authorization, item 2). Pinned here:
     is not the owner (no DELETE, no TRUNCATE): a row is the record of accepted
     work and what became of it;
   * the CHECK constraints refuse an unknown state, kind or attribution;
-  * the PROD-convergence inventory lists the table with the other job tables
-    the application updates, so FINALIZE's table count stays accounted for;
+  * the PROD-convergence inventory keeps the table OWNER-owned at FINALIZE, so
+    the no-DELETE grant still binds afterwards;
   * with the flag on but the migration NOT applied, saves stay synchronous and
     the worker's ticks do nothing - they do not fail and create nothing.
 
@@ -53,7 +53,7 @@ def test_only_alembic_may_create_the_table():
     assert "rce_curated_records" in captured["names"]  # ordinary tables are still created
 
 
-def test_the_convergence_inventory_lists_the_table_with_the_app_updated_job_tables():
+def test_the_convergence_inventory_keeps_the_table_owner_owned_at_finalize():
     import importlib.util
 
     path = os.path.join(
@@ -65,9 +65,11 @@ def test_the_convergence_inventory_lists_the_table_with_the_app_updated_job_tabl
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert TABLE in module.MANAGED_CHAIN_CREATES
-    # not Area-1 / append-only evidence: the worker UPDATEs state and heartbeat
-    assert TABLE not in module.AREA1_OWNER_TABLES
-    assert "rce_recheck_job" in module.MANAGED_CHAIN_CREATES  # the shape it follows
+    # FINALIZE hands every chain-created table to the runtime role EXCEPT the
+    # owner set. An owner holds every privilege, so the no-DELETE grant binds
+    # only while the table stays owner-owned (as rce_delivery_jobs does).
+    assert TABLE in module.AREA1_OWNER_TABLES
+    assert "rce_delivery_jobs" in module.AREA1_OWNER_TABLES  # the shape it follows
 
 
 def test_the_migration_is_the_single_head_and_chains_on_the_previous_head():
@@ -203,8 +205,8 @@ def test_the_runtime_role_may_read_insert_and_update_but_never_delete(catalog):
     assert privileges["SELECT"] and privileges["INSERT"] and privileges["UPDATE"]
     if catalog["owner"] == catalog["app_role"]:
         pytest.skip(
-            "the runtime role owns the table here (post-FINALIZE shape): an owner holds "
-            "every privilege, so the no-DELETE grant cannot be observed"
+            "the runtime role owns the table in this database: an owner holds every "
+            "privilege, so the no-DELETE grant cannot be observed here"
         )
     assert privileges["DELETE"] is False
     assert privileges["TRUNCATE"] is False
@@ -322,7 +324,38 @@ def test_an_offline_downgrade_is_refused_and_the_online_one_locks_before_it_coun
         module.downgrade()
     assert emitted == []  # no DROP was generated
 
-    source = path.read_text(encoding="utf-8")
-    body = source[source.index("def downgrade") :]
-    assert "ACCESS EXCLUSIVE" in body
-    assert body.index("ACCESS EXCLUSIVE") < body.index("select count(*)") < body.index("DROP TABLE")
+    # Online: what is EXECUTED, in order. (The docstring also says "ACCESS
+    # EXCLUSIVE", so reading the source proves nothing about the statements.)
+    def run_online(rows):
+        executed = []
+
+        class _Result:
+            def scalar(self):
+                return rows
+
+        class _Bind:
+            def execute(self, statement, *a, **k):
+                executed.append(str(statement))
+                return _Result()
+
+        class _Inspector:
+            def get_table_names(self):
+                return [TABLE]
+
+        monkeypatch.setattr(module, "_offline", lambda: False)
+        monkeypatch.setattr(module.op, "get_bind", lambda: _Bind())
+        monkeypatch.setattr(module.sa, "inspect", lambda bind: _Inspector())
+        monkeypatch.setattr(module.op, "execute", lambda sql, *a, **k: executed.append(str(sql)))
+        return executed
+
+    executed = run_online(0)
+    module.downgrade()
+    assert len(executed) == 3
+    assert "LOCK TABLE" in executed[0] and "ACCESS EXCLUSIVE" in executed[0]
+    assert "count(*)" in executed[1].lower()
+    assert executed[2].startswith("DROP TABLE")
+
+    executed = run_online(3)
+    with pytest.raises(module.DispositionFollowupsPreconditionError, match="must stay"):
+        module.downgrade()
+    assert len(executed) == 2 and not any("DROP" in sql for sql in executed)  # locked, counted

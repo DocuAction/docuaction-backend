@@ -1647,7 +1647,9 @@ def test_a_retry_that_lost_the_race_changes_nothing(client, deferred, monkeypatc
                     {"i": pid, "b": str(uuid.uuid4())},
                 )
                 await other.commit()
-            with pytest.raises(deferred.FollowupRefused):
+            with pytest.raises(
+                deferred.FollowupRefused, match="already retried or is no longer FAILED"
+            ):
                 await deferred.retry(late, uuid.UUID(pid), actor="late@test.local")
 
     run(_second_retry_after_a_claim())
@@ -1930,3 +1932,712 @@ def test_an_identifier_decision_naming_only_the_entity_is_scoped_to_its_delivery
     assert run(_conflict_facts(d, conflict))["decisions"] == 0  # nothing was written
     monkeypatch.setenv(FLAG, "true")
     drain(deferred)
+
+
+# ── review round 2 (2026-11-19): the five carried-forward findings ───────────
+#
+# 1. a synchronous save and the worker can no longer overlap (shared/exclusive
+#    delivery lock, pending work counted under the lock);
+# 2. everything a run writes goes through the lock connection, so a run whose
+#    lock connection died cannot keep writing;
+# 3. the snapshot and the completion of the rows it covers are one transaction;
+# 4. the worker's promotion writes the value that is current at the write, and
+#    a correction cannot interleave with the promotion of its record;
+# 5. ownership at FINALIZE is pinned in test_disposition_followups_schema_*.
+
+
+async def _mark_failed(pid):
+    from sqlalchemy import text
+
+    from app.core.database import async_session_maker
+
+    async with async_session_maker() as db:
+        await db.execute(
+            text(
+                "UPDATE rce_disposition_followups SET state = 'FAILED', attempt_count = 3, "
+                "error_code = 'RETRIES_EXHAUSTED', failed_at = now() WHERE id = CAST(:i AS uuid)"
+            ),
+            {"i": pid},
+        )
+        await db.commit()
+
+
+async def _exclusive_advisory_backends():
+    """Backends that hold an exclusive advisory lock right now."""
+    from sqlalchemy import text
+
+    from app.core.database import async_session_maker
+
+    async with async_session_maker() as db:
+        return {
+            pid
+            for (pid,) in (
+                await db.execute(
+                    text(
+                        "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted "
+                        "AND mode = 'ExclusiveLock'"
+                    )
+                )
+            ).all()
+        }
+
+
+def test_a_synchronous_save_is_refused_while_the_delivery_is_being_processed(
+    client, deferred, monkeypatch
+):
+    """Flag off, nothing pending in the table, but the delivery's promotion
+    lock is held (the worker, or a manual promotion): the save would promote
+    beside it. Refused before anything is written; accepted once it is free."""
+    import asyncio
+
+    d = fresh_delivery()
+    issue_id = d["issue_ids"][0]
+    headers_for("reviewer")  # create the user before any loop is running
+    monkeypatch.delenv(FLAG, raising=False)
+
+    async def _while_held():
+        async with deferred.delivery_lock(d["intake_id"]) as slot:
+            assert slot.acquired
+            return await asyncio.to_thread(correct, client, issue_id)
+
+    refused = run(_while_held())
+    assert refused.status_code == 409, refused.text
+    assert deferred.PROCESSING_PENDING_CODE in refused.text
+    untouched = facts(d, issue_id)
+    assert untouched["resolution"] in (None, "OPEN") and untouched["record_status"] == "HELD"
+    assert untouched["corrections"] == 0 and untouched["snapshots"] == 0
+
+    accepted = correct(client, issue_id)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["result"]["re_promoted"] is True
+
+
+async def _queue_synthetic_work(intake_id):
+    """Accepted work that appears for a delivery from somewhere else: another
+    replica with the flag on, or recovery of an interrupted request."""
+    from sqlalchemy import text
+
+    from app.core.database import async_session_maker
+
+    pid = str(uuid.uuid4())
+    async with async_session_maker() as db:
+        await db.execute(
+            text(
+                "INSERT INTO rce_disposition_followups (id, kind, intake_id, decision, "
+                "attribution, actor, state, attempt_count, recovered, queued_at) VALUES "
+                "(CAST(:p AS uuid), 'ISSUE_DISPOSITION', CAST(:i AS uuid), 'DEFER', 'SYSTEM', "
+                "'synthetic', 'QUEUED', 0, false, now())"
+            ),
+            {"p": pid, "i": str(intake_id)},
+        )
+        await db.commit()
+    return pid
+
+
+def test_work_queued_during_a_synchronous_save_waits_for_the_save(client, deferred, monkeypatch):
+    """The count of outstanding work is read before the save promotes. Work
+    that is queued a moment later (a retry, another replica, recovery) must
+    not start the worker beside the save: it finds the delivery busy and runs
+    after the save has finished."""
+    d = fresh_delivery()
+    issue_id = d["issue_ids"][0]
+    headers_for("reviewer")
+    monkeypatch.delenv(FLAG, raising=False)
+    from app.tefca_registry.rce import curation
+
+    original = curation.recompute_hold_status
+    seen = {}
+
+    async def queue_work_mid_save(db, intake_id, **kw):
+        if "tick" not in seen:
+            seen["pid"] = await _queue_synthetic_work(intake_id)
+            seen["tick"] = await deferred.process_next()
+        return await original(db, intake_id, **kw)
+
+    monkeypatch.setattr(curation, "recompute_hold_status", queue_work_mid_save)
+    saved = correct(client, issue_id)
+    monkeypatch.setattr(curation, "recompute_hold_status", original)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["result"]["re_promoted"] is True
+    assert seen["tick"]["outcome"] == "DELIVERY_BUSY"  # the worker did not start
+    assert run(_row_state(seen["pid"]))[0] == "QUEUED"
+
+    assert all(x["outcome"] == "COMPLETED" for x in drain(deferred))
+    assert run(_row_state(seen["pid"]))[0] == "COMPLETED"
+    got = facts(d, issue_id)
+    assert got["record_status"] == "CORRECTED" and got["entity"] is not None
+
+
+def test_failed_processing_blocks_promotion_outside_the_worker_until_it_is_retried(
+    client, deferred, monkeypatch
+):
+    """A decision whose processing FAILED has a released, unpromoted record
+    that only the worker promotes under its own reviewer. A synchronous save
+    (flag off) or a manual promotion would write it under someone else's name
+    or as SYSTEM: both are refused, with their own code, until the processing
+    is retried and completes."""
+    d = fresh_delivery()
+    first, second = d["issue_ids"][0], d["issue_ids"][2]
+    headers_for("qalead")
+    pid = correct(client, first).json()["processing"]["id"]
+    run(_mark_failed(pid))
+
+    manual = client.post(
+        f"{BASE}/deliveries/{d['intake_id']}/promote", headers=headers_for("reviewer")
+    )
+    assert manual.status_code == 409, manual.text
+    assert deferred.PROCESSING_FAILED_CODE in manual.text
+    assert deferred.PROCESSING_FAILED_MESSAGE in manual.text
+
+    monkeypatch.delenv(FLAG, raising=False)
+    refused = correct(client, second, role="qalead")
+    assert refused.status_code == 409, refused.text
+    assert deferred.PROCESSING_FAILED_CODE in refused.text
+    untouched = facts(d, second)
+    assert untouched["resolution"] in (None, "OPEN") and untouched["record_status"] == "HELD"
+    assert facts(d, first)["entity"] is None  # nobody promoted the first reviewer's record
+
+    retried = client.post(
+        f"{BASE}/disposition-processing/{pid}/retry", headers=headers_for("reviewer")
+    )
+    assert retried.status_code == 202, retried.text
+    assert [x["outcome"] for x in drain(deferred)] == ["COMPLETED"]
+    promoted = facts(d, first)
+    assert promoted["entity"] is not None
+    assert promoted["events"][-1][3] == user_for("reviewer")["email"]  # its own reviewer
+
+    accepted = correct(client, second, role="qalead")
+    assert accepted.status_code == 200, accepted.text
+
+
+def test_synchronous_saves_share_the_delivery_and_exclude_only_the_worker(client, deferred):
+    """Two synchronous saves hold the lock together (they relate to each other
+    as they always did); the worker and a manual promotion cannot take it."""
+    d = fresh_delivery()
+    assert correct(client, d["issue_ids"][0]).status_code == 202
+
+    async def _go():
+        async with deferred.synchronous_slot(d["intake_id"]) as one:
+            async with deferred.synchronous_slot(d["intake_id"]) as two:
+                busy = await deferred.process_next()
+                async with deferred.delivery_lock(d["intake_id"]) as exclusive:
+                    return one, two, busy, exclusive.acquired
+
+    one, two, busy, exclusive = run(_go())
+    assert one is True and two is True
+    assert busy["outcome"] == "DELIVERY_BUSY" and exclusive is False
+    assert facts(d, d["issue_ids"][0])["snapshots"] == 0
+    assert [x["outcome"] for x in drain(deferred)] == ["COMPLETED"]
+
+
+def test_the_identifier_route_is_refused_with_the_flag_off_while_the_delivery_is_held(
+    client, deferred, monkeypatch
+):
+    import asyncio
+
+    d = fresh_delivery(issues=1)
+    conflict = run(_make_conflict(d))
+    headers_for("reviewer")
+    monkeypatch.delenv(FLAG, raising=False)
+
+    async def _while_held():
+        async with deferred.delivery_lock(d["intake_id"]) as slot:
+            assert slot.acquired
+            return await asyncio.to_thread(_decide_conflict, client, conflict)
+
+    refused = run(_while_held())
+    assert refused.status_code == 409, refused.text
+    assert deferred.PROCESSING_PENDING_CODE in refused.text
+    assert run(_conflict_facts(d, conflict))["decisions"] == 0  # nothing was written
+
+    accepted = _decide_conflict(client, conflict)
+    assert accepted.status_code == 200, accepted.text
+    assert run(_conflict_facts(d, conflict))["decisions"] == 1
+
+
+def test_a_run_writes_through_the_connection_that_holds_the_lock(client, deferred, monkeypatch):
+    """Promotion, the snapshot and the completion all run on the backend that
+    holds the delivery lock, and what they wrote is visible to every other
+    connection afterwards (it was committed, not left in a savepoint)."""
+    from sqlalchemy import text
+
+    from app.tefca_registry.rce import promotion, reconciliation
+
+    d = fresh_delivery()
+    issue_id = d["issue_ids"][0]
+    pid = correct(client, issue_id).json()["processing"]["id"]
+    seen = {}
+
+    async def _backend(db):
+        return (await db.execute(text("SELECT pg_backend_pid()"))).scalar()
+
+    real_promote, real_persist = promotion.promote_delivery, reconciliation.persist_snapshot
+
+    async def promote(db, *a, **kw):
+        seen["promotion"] = await _backend(db)
+        seen["holders"] = await _exclusive_advisory_backends()
+        return await real_promote(db, *a, **kw)
+
+    async def persist(db, *a, **kw):
+        seen["snapshot"] = await _backend(db)
+        return await real_persist(db, *a, **kw)
+
+    monkeypatch.setattr(promotion, "promote_delivery", promote)
+    monkeypatch.setattr(reconciliation, "persist_snapshot", persist)
+    assert [x["outcome"] for x in drain(deferred)] == ["COMPLETED"]
+
+    assert seen["promotion"] in seen["holders"]
+    assert seen["snapshot"] == seen["promotion"]
+    after = facts(d, issue_id)  # read on other connections
+    assert after["entity"] is not None and after["snapshots"] == 1
+    assert run(_row_state(pid))[0] == "COMPLETED"
+
+
+def test_a_run_whose_lock_connection_dies_mid_promotion_writes_nothing(
+    client, deferred, monkeypatch
+):
+    """The lock connection is terminated while promotion is part-way through a
+    record. Postgres releases the lock at that moment - and because the run's
+    writes are on that same connection, they are gone with it. Nothing of the
+    interrupted run is committed, and the next run completes the work once."""
+    from sqlalchemy import text
+
+    from app.core.database import async_session_maker
+
+    d = fresh_delivery()
+    issue_id = d["issue_ids"][0]
+    pid = correct(client, issue_id).json()["processing"]["id"]
+    real_lookup = deferred.attribution_lookup
+    seen = {"killed": 0}
+
+    def killing_lookup():
+        inner = real_lookup()
+
+        async def lookup(db, source_record_id):
+            found = await inner(db, source_record_id)
+            if not seen["killed"]:
+                victim = (await db.execute(text("SELECT pg_backend_pid()"))).scalar()
+                async with async_session_maker() as other:
+                    await other.execute(text("SELECT pg_terminate_backend(:p)"), {"p": victim})
+                    await other.commit()
+                seen["killed"] = victim
+            return found
+
+        return lookup
+
+    monkeypatch.setattr(deferred, "attribution_lookup", killing_lookup)
+    result = run(deferred.process_next())
+    monkeypatch.setattr(deferred, "attribution_lookup", real_lookup)
+    assert seen["killed"]
+    assert result["outcome"] == "RETRY_OR_FAILED" and result["failed_stage"] == "PROMOTION"
+    mid = facts(d, issue_id)
+    assert mid["entity"] is None and mid["snapshots"] == 0  # nothing of that run committed
+    assert run(_row_state(pid))[0] == "QUEUED"
+
+    assert [x["outcome"] for x in drain(deferred)] == ["COMPLETED"]
+    after = facts(d, issue_id)
+    assert after["entity"] is not None and after["snapshots"] == 1
+    assert after["events"][-1][2] == "HUMAN"
+
+
+def test_a_failure_between_the_snapshot_and_completion_leaves_no_snapshot_behind(
+    client, deferred, monkeypatch
+):
+    """The snapshot is written, then the run fails before completion is
+    recorded. Both are one transaction, so the snapshot is rolled back with
+    it: the re-run writes exactly ONE snapshot for these decisions."""
+    d = fresh_delivery()
+    issue_id = d["issue_ids"][0]
+    pid = correct(client, issue_id).json()["processing"]["id"]
+    calls = {"n": 0}
+
+    async def fail_completion_once(stage):
+        if stage == "COMPLETE":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("synthetic crash after the snapshot was written")
+
+    monkeypatch.setattr(deferred, "_stage_hook", fail_completion_once)
+    first = run(deferred.process_next())
+    assert first["outcome"] == "RETRY_OR_FAILED" and first["failed_stage"] == "COMPLETE"
+    mid = facts(d, issue_id)
+    assert mid["entity"] is not None  # promotion had committed
+    assert mid["snapshots"] == 0  # the snapshot did not survive without its completion
+    assert run(_row_state(pid))[0] == "QUEUED"
+
+    second = run(deferred.process_next())
+    assert second["outcome"] == "COMPLETED"
+    after = facts(d, issue_id)
+    assert after["snapshots"] == 1
+    assert after["snapshot"]["followups"]["followup_ids"] == [pid]
+    assert after["events"] == mid["events"]  # nothing re-applied
+
+
+async def _promote_from_a_stale_copy(delivery, issue_id, newer_value, *, lock_candidates):
+    """Promotion whose session read the record BEFORE a correction to it was
+    committed - the interleaving of the finding, made deterministic."""
+    from sqlalchemy import select, text
+
+    from app.core.database import async_session_maker
+    from app.tefca_registry.rce import models as m
+    from app.tefca_registry.rce.promotion import promote_delivery
+
+    intake = uuid.UUID(delivery["intake_id"])
+    async with async_session_maker() as db:
+        issue = await db.get(m.RceIssue, uuid.UUID(issue_id))
+        stale = (
+            await db.execute(
+                select(m.RceCuratedRecord).where(
+                    m.RceCuratedRecord.source_record_id == issue.source_record_id
+                )
+            )
+        ).scalar_one()
+        read_value = stale.npi
+        await db.commit()  # the read is over; the copy stays in the session
+        async with async_session_maker() as other:
+            await other.execute(
+                text("UPDATE rce_curated_records SET npi = :v WHERE id = CAST(:i AS uuid)"),
+                {"v": newer_value, "i": str(stale.id)},
+            )
+            await other.commit()
+        await promote_delivery(db, intake, actor="SYSTEM", lock_candidates=lock_candidates)
+        return read_value
+
+
+def test_the_worker_promotes_the_value_that_is_current_when_it_writes(client, deferred):
+    """A correction committed after promotion read the record must be what the
+    registry receives. With the worker's row lock the record is re-read under
+    the lock; without it (every other caller, unchanged) the earlier copy is
+    written - which is the behaviour the finding described."""
+    locked, unlocked = fresh_delivery(), fresh_delivery()
+    newer = {"locked": next_npi(), "unlocked": next_npi()}
+
+    issue = locked["issue_ids"][0]
+    assert correct(client, issue).status_code == 202
+    read = run(_promote_from_a_stale_copy(locked, issue, newer["locked"], lock_candidates=True))
+    got = facts(locked, issue)
+    assert got["entity"] is not None and read != newer["locked"]
+    assert got["entity_npi"] == newer["locked"] == got["curated_npi"]
+
+    issue = unlocked["issue_ids"][0]
+    assert correct(client, issue).status_code == 202
+    read = run(
+        _promote_from_a_stale_copy(unlocked, issue, newer["unlocked"], lock_candidates=False)
+    )
+    got = facts(unlocked, issue)
+    assert got["curated_npi"] == newer["unlocked"]
+    assert got["entity_npi"] == read  # the stale copy: why the worker locks
+    drain(deferred)
+
+
+def test_a_correction_cannot_interleave_with_the_promotion_of_its_record(
+    client, deferred, monkeypatch
+):
+    """While the worker is writing a record to the registry, a write to that
+    curated row from another connection has to wait for the batch commit."""
+    from sqlalchemy import text
+
+    from app.core.database import async_session_maker
+
+    d = fresh_delivery()
+    issue_id = d["issue_ids"][0]
+    assert correct(client, issue_id).status_code == 202
+    real_lookup = deferred.attribution_lookup
+    seen = {}
+
+    def probing_lookup():
+        inner = real_lookup()
+
+        async def lookup(db, source_record_id):
+            if "blocked" not in seen:
+                async with async_session_maker() as other:
+                    await other.execute(text("SET lock_timeout = '300ms'"))
+                    try:
+                        await other.execute(
+                            text(
+                                "UPDATE rce_curated_records SET status_reason = status_reason "
+                                "WHERE source_record_id = CAST(:r AS uuid)"
+                            ),
+                            {"r": str(source_record_id)},
+                        )
+                        seen["blocked"] = False
+                    except Exception as exc:  # noqa: BLE001 - the timeout IS the proof
+                        seen["blocked"] = "lock timeout" in str(exc).lower()
+                    await other.rollback()
+            return await inner(db, source_record_id)
+
+        return lookup
+
+    monkeypatch.setattr(deferred, "attribution_lookup", probing_lookup)
+    assert [x["outcome"] for x in drain(deferred)] == ["COMPLETED"]
+    monkeypatch.setattr(deferred, "attribution_lookup", real_lookup)
+    assert seen["blocked"] is True
+    assert facts(d, issue_id)["entity"] is not None
+
+
+def test_a_correction_to_an_already_promoted_record_is_recorded_as_such(client, deferred):
+    """Promotion does not revisit a promoted record, so a later correction
+    changes the curated row only (existing behaviour, not changed here). The
+    deferred path now reads that fact under the row lock and records it on the
+    decision, instead of leaving it indistinguishable from any other save."""
+    d = fresh_delivery()
+    issue_id = d["issue_ids"][0]
+    first = correct(client, issue_id)
+    assert first.status_code == 202, first.text
+    assert first.json()["result"]["correction"]["record_already_promoted"] is False
+    assert [x["outcome"] for x in drain(deferred)] == ["COMPLETED"]
+    promoted = facts(d, issue_id)
+    assert promoted["entity"] is not None
+
+    later = run(
+        _add_finding(
+            issue_id,
+            rule_id="NPI-003",
+            issue_type="NPI_CHECKSUM_INVALID",
+            severity="LOW",
+            field_name="NPI",
+            original_value=promoted["curated_npi"],
+        )
+    )
+    second = correct(client, later)
+    assert second.status_code in (200, 202), second.text
+    body = second.json()
+    assert body["result"]["correction"]["record_already_promoted"] is True
+    stored = _processing_for(client, d, later)
+    assert len(stored) == 1
+    replay = run(_decision_result(stored[0]["id"]))
+    assert replay["correction_on_promoted_record"] is True
+    drain(deferred)
+    after = facts(d, issue_id)
+    assert after["entity"] == promoted["entity"]
+    assert after["entity_npi"] == promoted["entity_npi"]  # the registry was not revisited
+    assert after["curated_npi"] != promoted["curated_npi"]
+
+
+async def _decision_result(pid):
+    from sqlalchemy import text
+
+    from app.core.database import async_session_maker
+
+    async with async_session_maker() as db:
+        return (
+            await db.execute(
+                text(
+                    "SELECT decision_result FROM rce_disposition_followups "
+                    "WHERE id = CAST(:i AS uuid)"
+                ),
+                {"i": pid},
+            )
+        ).scalar()
+
+
+# ── review round 2, second part (2026-11-19): CodeRabbit on 1fc8d6a ──────────
+
+
+def test_the_release_is_attributed_to_the_reviewer_who_released_the_record(client, deferred):
+    """Reviewer A's correction releases the record. Before the worker runs,
+    reviewer B decides another, non-holding finding on the same record. The
+    promotion is A's release: B's later decision must not take the credit."""
+    d = fresh_delivery()
+    released_by_a = d["issue_ids"][0]
+    headers_for("qalead")
+    assert correct(client, released_by_a).status_code == 202
+    current = facts(d, released_by_a)["curated_npi"]
+    later = run(
+        _add_finding(
+            released_by_a,
+            rule_id="NPI-003",
+            issue_type="NPI_CHECKSUM_INVALID",
+            severity="LOW",
+            field_name="NPI",
+            original_value=current,
+        )
+    )
+    second = correct(client, later, role="qalead")
+    assert second.status_code == 202, second.text  # two pending decisions on one record
+
+    assert all(x["outcome"] == "COMPLETED" for x in drain(deferred))
+    after = facts(d, released_by_a)
+    assert after["entity"] is not None
+    assert after["events"][-1][2] == "HUMAN"
+    assert after["events"][-1][3] == user_for("reviewer")["email"]
+    assert after["entity_audit_actors"] == [user_for("reviewer")["email"]]
+
+
+async def _set_state(pid, state):
+    from sqlalchemy import text
+
+    from app.core.database import async_session_maker
+
+    async with async_session_maker() as db:
+        await db.execute(
+            text("UPDATE rce_disposition_followups SET state = :s WHERE id = CAST(:i AS uuid)"),
+            {"i": pid, "s": state},
+        )
+        await db.commit()
+
+
+def test_a_replay_while_the_first_submission_is_still_being_applied_is_not_an_acceptance(
+    client, deferred
+):
+    """The row exists from the decision's first commit, before the correction
+    is applied. A replay in that window must not be told "accepted": the first
+    request can still fail. It gets the in-flight refusal; once the row is
+    settled the same replay gets the stored answer."""
+    from app.tefca_registry.rce import delivery_routes
+
+    d = fresh_delivery()
+    issue_id = d["issue_ids"][0]
+    value, key = next_npi(), f"idem-{uuid.uuid4().hex}"
+    first = correct(client, issue_id, key=key, value=value)
+    assert first.status_code == 202, first.text
+    pid = first.json()["processing"]["id"]
+
+    run(_set_state(pid, "RECEIVED"))
+    early = correct(client, issue_id, key=key, value=value)
+    assert early.status_code == 409, early.text
+    assert delivery_routes.DISPOSITION_IN_FLIGHT_CODE in early.text
+    assert "processing" not in early.json()
+
+    run(_set_state(pid, "QUEUED"))
+    settled = correct(client, issue_id, key=key, value=value)
+    assert settled.status_code == 202, settled.text
+    assert settled.json()["replayed"] is True
+    assert facts(d, issue_id)["corrections"] == 1
+    drain(deferred)
+
+
+def test_snapshot_approval_is_refused_while_the_delivery_is_being_processed(client, deferred):
+    """Approval reads "nothing outstanding" and "the latest reconciliation
+    snapshot", then pins that snapshot. It holds the delivery for that whole
+    sequence, so while the worker (or a promotion) holds it, approval is
+    refused rather than racing it."""
+    import asyncio
+
+    d = fresh_delivery()
+    headers_for("qalead")
+
+    def approve():
+        return client.post(
+            f"{BASE}/deliveries/{d['intake_id']}/snapshot/approve",
+            data={"approval_ref": "SYN-APPROVAL-1"},
+            headers=headers_for("qalead"),
+        )
+
+    async def _while_held():
+        async with deferred.delivery_lock(d["intake_id"]) as slot:
+            assert slot.acquired
+            return await asyncio.to_thread(approve)
+
+    busy = run(_while_held())
+    assert busy.status_code == 409, busy.text
+    assert deferred.DELIVERY_BUSY_MESSAGE in busy.text
+
+    free = approve()  # the lock is free again: the ordinary gates answer
+    assert deferred.DELIVERY_BUSY_MESSAGE not in free.text
+
+
+def test_a_correction_does_not_release_a_record_past_an_approved_unapplied_finding(
+    client, deferred
+):
+    """CORRECT settles finding Y and marks the record CORRECTED, but the same
+    record carries finding X that is APPROVED and never applied. The record
+    must not be left promotable: it is held, and nothing is queued."""
+    d = fresh_delivery()
+    y = d["issue_ids"][0]
+    run(_add_finding(y, resolution="APPROVED", resolved_by="lane-a@test.local"))
+
+    r = correct(client, y)
+    assert r.status_code == 200, r.text
+    assert r.json()["processing"]["state"] == "NOT_REQUIRED"
+    assert drain(deferred) == []
+    after = facts(d, y)
+    assert after["corrections"] == 1 and after["resolution"] == "RESOLVED"
+    assert after["record_status"] == "HELD" and after["entity"] is None
+
+
+def test_a_recorded_decision_that_leaves_the_finding_open_is_recovered_as_recorded(
+    client, deferred, monkeypatch
+):
+    """DEFER is recorded and leaves the finding UNDER_REVIEW by design; then
+    the request fails on its last read. The row must not say the decision
+    failed (and refuse the same key with 409): the decision IS recorded and
+    has no delivery work."""
+    from app.tefca_registry.rce import dispositions as disp
+
+    d = fresh_delivery()
+    issue_id = d["issue_ids"][2]
+    key = f"idem-{uuid.uuid4().hex}"
+    real = disp.history_for_record
+    calls = {"n": 0}
+
+    async def fail_on_the_final_read(db, record_id, *a, **k):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise RuntimeError("synthetic failure after the decision committed")
+        return await real(db, record_id, *a, **k)
+
+    def defer():
+        return client.post(
+            f"{BASE}/issues/{issue_id}/dispositions",
+            json={"decision": "DEFER", "reason": "waiting for a synthetic answer"},
+            headers=headers_for("reviewer", {"Idempotency-Key": key}),
+        )
+
+    monkeypatch.setattr(disp, "history_for_record", fail_on_the_final_read)
+    r = defer()
+    monkeypatch.setattr(disp, "history_for_record", real)
+    assert r.status_code == 500 and calls["n"] >= 2
+
+    rows = _processing_for(client, d, issue_id)
+    assert len(rows) == 1
+    assert rows[0]["state"] == "NOT_REQUIRED" and rows[0]["recovered"] is True
+    assert facts(d, issue_id)["resolution"] == "UNDER_REVIEW"
+
+    again = defer()  # the same key: answered from the row, applied once
+    assert again.status_code == 200, again.text
+    assert again.json()["replayed"] is True
+    assert drain(deferred) == []
+
+
+def test_a_row_whose_own_decision_never_landed_is_not_retried_after_another_one_did(
+    client, deferred
+):
+    """Correction A died at PROPOSED (FAILED, DECISION_INTERRUPTED). Later a
+    different decision settled the finding. The finding being terminal now
+    says nothing about A: retrying A would mark it COMPLETED for a correction
+    that was never applied. Refused, exactly as `can_retry` already says."""
+    d = fresh_delivery()
+    issue_id = d["issue_ids"][0]
+    pid = run(_orphan_received(d, issue_id, resolution="PROPOSED"))
+    assert [x["state"] for x in run(deferred.sweep_received()) if x["id"] == pid] == ["FAILED"]
+
+    async def _another_decision_settles_it():
+        from app.core.database import async_session_maker
+        from app.tefca_registry.rce import models as m
+
+        async with async_session_maker() as db:
+            issue = await db.get(m.RceIssue, uuid.UUID(issue_id))
+            issue.resolution = "RESOLVED"
+            await db.commit()
+
+    run(_another_decision_settles_it())
+    retry = client.post(
+        f"{BASE}/disposition-processing/{pid}/retry", headers=headers_for("reviewer")
+    )
+    assert retry.status_code == 409, retry.text
+    assert deferred.RETRY_REFUSED_NOT_RECORDED in retry.text
+    assert state_of(client, pid) == "FAILED"
+    assert drain(deferred) == []
+
+
+def test_the_fingerprint_cannot_be_made_to_collide_across_its_fields(deferred):
+    separator = "\x1f"
+    one = deferred.fingerprint("CORRECT", "x", f"abc{separator}vdef")
+    two = deferred.fingerprint("CORRECT", f"x{separator}vabc", "def")
+    assert one != two
+    assert deferred.fingerprint("CORRECT", "x", None) != deferred.fingerprint("CORRECT", "x", "")
+    assert deferred.fingerprint("CORRECT", "x", "1") != deferred.fingerprint("CORRECT", "x", "1 ")
+    assert deferred.fingerprint(" correct ", " x ", "1") == deferred.fingerprint(
+        "CORRECT", "x", "1"
+    )

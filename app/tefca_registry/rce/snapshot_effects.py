@@ -494,11 +494,15 @@ async def approval_gates(db, intake_id) -> Dict[str, Any]:
     from app.tefca_registry.rce import delivery_jobs as jobs
     from app.tefca_registry.rce import reconciliation
 
+    from app.tefca_registry.rce import disposition_followups
+    # Freshness FIRST, then the snapshot it qualifies. A decision's completion
+    # and the snapshot that covers it are one transaction, so "nothing is
+    # outstanding" read here means every processed decision's snapshot is
+    # already committed and the read below cannot return an older one.
+    processing = await disposition_followups.summary(db, intake_id)
     tip = await snapshot_tip(db, intake_id)
     job = await jobs.job_for_intake(db, intake_id)
     recon = await reconciliation.latest_snapshot(db, job.id if job else None)
-    from app.tefca_registry.rce import disposition_followups
-    processing = await disposition_followups.summary(db, intake_id)
     gates = {
         "effects_completed": tip is not None and tip.status != sm.SNAPSHOT_FAILED,
         "tip_pending": tip is not None and tip.status == sm.SNAPSHOT_PENDING,

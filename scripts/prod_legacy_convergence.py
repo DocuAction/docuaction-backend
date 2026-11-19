@@ -123,6 +123,13 @@ AREA1_OWNER_TABLES = {
     # writes policy — rows are owner-side governed acts). Created by the chain
     # AS the owner role and kept there.
     "rce_source_policies",
+    # 20261118_disposition_followups: the record of accepted analyst-decision
+    # work and what became of it. The app holds SELECT+INSERT+UPDATE by grant
+    # (the worker updates state and heartbeat) and deliberately NO DELETE. An
+    # owner holds every privilege, so handing the table to docuaction_app at
+    # FINALIZE would make that grant stop binding. OWNER-OWNED, like
+    # rce_delivery_jobs (also app-updated by grant).
+    "rce_disposition_followups",
 }
 
 
@@ -616,9 +623,9 @@ MANAGED_CHAIN_CREATES = {
     "iqvia_advisory_comparison_outcome",
     # 20261108_source_policy: SELECT-only for the app; owner-owned; ships empty.
     "rce_source_policies",
-    # 20261118_disposition_followups -- SELECT+INSERT+UPDATE job bookkeeping (the
-    # worker updates state and heartbeat), so app-owned at FINALIZE like the
-    # recheck and IQVIA job tables. Not append-only evidence, not Area-1.
+    # 20261118_disposition_followups -- SELECT+INSERT+UPDATE by grant, no DELETE.
+    # Owner-owned, so it is in AREA1_OWNER_TABLES and is NOT moved to
+    # docuaction_app at FINALIZE (an owning app could delete accepted work).
     "rce_disposition_followups",
 }
 # Tables the 20260917 revision declares FOREIGN KEYS to that docuaction_app owns

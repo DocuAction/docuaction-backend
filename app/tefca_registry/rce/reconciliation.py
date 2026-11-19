@@ -558,7 +558,8 @@ async def _migration_revision_isolated() -> str:
 async def persist_snapshot(db, intake_id, result: Dict[str, Any], *, job_id,
                            actor: str, trigger: str,
                            reconstructed: bool = False,
-                           extra_evidence: Optional[Dict[str, Any]] = None
+                           extra_evidence: Optional[Dict[str, Any]] = None,
+                           commit: bool = True
                            ) -> tm.RceReconciliationSnapshot:
     """Write one `RceReconciliationSnapshot` from a `reconcile_delivery` result.
 
@@ -569,6 +570,11 @@ async def persist_snapshot(db, intake_id, result: Dict[str, Any], *, job_id,
     `extra_evidence` adds caller facts to `source_evidence` (which is outside
     the snapshot hash): the deferred disposition worker records which accepted
     decisions one snapshot covers. It cannot replace a computed key.
+
+    `commit=False` flushes instead of committing, so the caller can make the
+    snapshot and its own bookkeeping ONE transaction (the deferred disposition
+    worker: the snapshot and the completion of the decisions it covers are
+    durable together or not at all). Every other caller commits here.
     """
     if job_id is None:
         raise ValueError("a reconciliation snapshot must belong to a delivery job")
@@ -625,6 +631,10 @@ async def persist_snapshot(db, intake_id, result: Dict[str, Any], *, job_id,
         reconstructed=bool(reconstructed),
     )
     db.add(snapshot)
+    if not commit:
+        await db.flush()
+        await db.refresh(snapshot)
+        return snapshot
     await db.commit()
     await db.refresh(snapshot)
     logger.info("reconciliation snapshot persisted",

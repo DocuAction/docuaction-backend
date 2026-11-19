@@ -451,7 +451,8 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
                            actor_id: Optional[uuid.UUID] = None,
                            disposition_actor_type: str = "SYSTEM",
                            disposition_reason: Optional[str] = None,
-                           job_id=None, human_attribution=None) -> Dict[str, Any]:
+                           job_id=None, human_attribution=None,
+                           lock_candidates: bool = False) -> Dict[str, Any]:
     """Promote every promotable curated record for one delivery.
 
     Two passes, because a Subparticipant's parent may be curated after it.
@@ -472,6 +473,18 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
     and registry audit row all carry THAT analyst - and a record without one
     keeps its natural SYSTEM reason code. It is asked at the moment the record
     is promoted, never preloaded. Callers that pass nothing behave as before.
+
+    `lock_candidates` (2026-11-19) is for the deferred worker, which promotes
+    WHILE analysts keep deciding. Each batch is read once and the registry is
+    written from those in-memory rows; a correction committed between that read
+    and the batch commit would leave the registry holding the value the analyst
+    had just replaced, on a record marked promoted. With it set, every row of
+    the batch that looks promotable is re-read and row-locked (FOR NO KEY
+    UPDATE) in one statement before any of them is written: the registry gets
+    the value that is current at the write, and a correction to one of those
+    rows waits for the batch commit instead of interleaving with it. Rows that
+    are not promotable are not locked. Callers that pass nothing behave as
+    before.
     """
     intake = await db.get(m.RceSourceIntake, intake_id)
     if intake is None:
@@ -675,6 +688,25 @@ async def promote_delivery(db, intake_id, *, actor: Optional[str] = None,
         if not rows:
             break
         progressed = False
+
+        if lock_candidates:
+            # By id only, decided in Python afterwards: a status predicate here
+            # would drop a row that changed and leave its stale copy in memory.
+            candidate_ids = sorted(
+                r.id for r in rows
+                if r.record_status in PROMOTABLE_STATUSES
+                and r.source_record_id not in undecided_holding)
+            if candidate_ids:
+                await db.execute(
+                    select(m.RceCuratedRecord)
+                    .where(m.RceCuratedRecord.id.in_(candidate_ids))
+                    .order_by(m.RceCuratedRecord.id)
+                    .with_for_update(key_share=True)
+                    .execution_options(populate_existing=True))
+                # A row promoted by someone else between the batch read and
+                # the lock no longer matches the drain's selection (the next
+                # read excludes it), so it is dropped here, not parked.
+                rows = [r for r in rows if r.canonical_entity_id is None]
 
         for row in rows:
             # REJECTED: the line could not be parsed; nothing positional is

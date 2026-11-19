@@ -71,9 +71,7 @@ CHAIN_ALTERS = ["review_records", "rce_curated_records", "tefca_reg_entities", "
 #: AREA1_OWNER_TABLES.
 CHAIN_CREATES_TO_APP = ["report_export_jobs", "iqvia_upload_session", "iqvia_upload_chunk", "iqvia_import_job",
                         # 20261004_recheck_jobs: job bookkeeping the app UPDATEs, app-owned at FINALIZE
-                        "rce_recheck_job", "rce_recheck_item",
-                        # 20261118_disposition_followups: the same shape (state + heartbeat UPDATEs)
-                        "rce_disposition_followups"]
+                        "rce_recheck_job", "rce_recheck_item"]
 PENDING = [rev.revision for rev in
           reversed(list(_SCRIPTS.iterate_revisions(HEAD, EXPECTED)))]
 DECISIONS_COLS = ["approval_justification", "rejection_reason", "rejection_category", "supersedes", "sla_hours",
@@ -106,6 +104,9 @@ TRACEABILITY = ["rce_delivery_stage_events", "rce_disposition_events", "rce_reco
                 # 20261014_iqvia_advisory_assess: append-only evidence, SELECT+INSERT
                 "iqvia_advisory_assessment"]
 AREA1_FINAL = AREA1_PRESENT + ["rce_delivery_jobs"] + TRACEABILITY + [
+    # 20261118_disposition_followups: app SELECT+INSERT+UPDATE by grant, no
+    # DELETE; kept owner-owned so that grant still binds after FINALIZE.
+    "rce_disposition_followups",
     # 20261108_source_policy: owner-owned policy storage, app SELECT only,
     # ships empty/inactive — deliberately added to the owner inventory.
     "rce_source_policies",

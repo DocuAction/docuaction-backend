@@ -561,9 +561,13 @@ async def promote(
         # Accepted analyst decisions are promoted by the worker, which carries
         # each record's human attribution. A manual promotion here would take
         # the record first and write it as SYSTEM, so it waits for them.
-        if await disposition_followups.pending_count(db, intake_id):
-            refusal = HTTPException(409, disposition_followups.PROCESSING_PENDING_MESSAGE)
-            refusal.code = disposition_followups.PROCESSING_PENDING_CODE
+        # The same holds for a decision whose processing FAILED and awaits a
+        # retry: its record is released and unpromoted, and only the worker
+        # carries its reviewer's attribution.
+        blocked = await disposition_followups.admission_refusal(db, intake_id)
+        if blocked is not None:
+            refusal = HTTPException(409, blocked[1])
+            refusal.code = blocked[0]
             raise refusal
         try:
             return await promote_delivery(

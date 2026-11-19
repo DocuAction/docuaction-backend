@@ -2164,6 +2164,10 @@ DISPOSITION_IN_FLIGHT_CODE = "DISPOSITION_IN_FLIGHT"
 #: The delivery whose decision slot the guard should also take, or None.
 _GUARD_DECISION_INTAKE: ContextVar[Optional[str]] = ContextVar(
     "disposition_guard_decision_intake", default=None)
+#: The delivery whose promotion/reconciliation lock the guard should also take
+#: in SHARED mode, for a SYNCHRONOUS save (2026-11-19), or None.
+_GUARD_SYNC_INTAKE: ContextVar[Optional[str]] = ContextVar(
+    "disposition_guard_sync_intake", default=None)
 
 
 @asynccontextmanager
@@ -2191,9 +2195,11 @@ async def _issue_disposition_guard(issue_id, decision_intake_id=None):
     key = f"issue-disposition:{issue_id}"
     if decision_intake_id is None:
         decision_intake_id = _GUARD_DECISION_INTAKE.get()
+    sync_intake_id = _GUARD_SYNC_INTAKE.get()
     conn = await engine.connect()
     acquired = False
     slot = False
+    shared = False
     try:
         acquired = bool((await conn.execute(
             text("SELECT pg_try_advisory_lock(hashtextextended(:k, 0))"),
@@ -2215,8 +2221,35 @@ async def _issue_disposition_guard(issue_id, decision_intake_id=None):
                 refusal = HTTPException(409, followups.DELIVERY_DECISION_BUSY_MESSAGE)
                 refusal.code = followups.DELIVERY_DECISION_BUSY_CODE
                 raise refusal
+        if sync_intake_id is not None:
+            # Synchronous save (2026-11-19): it promotes and reconciles the
+            # whole delivery inside this request, so it holds the worker's
+            # lock in SHARED mode until it ends, on this same connection.
+            # Other synchronous saves share it (unchanged between them); the
+            # worker cannot start under it. Outstanding work is counted AFTER
+            # the lock is held: a FAILED row retried one moment later is
+            # queued behind this save instead of running beside it.
+            from app.tefca_registry.rce import disposition_followups as followups
+
+            shared = await followups.acquire_synchronous_slot(conn, sync_intake_id)
+            blocked = (
+                (followups.PROCESSING_PENDING_CODE, followups.PROCESSING_PENDING_MESSAGE)
+                if not shared else await followups.admission_refusal(conn, sync_intake_id))
+            if blocked is not None:
+                refusal = HTTPException(409, blocked[1])
+                refusal.code = blocked[0]
+                raise refusal
         yield
     finally:
+        if shared:
+            try:
+                from app.tefca_registry.rce import disposition_followups as followups
+
+                await followups.release_synchronous_slot(conn, sync_intake_id)
+            except Exception:  # noqa: BLE001 - never return a still-locked conn
+                await conn.invalidate()
+                acquired = False
+                slot = False
         if slot:
             try:
                 from app.tefca_registry.rce import disposition_followups as followups
@@ -2278,12 +2311,15 @@ async def post_issue_disposition(
     from app.tefca_registry.rce import disposition_followups as followups
 
     deferred = apply is not None and await followups.active(db)
-    if not deferred and await followups.pending_count(db, issue.source_intake_id):
-        # Flag off while earlier decisions are still being processed: a
+    blocked = None if deferred else await followups.admission_refusal(db, issue.source_intake_id)
+    if blocked is not None:
+        # Flag off while earlier decisions are still being processed (a
         # synchronous save would promote and reconcile the whole delivery at
-        # the same time as the worker. Refused before anything is written.
-        refusal = HTTPException(409, followups.PROCESSING_PENDING_MESSAGE)
-        refusal.code = followups.PROCESSING_PENDING_CODE
+        # the same time as the worker), or while one's processing FAILED and
+        # awaits a retry (this save would promote that reviewer's released
+        # record under this reviewer's name). Refused before anything is written.
+        refusal = HTTPException(409, blocked[1])
+        refusal.code = blocked[0]
         raise refusal
     pending_row = None
     if deferred:
@@ -2324,6 +2360,12 @@ async def post_issue_disposition(
     # on its own connection. Passed by context so the guard's call (pinned by
     # tests/test_def005_disposition_inflight_guard.py) stays exactly as it was.
     _GUARD_DECISION_INTAKE.set(issue_facts["intake_id"] if deferred else None)
+    # Synchronous save with the follow-up table present: the guard also holds
+    # the delivery's promotion/reconciliation lock, shared. Table absent (the
+    # migration was never applied): nothing extra is taken.
+    _GUARD_SYNC_INTAKE.set(
+        issue_facts["intake_id"]
+        if (not deferred and await followups.store_present(db)) else None)
     async with _issue_disposition_guard(issue.id):
         try:
             if apply is not None:
@@ -2445,6 +2487,10 @@ def _stored_decision_result(result: dict[str, Any], decision: str) -> dict[str, 
         "hold_released": bool(result.get("hold_released")),
         "record_status_changed": bool(result.get("record_status_changed")),
         "consequence_deferred": bool(result.get("consequence_deferred")),
+        # The correction was applied to a record that was ALREADY promoted:
+        # the registry entity predates it and promotion does not revisit it.
+        "correction_on_promoted_record": bool(
+            (result.get("correction") or {}).get("record_already_promoted")),
     }
 
 
@@ -2468,6 +2514,14 @@ def _replayed_disposition_response(row):
     from app.tefca_registry.rce import disposition_followups as followups
 
     processing = followups.dto(row)
+    if row.state == fum.STATE_RECEIVED:
+        # The first submission is STILL being applied (or died and has not been
+        # swept yet). Nothing is known to be recorded, so this must not read
+        # as an accepted decision: the same refusal a duplicate without a key
+        # receives. The client asks again; it then gets the settled row.
+        refusal = HTTPException(409, DISPOSITION_IN_FLIGHT_MESSAGE)
+        refusal.code = DISPOSITION_IN_FLIGHT_CODE
+        raise refusal
     if row.state in (fum.STATE_REFUSED,) or (
             row.state == fum.STATE_FAILED
             and row.error_code in (followups.CODE_DECISION_INTERRUPTED,
@@ -2633,11 +2687,25 @@ async def _identifier_decision_slot(body: IdentifierDecisionBody,
         # Flag off: this route re-promotes and reconciles inline, so it is
         # refused while earlier decisions for the delivery are still being
         # processed (see `disposition_followups.pending_count`).
-        if await followups.pending_count(db, intake_id):
-            refusal = HTTPException(409, followups.PROCESSING_PENDING_MESSAGE)
-            refusal.code = followups.PROCESSING_PENDING_CODE
+        blocked = await followups.admission_refusal(db, intake_id)
+        if blocked is not None:
+            refusal = HTTPException(409, blocked[1])
+            refusal.code = blocked[0]
             raise refusal
-        yield None
+        if intake_id is None or not await followups.store_present(db):
+            yield None
+            return
+        # Held for the whole request, and the check repeated under it (see
+        # `disposition_followups.synchronous_slot`).
+        async with followups.synchronous_slot(intake_id) as held:
+            blocked = (
+                (followups.PROCESSING_PENDING_CODE, followups.PROCESSING_PENDING_MESSAGE)
+                if not held else await followups.admission_refusal(db, intake_id))
+            if blocked is not None:
+                refusal = HTTPException(409, blocked[1])
+                refusal.code = blocked[0]
+                raise refusal
+            yield None
         return
     if intake_id is None:
         yield None
@@ -3081,24 +3149,35 @@ async def delivery_snapshot_approve_route(
     from app.tefca_registry import audit as reg_audit
     from app.tefca_registry.rce import snapshot_effects as se
 
+    from app.tefca_registry.rce import disposition_followups as followups
+
     intake = await _intake_or_404(db, intake_id)
-    try:
-        result = await se.approve_delivery_snapshot(db, intake.id, user=user,
-                                                    approval_ref=approval_ref, commit=False)
-    except se.ApprovalRefused as exc:
-        raise HTTPException(409, str(exc))
-    actor_id, actor_email = reg_audit.actor_of(user)
-    reg_audit.record(db, "source_snapshot_approved", None, actor_id=actor_id,
-                     actor_email=actor_email,
-                     metadata={"source_intake_id": str(intake.id),
-                               "actor_role": getattr(user, "role", None),
-                               "snapshot_id": result["snapshot_id"],
-                               "reconciliation_snapshot_id": result["reconciliation_snapshot_id"],
-                               "reconciliation_hash": result["reconciliation_hash"],
-                               "approval_ref": approval_ref,
-                               "build_sha": request_context.build_sha(),
-                               "request_id": request_context.get("request_id")})
-    await db.commit()
+    # The gates read "is any analyst decision still unprocessed?" and "which
+    # reconciliation snapshot is the latest?" and the approval then pins that
+    # snapshot. Held from the first read to the commit (2026-11-19), the
+    # delivery lock keeps the worker from completing decisions and writing a
+    # newer snapshot in between, so an approval cannot pin a reconciliation
+    # that predates decisions it reported as processed. Refused, not waited for.
+    async with followups.delivery_lock(intake.id) as slot:
+        if not slot.acquired:
+            raise HTTPException(409, followups.DELIVERY_BUSY_MESSAGE)
+        try:
+            result = await se.approve_delivery_snapshot(db, intake.id, user=user,
+                                                        approval_ref=approval_ref, commit=False)
+        except se.ApprovalRefused as exc:
+            raise HTTPException(409, str(exc))
+        actor_id, actor_email = reg_audit.actor_of(user)
+        reg_audit.record(db, "source_snapshot_approved", None, actor_id=actor_id,
+                         actor_email=actor_email,
+                         metadata={"source_intake_id": str(intake.id),
+                                   "actor_role": getattr(user, "role", None),
+                                   "snapshot_id": result["snapshot_id"],
+                                   "reconciliation_snapshot_id": result["reconciliation_snapshot_id"],
+                                   "reconciliation_hash": result["reconciliation_hash"],
+                                   "approval_ref": approval_ref,
+                                   "build_sha": request_context.build_sha(),
+                                   "request_id": request_context.get("request_id")})
+        await db.commit()
     return result
 
 

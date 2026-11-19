@@ -500,7 +500,8 @@ async def transition_issue(db, issue_id, *, to_status: str, actor: str,
 
 
 async def apply_correction(db, issue_id, *, actor: str,
-                           corrected_value: Optional[str] = None) -> Dict[str, Any]:
+                           corrected_value: Optional[str] = None,
+                           lock_record: bool = False) -> Dict[str, Any]:
     """Apply an APPROVED correction to its curated record.
 
     THE STALENESS GUARD LIVES HERE. The current value is re-hashed and compared
@@ -508,6 +509,14 @@ async def apply_correction(db, issue_id, *, actor: str,
     the issue is returned to UNDER_REVIEW — because the human approved a change
     to a value that no longer exists, and applying it anyway would put their
     name on a decision they did not make.
+
+    `lock_record` (deferred processing, 2026-11-19): the curated row is re-read
+    and row-locked until this function commits, so the staleness guard and the
+    write see the row as it IS, not as this request first loaded it, and the
+    worker's promotion of the same record cannot interleave with the write
+    (see `promotion.promote_delivery(lock_candidates=True)`). The result then
+    says whether the record had already been promoted when the correction was
+    applied. Callers that pass nothing behave as before.
     """
     issue = await db.get(m.RceIssue, issue_id)
     if issue is None:
@@ -520,13 +529,16 @@ async def apply_correction(db, issue_id, *, actor: str,
         raise CorrectionRefused(
             f"Issue {issue.issue_code} is NO_CORRECTION and must not be applied.")
 
-    curated = (await db.execute(
-        select(m.RceCuratedRecord).where(
-            m.RceCuratedRecord.source_record_id == issue.source_record_id)
-    )).scalar_one_or_none()
+    curated_query = select(m.RceCuratedRecord).where(
+        m.RceCuratedRecord.source_record_id == issue.source_record_id)
+    if lock_record:
+        curated_query = (curated_query.with_for_update(key_share=True)
+                         .execution_options(populate_existing=True))
+    curated = (await db.execute(curated_query)).scalar_one_or_none()
     if curated is None:
         raise CorrectionRefused(
             f"No curated record for source record {issue.source_record_id}.")
+    already_promoted = curated.canonical_entity_id is not None
 
     column = _FIELD_TO_CURATED_COLUMN.get(issue.field_name)
     if column is None:
@@ -600,12 +612,18 @@ async def apply_correction(db, issue_id, *, actor: str,
         curated.record_status = CORRECTED
     await db.commit()
 
-    return {
+    out = {
         "issue_id": str(issue.id), "issue_code": issue.issue_code,
         "curated_record_id": str(curated.id), "column": column,
         "original_value": current, "corrected_value": new_value,
         "correction_authority": issue.correction_authority,
     }
+    if lock_record:
+        # Read under the row lock, so it is a fact about the moment of the
+        # write: the registry entity was created BEFORE this correction and
+        # promotion does not revisit a promoted record.
+        out["record_already_promoted"] = bool(already_promoted)
+    return out
 
 
 async def _conflict_held_records(db, intake_id) -> Dict[Any, int]:
@@ -917,6 +935,10 @@ async def apply_disposition(db, issue_id, *, decision: str, reason: str,
             source_record_id=issue.source_record_id, intake_id=intake_id,
             issue_id=issue.id, actor_id=actor_id)
 
+    # Deferred path only: the correction locks its record against the worker's
+    # promotion. Nothing is passed otherwise, so the call is exactly as before.
+    _correction_lock = {"lock_record": True} if defer_consequences else {}
+
     # ── the issue state machine ──
     if decision == "ACCEPT":
         if issue.correction_authority == NO_CORRECTION or (
@@ -926,12 +948,14 @@ async def apply_disposition(db, issue_id, *, decision: str, reason: str,
         else:
             await _walk(db, issue.id, ("PROPOSED", "APPROVED"), actor=actor,
                         notes=notes, qa_actor=qa_actor)
-            correction = await apply_correction(db, issue.id, actor=actor)
+            correction = await apply_correction(db, issue.id, actor=actor,
+                                                **_correction_lock)
     elif decision == "CORRECT":
         await _walk(db, issue.id, ("PROPOSED", "APPROVED"), actor=actor,
                     notes=notes, qa_actor=qa_actor)
         correction = await apply_correction(db, issue.id, actor=actor,
-                                            corrected_value=corrected_value)
+                                            corrected_value=corrected_value,
+                                            **_correction_lock)
     elif decision == "CONFIRM_EXISTING" or (decision == "REJECT" and is_conflict):
         # The submitted value is not adopted; the finding is settled.
         await _walk(db, issue.id, ("REJECTED", "RESOLVED"), actor=actor,
@@ -951,6 +975,16 @@ async def apply_disposition(db, issue_id, *, decision: str, reason: str,
             escalated_case = await _flag_review_case_escalated(
                 db, issue, actor=actor, reason=reason)
             await db.commit()
+
+    if pending_row is not None:
+        # The decision's own writes are committed. Say so on the accepted-work
+        # row, so that a failure from here on is recovered as "recorded" even
+        # when the decision left its finding open (ESCALATE, DEFER, ...). The
+        # request replaces this with the full stored result when it settles.
+        from app.tefca_registry.rce import disposition_followups as _marks
+
+        pending_row.decision_result = {_marks.DECISION_RECORDED_MARK: True}
+        await db.commit()
 
     # ── hold, re-promotion, snapshot ──
     if defer_consequences:
