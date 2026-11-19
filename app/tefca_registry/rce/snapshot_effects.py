@@ -549,6 +549,10 @@ async def approve_delivery_snapshot(db, intake_id, *, user, approval_ref: str,
         raise ApprovalRefused("reconciliation has not PASSED with a persisted snapshot hash")
     if not gates["reconciliation_after_effects"]:
         raise ApprovalRefused("the passing reconciliation snapshot predates the effects; re-run reconciliation")
+    if not gates["no_disposition_processing_outstanding"]:
+        raise ApprovalRefused(
+            "analyst decisions for this delivery have delivery processing that is "
+            "pending or failed; the persisted reconciliation predates them")
     live = await reconciliation.reconcile_delivery(db, intake_id)
     if not live.get("passed"):
         failed = [c["check"] for c in live.get("checks", []) if not c["passed"]]

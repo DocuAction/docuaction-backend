@@ -558,6 +558,13 @@ async def promote(
     async with disposition_followups.delivery_lock(intake_id) as slot:
         if not slot.acquired:
             raise HTTPException(409, disposition_followups.DELIVERY_BUSY_MESSAGE)
+        # Accepted analyst decisions are promoted by the worker, which carries
+        # each record's human attribution. A manual promotion here would take
+        # the record first and write it as SYSTEM, so it waits for them.
+        if await disposition_followups.pending_count(db, intake_id):
+            refusal = HTTPException(409, disposition_followups.PROCESSING_PENDING_MESSAGE)
+            refusal.code = disposition_followups.PROCESSING_PENDING_CODE
+            raise refusal
         try:
             return await promote_delivery(
                 db, intake_id, actor=getattr(user, "email", None) or "SYSTEM",

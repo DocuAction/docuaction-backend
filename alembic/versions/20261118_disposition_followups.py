@@ -146,17 +146,29 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Refuses while any row exists - accepted work and its outcome are history."""
-    if not _offline():
-        bind = op.get_bind()
-        if TABLE in sa.inspect(bind).get_table_names():
-            n = bind.execute(
-                sa.text(f'select count(*) from "{TABLE}"')  # noqa: S608 - constant table name
-            ).scalar()
-            if n:
-                raise DispositionFollowupsPreconditionError(
-                    f"{TABLE} holds {n} row(s); downgrade refused. Turn "
-                    "ENABLE_DEFERRED_DISPOSITION_PROCESSING off instead - the table "
-                    "is inert without it."
-                )
+    """Refuses while any row exists - accepted work and its outcome are history.
+
+    Offline (`--sql`) generation is refused outright: a generated script cannot
+    look at the table, so it would drop accepted work unconditionally. Online,
+    the table is locked ACCESS EXCLUSIVE before it is counted and the lock is
+    held to the DROP in the same transaction, so a row committed after the
+    count cannot be lost.
+    """
+    if _offline():
+        raise DispositionFollowupsPreconditionError(
+            f"Offline downgrade of {TABLE} is refused: it cannot check that the "
+            "table is empty. Run the downgrade online, against an empty table."
+        )
+    bind = op.get_bind()
+    if TABLE in sa.inspect(bind).get_table_names():
+        bind.execute(sa.text(f'LOCK TABLE "{TABLE}" IN ACCESS EXCLUSIVE MODE'))
+        n = bind.execute(
+            sa.text(f'select count(*) from "{TABLE}"')  # noqa: S608 - constant table name
+        ).scalar()
+        if n:
+            raise DispositionFollowupsPreconditionError(
+                f"{TABLE} holds {n} row(s); downgrade refused. Turn "
+                "ENABLE_DEFERRED_DISPOSITION_PROCESSING off instead - the table "
+                "is inert without it."
+            )
     op.execute(f'DROP TABLE IF EXISTS "{TABLE}"')

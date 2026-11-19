@@ -117,6 +117,10 @@ SAFE_EXPLANATIONS = {
     CODE_DECISION_REFUSED: ("The decision was refused. The reason was returned with the request."),
 }
 
+RETRY_REFUSED_NOT_RECORDED = (
+    "The decision for this finding was not recorded, so there is no delivery "
+    "processing to retry. Open the finding and record the decision again."
+)
 RETRY_REFUSED_APPROVED = (
     "This finding has an approved decision that was never applied. Processing "
     "is not retried for it: open the finding and complete the decision first."
@@ -156,7 +160,10 @@ def fingerprint(decision: str, reason: str, value: str | None) -> str:
         [
             (decision or "").strip().upper(),
             (reason or "").strip(),
-            "" if value is None else str(value).strip(),
+            # NOT trimmed: the correction is written exactly as supplied, so
+            # two values that differ only in whitespace are different decisions.
+            # The leading marker keeps "no value" distinct from an empty one.
+            "-" if value is None else "v" + str(value),
         ]
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -300,7 +307,10 @@ def dto(row: F) -> dict[str, Any]:
         "message": _STATE_MESSAGES.get(row.state) or explanation(row),
         "safe_explanation": explanation(row),
         "error_code": row.error_code if row.state in (fm.STATE_FAILED, fm.STATE_REFUSED) else None,
-        "can_retry": row.state == fm.STATE_FAILED,
+        # Processing failures only. A row that failed because its DECISION
+        # was interrupted has no recorded decision to process (a recorded one
+        # is queued by recovery, not left FAILED).
+        "can_retry": row.state == fm.STATE_FAILED and row.error_code in PROCESSING_CODES,
         "intake_id": str(row.intake_id),
         "issue_id": str(row.issue_id) if row.issue_id else None,
         "source_record_id": str(row.source_record_id) if row.source_record_id else None,
@@ -610,6 +620,62 @@ async def _guarded_release(db, intake_id, record_ids) -> list[Any]:
     return [rid for (rid,) in result.all()]
 
 
+async def has_approved_unapplied(db, source_record_id) -> bool:
+    """Does this record carry a finding that is APPROVED but not yet applied?
+    Such a record is never released (see `_guarded_release`)."""
+    from app.tefca_registry.rce import models as m
+
+    if source_record_id is None:
+        return False
+    return bool(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(m.RceIssue)
+                .where(
+                    m.RceIssue.source_record_id == source_record_id,
+                    m.RceIssue.resolution == "APPROVED",
+                )
+            )
+        ).scalar()
+    )
+
+
+async def close_after_request_error(
+    row_id, issue_id, *, error_detail: str
+) -> dict[str, Any] | None:
+    """A request failed AFTER it may have committed. Same rule as the sweeper,
+    applied at once: if the finding reached a terminal resolution the decision
+    IS recorded, so only its delivery work is missing -> QUEUED, `recovered`
+    (the decision is never replayed). Anything else is FAILED
+    `DECISION_ERROR` and waits for a person. Fresh session; RECEIVED rows only.
+    """
+    from app.core.database import async_session_maker
+    from app.tefca_registry.rce import curation
+    from app.tefca_registry.rce import models as m
+
+    async with async_session_maker() as db:
+        recorded = False
+        if issue_id is not None:
+            issue = await db.get(m.RceIssue, issue_id)
+            recorded = issue is not None and curation.is_terminal_resolution(issue.resolution)
+        now = _now()
+        values: dict[str, Any] = (
+            {"state": fm.STATE_QUEUED, "queued_at": now, "recovered": True}
+            if recorded
+            else {"state": fm.STATE_FAILED, "failed_at": now, "error_code": CODE_DECISION_ERROR}
+        )
+        await db.execute(
+            update(F)
+            .where(F.id == row_id, F.state == fm.STATE_RECEIVED)
+            .values(error_detail=(error_detail or "")[:500] or None, **values)
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+        row = await db.get(F, row_id)
+        return dto(row) if row is not None else None
+
+
 async def rederive_record_hold(db, intake_id, source_record_id) -> dict[str, Any]:
     """Re-derive the hold of ONE record after a decision about it. Commits.
 
@@ -891,18 +957,35 @@ async def _next_intake(db) -> uuid.UUID | None:
     return None
 
 
-async def _claim(db, intake_id, batch_id) -> int:
-    """Move every QUEUED row of the delivery into this batch."""
+async def _claim(db, intake_id, batch_id, *, include_failed: bool = False) -> int:
+    """Move every QUEUED row of the delivery into this batch.
+
+    `include_failed` (the FIRST claim of a batch only) also takes rows whose
+    earlier processing FAILED. Their decisions are recorded and their records
+    are released, so this run's promotion would promote those records anyway;
+    taking the rows into the batch means each record is released, promoted
+    under its own reviewer's attribution and covered by the snapshot like any
+    other, instead of being promoted as SYSTEM behind a row left FAILED. If
+    this run fails too they return to FAILED (their attempts are exhausted).
+    """
+    from sqlalchemy import and_, or_
+
     now = _now()
+    claimable = F.state == fm.STATE_QUEUED
+    if include_failed:
+        claimable = or_(
+            claimable, and_(F.state == fm.STATE_FAILED, F.error_code.in_(PROCESSING_CODES))
+        )
     result = await db.execute(
         update(F)
-        .where(F.intake_id == intake_id, F.state == fm.STATE_QUEUED)
+        .where(F.intake_id == intake_id, claimable)
         .values(
             state=fm.STATE_PROCESSING,
             batch_id=batch_id,
             started_at=func.coalesce(F.started_at, now),
             heartbeat_at=now,
             attempt_count=F.attempt_count + 1,
+            failed_at=None,
             error_code=None,
             error_detail=None,
         )
@@ -929,6 +1012,18 @@ async def _others_pending(db, intake_id, batch_id) -> int:
     )
 
 
+def _owned_update(row_id, batch_id):
+    """UPDATE of one row that applies only while the row is still PROCESSING
+    in THIS batch. Completion, release and the reaper all write through a
+    condition like this, so none of them can overwrite what another committed
+    after the row was read."""
+    return (
+        update(F)
+        .where(F.id == row_id, F.batch_id == batch_id, F.state == fm.STATE_PROCESSING)
+        .execution_options(synchronize_session=False)
+    )
+
+
 async def _release_batch(
     batch_id, *, exc: BaseException | None, stage: str, requeue_without_penalty: bool = False
 ) -> None:
@@ -950,19 +1045,28 @@ async def _release_batch(
         now = _now()
         for row in rows:
             if requeue_without_penalty:
-                row.state = fm.STATE_QUEUED
-                row.attempt_count = max(0, (row.attempt_count or 1) - 1)
-                row.batch_id = None
+                values: dict[str, Any] = {
+                    "state": fm.STATE_QUEUED,
+                    "attempt_count": max(0, (row.attempt_count or 1) - 1),
+                    "batch_id": None,
+                }
             elif (row.attempt_count or 0) < MAX_ATTEMPTS:
-                row.state = fm.STATE_QUEUED
-                row.batch_id = None
-                row.error_code = CODE_PROCESSING_ERROR
-                row.error_detail = detail[:500]
+                values = {
+                    "state": fm.STATE_QUEUED,
+                    "batch_id": None,
+                    "error_code": CODE_PROCESSING_ERROR,
+                    "error_detail": detail[:500],
+                }
             else:
-                row.state = fm.STATE_FAILED
-                row.failed_at = now
-                row.error_code = CODE_RETRIES_EXHAUSTED
-                row.error_detail = detail[:500]
+                values = {
+                    "state": fm.STATE_FAILED,
+                    "failed_at": now,
+                    "error_code": CODE_RETRIES_EXHAUSTED,
+                    "error_detail": detail[:500],
+                }
+            # Only while the row is still this batch's: a reaper that already
+            # took it back is not overwritten.
+            await db.execute(_owned_update(row.id, batch_id).values(**values))
         await db.commit()
 
 
@@ -977,16 +1081,24 @@ async def _complete_batch(db, intake_id, batch_id, snapshot) -> int:
         .all()
     )
     now = _now()
+    completed = 0
     for row in rows:
+        values: dict[str, Any] = {
+            "state": fm.STATE_COMPLETED,
+            "completed_at": now,
+            "heartbeat_at": now,
+            "error_code": None,
+            "error_detail": None,
+        }
         if row.source_record_id is not None:
-            row.record_status_after = (
+            values["record_status_after"] = (
                 await db.execute(
                     select(m.RceCuratedRecord.record_status)
                     .where(m.RceCuratedRecord.source_record_id == row.source_record_id)
                     .limit(1)
                 )
             ).scalar_one_or_none() or row.record_status_after
-            row.disposition_event_id = (
+            values["disposition_event_id"] = (
                 await db.execute(
                     select(tm.RceDispositionEvent.id)
                     .where(tm.RceDispositionEvent.source_record_id == row.source_record_id)
@@ -994,34 +1106,16 @@ async def _complete_batch(db, intake_id, batch_id, snapshot) -> int:
                     .limit(1)
                 )
             ).scalar_one_or_none()
-        row.state = fm.STATE_COMPLETED
-        row.completed_at = now
-        row.heartbeat_at = now
-        row.error_code = None
-        row.error_detail = None
         if snapshot is not None:
-            row.snapshot_id = snapshot.id
-            row.snapshot_passed = bool(snapshot.passed)
-    # This run re-derived the whole delivery, so it also covers earlier rows
-    # whose own delivery-level run failed. Their decisions were never in doubt.
-    await db.execute(
-        update(F)
-        .where(
-            F.intake_id == intake_id, F.state == fm.STATE_FAILED, F.error_code.in_(PROCESSING_CODES)
-        )
-        .values(
-            state=fm.STATE_COMPLETED,
-            completed_at=now,
-            recovered=True,
-            snapshot_id=(snapshot.id if snapshot is not None else None),
-            snapshot_passed=(bool(snapshot.passed) if snapshot is not None else None),
-            error_code=None,
-            error_detail=None,
-        )
-        .execution_options(synchronize_session=False)
-    )
+            values["snapshot_id"] = snapshot.id
+            values["snapshot_passed"] = bool(snapshot.passed)
+        result = await db.execute(_owned_update(row.id, batch_id).values(**values))
+        completed += int(result.rowcount or 0)
+    # Rows of OTHER records that are FAILED stay FAILED and retryable: this
+    # run released and promoted only its own batch's records, so it does not
+    # vouch for theirs.
     await db.commit()
-    return len(rows)
+    return completed
 
 
 #: Test seam: called with the stage name just before each stage runs. A test
@@ -1055,8 +1149,13 @@ async def _run_batch(intake_id, batch_id, lock: DeliveryLock) -> dict[str, Any]:
 
         async def drain() -> None:
             nonlocal stage
-            for _ in range(MAX_DRAIN_ROUNDS):
+            for round_no in range(MAX_DRAIN_ROUNDS):
                 out["drain_rounds"] += 1
+                # A dead lock connection means Postgres released the lock and
+                # another holder may be writing this delivery: stop before the
+                # next write stage rather than at the snapshot only.
+                if not await lock.held():
+                    raise RuntimeError("delivery lock lost during the run")
                 async with async_session_maker() as db:
                     # Holds first, for THIS BATCH'S records only. A promotion
                     # reads what blocks each record once, at its start; one
@@ -1089,6 +1188,12 @@ async def _run_batch(intake_id, batch_id, lock: DeliveryLock) -> dict[str, Any]:
                     await promotion.promote_delivery(
                         db, intake_id, actor="SYSTEM", human_attribution=lookup
                     )
+                    # Rows claimed here are processed by the NEXT round. The
+                    # last round therefore claims nothing: later arrivals stay
+                    # QUEUED for the next batch instead of being marked
+                    # completed by a run that never released or promoted them.
+                    if round_no == MAX_DRAIN_ROUNDS - 1:
+                        return
                     if not await _claim(db, intake_id, batch_id):
                         return
 
@@ -1154,6 +1259,8 @@ async def _run_batch(intake_id, batch_id, lock: DeliveryLock) -> dict[str, Any]:
             out["snapshot_id"] = str(snapshot.id)
             out["snapshot_passed"] = bool(snapshot.passed)
         stage = "COMPLETE"
+        if not await lock.held():
+            raise RuntimeError("delivery lock lost before completion was recorded")
         async with async_session_maker() as done:
             out["completed"] = await _complete_batch(done, intake_id, batch_id, snapshot)
         out["outcome"] = "COMPLETED"
@@ -1182,7 +1289,7 @@ async def process_next() -> dict[str, Any] | None:
             if not lock.acquired:
                 return {"intake_id": str(intake_id), "outcome": "DELIVERY_BUSY"}
             batch_id = uuid.uuid4()
-            if not await _claim(db, intake_id, batch_id):
+            if not await _claim(db, intake_id, batch_id, include_failed=True):
                 return None
             beat = _Heartbeat(batch_id, lock)
             await beat.start()
@@ -1245,15 +1352,29 @@ async def reap_stale_processing(
         now = _now()
         for row in rows:
             if (row.attempt_count or 0) < MAX_ATTEMPTS:
-                row.state = fm.STATE_QUEUED
-                row.error_code = CODE_WORKER_LOST
+                values: dict[str, Any] = {"state": fm.STATE_QUEUED, "error_code": CODE_WORKER_LOST}
             else:
-                row.state = fm.STATE_FAILED
-                row.failed_at = now
-                row.error_code = CODE_RETRIES_EXHAUSTED
-            row.error_detail = "reaped: no heartbeat"
-            row.batch_id = None
-            reaped.append({"id": str(row.id), "state": row.state})
+                values = {
+                    "state": fm.STATE_FAILED,
+                    "failed_at": now,
+                    "error_code": CODE_RETRIES_EXHAUSTED,
+                }
+            # Only if the row is STILL processing, still in the batch that was
+            # observed and still silent: a worker that completed it, or beat
+            # again, between the read above and this write is left alone.
+            result = await db.execute(
+                update(F)
+                .where(
+                    F.id == row.id,
+                    F.state == fm.STATE_PROCESSING,
+                    F.batch_id.is_not_distinct_from(row.batch_id),
+                    F.heartbeat_at < cutoff,
+                )
+                .values(error_detail="reaped: no heartbeat", batch_id=None, **values)
+                .execution_options(synchronize_session=False)
+            )
+            if result.rowcount:
+                reaped.append({"id": str(row.id), "state": values["state"]})
         if reaped:
             await db.commit()
             logger.warning("reaped %d stale disposition follow-up row(s)", len(reaped))
@@ -1326,17 +1447,38 @@ async def retry(db, row_id, *, actor: str) -> dict[str, Any]:
     if row.state != fm.STATE_FAILED:
         raise FollowupRefused(f"Processing is {row.state}; only FAILED can be retried.")
     if row.issue_id is not None:
+        from app.tefca_registry.rce import curation
+
         issue = await db.get(m.RceIssue, row.issue_id)
         if issue is not None and issue.resolution == "APPROVED":
             raise FollowupRefused(RETRY_REFUSED_APPROVED)
-    row.state = fm.STATE_QUEUED
-    row.queued_at = _now()
-    row.attempt_count = 0
-    row.batch_id = None
-    row.failed_at = None
-    row.error_code = None
-    row.error_detail = f"retry requested by {actor}"[:500]
+        # Retry processes the delivery work of a RECORDED decision. A row whose
+        # request was interrupted before the finding was settled has no
+        # decision to process: completing it would report work that never
+        # applied what was asked.
+        if row.error_code not in PROCESSING_CODES and not (
+            issue is not None and curation.is_terminal_resolution(issue.resolution)
+        ):
+            raise FollowupRefused(RETRY_REFUSED_NOT_RECORDED)
+    # One atomic FAILED -> QUEUED: a second retry, or a worker that already
+    # claimed the row, finds nothing to change and is told so.
+    result = await db.execute(
+        update(F)
+        .where(F.id == row_id, F.state == fm.STATE_FAILED)
+        .values(
+            state=fm.STATE_QUEUED,
+            queued_at=_now(),
+            attempt_count=0,
+            batch_id=None,
+            failed_at=None,
+            error_code=None,
+            error_detail=f"retry requested by {actor}"[:500],
+        )
+        .execution_options(synchronize_session=False)
+    )
     await db.commit()
+    if not result.rowcount:
+        raise FollowupRefused("Processing was already retried or is no longer FAILED.")
     await db.refresh(row)
     return dto(row)
 

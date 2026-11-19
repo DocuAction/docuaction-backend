@@ -424,6 +424,9 @@ async def _fallback_status(db, job) -> Dict[str, Any]:
 
     events = await stage_events.timeline(db, job.id)
     summary = stage_events.summarise(events)
+    # Freshness first, then the snapshot it qualifies (see the detail route).
+    from app.tefca_registry.rce import disposition_followups as _followups
+    disposition_processing = await _followups.summary(db, job.source_intake_id)
     snapshot = await latest_snapshot(db, job.id)
     snapshot_dict = snapshot.to_dict() if snapshot is not None else None
 
@@ -448,11 +451,10 @@ async def _fallback_status(db, job) -> Dict[str, Any]:
         outcome_code=outcome["code"],
         snapshot_passed=bool(snapshot_dict and snapshot_dict.get("passed")),
         **review)
-    from app.tefca_registry.rce import disposition_followups as _followups
     return {"processing_outcome": outcome, "review_state": review_state,
             "derived_by": "delivery_routes._fallback_status",
             "snapshot": snapshot_dict, "timeline_summary": summary,
-            "disposition_processing": await _followups.summary(db, intake_id)}
+            "disposition_processing": disposition_processing}
 
 
 async def _unresolved_findings(db, intake_id) -> int:
@@ -693,6 +695,12 @@ async def delivery_job_detail(
     if reviewer_ok and intake is not None:
         exceptions_idx = len(fanout)
         fanout.append(_own_session(_exceptions_block, intake_id))
+    # Read BEFORE the snapshot it qualifies. Read after, a decision that
+    # completed in between would label an OLDER snapshot "current"; read
+    # first, the worst case is a newer snapshot shown as "not current" until
+    # the next refresh.
+    from app.tefca_registry.rce import disposition_followups as _followups
+    disposition_processing = await _followups.summary(db, intake_id)
     results = await asyncio.gather(*fanout)
     events, status, (snapshot, history_count), reports, verification = results[:5]
     exceptions_block_value = results[exceptions_idx] if exceptions_idx is not None else None
@@ -772,9 +780,6 @@ async def delivery_job_detail(
             blocks["audit"] = await _audit_block(db, job_id, intake_id)
         else:
             deferred_blocks.append("audit")
-
-    from app.tefca_registry.rce import disposition_followups as _followups
-    disposition_processing = await _followups.summary(db, intake_id)
 
     availability = {
         block: _availability(block, job_state=job_state, intake_id=intake_id,
@@ -2377,7 +2382,15 @@ async def post_issue_disposition(
                 except Exception as rollback_exc:  # noqa: BLE001
                     logger.warning("rollback after a failed disposition failed: %s",
                                    type(rollback_exc).__name__)
-                await _close_pending(fum.STATE_FAILED, followups.CODE_DECISION_ERROR, exc)
+                # The decision may already be recorded (a failure after the
+                # last commit). If so only its delivery work is missing and it
+                # is queued; otherwise the row is FAILED. Never replayed.
+                try:
+                    await followups.close_after_request_error(
+                        pending_id, issue_uuid, error_detail=type(exc).__name__)
+                except Exception as settle_exc:  # noqa: BLE001 - the sweeper will close it
+                    logger.warning("could not settle disposition follow-up: %s",
+                                   type(settle_exc).__name__)
             raise
 
         processing = None
@@ -2594,7 +2607,8 @@ async def _identifier_decision_slot(body: IdentifierDecisionBody,
     """Deferred processing: one decision per delivery at a time, for this route
     too. Held for the whole request. The delivery is named by the finding or
     the delivered line the decision is about; a decision that names neither
-    (the route allows it) cannot be scoped and is not serialized."""
+    (the route allows it) is scoped to the delivery of the open conflict it
+    answers. Resolved before anything is written."""
     from app.tefca_registry.rce import disposition_followups as followups
     from app.tefca_registry.rce import models as m
 
@@ -2606,6 +2620,15 @@ async def _identifier_decision_slot(body: IdentifierDecisionBody,
     if intake_id is None and record_uuid is not None:
         record = await db.get(m.RceSourceRecord, record_uuid)
         intake_id = record.source_intake_id if record is not None else None
+    if intake_id is None:
+        from app.tefca_registry.rce import identifier_decisions
+
+        entity_uuid = _as_uuid(body.entity_id)
+        if entity_uuid is not None:
+            latest = await identifier_decisions.latest_event(
+                db, entity_uuid, (body.identifier_type or "").strip().lower())
+            if latest is not None and latest.decision == identifier_decisions.CONFLICT_RAISED:
+                intake_id = latest.intake_id
     if not await followups.active(db):
         # Flag off: this route re-promotes and reconciles inline, so it is
         # refused while earlier decisions for the delivery are still being

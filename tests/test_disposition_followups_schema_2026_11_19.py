@@ -296,3 +296,33 @@ def test_flag_on_without_the_migration_is_inert(monkeypatch):
 
     asyncio.run(_exercise())
     assert ran == {"process": 0, "reap": 0, "sweep": 0}
+
+
+def test_an_offline_downgrade_is_refused_and_the_online_one_locks_before_it_counts(monkeypatch):
+    """`alembic downgrade --sql` cannot look at the table, so it must not emit a
+    DROP at all. Online, the table is locked before the row count that decides
+    whether the drop may happen."""
+    import importlib.util
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "20261118_disposition_followups.py"
+    )
+    spec = importlib.util.spec_from_file_location("disposition_followups_migration", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    emitted = []
+    monkeypatch.setattr(module, "_offline", lambda: True)
+    monkeypatch.setattr(module.op, "execute", lambda sql, *a, **k: emitted.append(str(sql)))
+    with pytest.raises(module.DispositionFollowupsPreconditionError):
+        module.downgrade()
+    assert emitted == []  # no DROP was generated
+
+    source = path.read_text(encoding="utf-8")
+    body = source[source.index("def downgrade") :]
+    assert "ACCESS EXCLUSIVE" in body
+    assert body.index("ACCESS EXCLUSIVE") < body.index("select count(*)") < body.index("DROP TABLE")

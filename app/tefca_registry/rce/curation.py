@@ -979,7 +979,8 @@ async def apply_disposition(db, issue_id, *, decision: str, reason: str,
         # and not yet promoted still needs the delivery work.
         await db.refresh(issue)
         if (curated.canonical_entity_id is None and curated.record_status != REJECTED
-                and is_terminal_resolution(issue.resolution) and not hold.get("blocking")):
+                and is_terminal_resolution(issue.resolution) and not hold.get("blocking")
+                and not await _followups.has_approved_unapplied(db, issue.source_record_id)):
             consequence_deferred = True
     if status_changed and not consequence_deferred:
         from app.tefca_registry.rce import promotion as promotion_module
