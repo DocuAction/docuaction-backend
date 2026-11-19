@@ -557,12 +557,24 @@ async def _migration_revision_isolated() -> str:
 
 async def persist_snapshot(db, intake_id, result: Dict[str, Any], *, job_id,
                            actor: str, trigger: str,
-                           reconstructed: bool = False) -> tm.RceReconciliationSnapshot:
+                           reconstructed: bool = False,
+                           extra_evidence: Optional[Dict[str, Any]] = None,
+                           commit: bool = True
+                           ) -> tm.RceReconciliationSnapshot:
     """Write one `RceReconciliationSnapshot` from a `reconcile_delivery` result.
 
     `sequence` is max+1 for the job. `source_evidence` records the population
     numbers and ids the verdict was computed from, so the snapshot can be
     re-verified against the rows later. Commits.
+
+    `extra_evidence` adds caller facts to `source_evidence` (which is outside
+    the snapshot hash): the deferred disposition worker records which accepted
+    decisions one snapshot covers. It cannot replace a computed key.
+
+    `commit=False` flushes instead of committing, so the caller can make the
+    snapshot and its own bookkeeping ONE transaction (the deferred disposition
+    worker: the snapshot and the completion of the decisions it covers are
+    durable together or not at all). Every other caller commits here.
     """
     if job_id is None:
         raise ValueError("a reconciliation snapshot must belong to a delivery job")
@@ -608,6 +620,8 @@ async def persist_snapshot(db, intake_id, result: Dict[str, Any], *, job_id,
             "corrections": result.get("corrections") or {},
             "area1_record_hashes": (result.get("area1_integrity") or {}).get(
                 "record_hashes"),
+            **{k: v for k, v in (extra_evidence or {}).items()
+               if k in ("disposition_followups",)},
         },
         actor=(actor or "SYSTEM")[:320], trigger=trigger,
         hash=snapshot_hash(equation, dimensions, checks),
@@ -617,6 +631,10 @@ async def persist_snapshot(db, intake_id, result: Dict[str, Any], *, job_id,
         reconstructed=bool(reconstructed),
     )
     db.add(snapshot)
+    if not commit:
+        await db.flush()
+        await db.refresh(snapshot)
+        return snapshot
     await db.commit()
     await db.refresh(snapshot)
     logger.info("reconciliation snapshot persisted",

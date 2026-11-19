@@ -135,6 +135,9 @@ async def delivery_dashboard(db, intake_id) -> Dict[str, Any]:
         "actions": _actions(status, recon, status_counts),
         "dispositions": dispositions,
         "snapshot": snapshot,
+        # Recorded analyst decisions whose promotion/reconciliation has not
+        # completed. While any exist, `snapshot` predates them (2026-11-18).
+        "disposition_processing": await _disposition_processing(db, intake.id),
     }
 
 
@@ -355,6 +358,11 @@ async def _dispositions(db, intake_id, received) -> Dict[str, Any]:
         logger.info("dashboard dispositions unavailable for %s: %s", intake_id,
                     type(exc).__name__)
         return {"equation": None, "note": "Disposition counts unavailable."}
+
+
+async def _disposition_processing(db, intake_id) -> Dict[str, Any]:
+    from app.tefca_registry.rce import disposition_followups
+    return await disposition_followups.summary(db, intake_id)
 
 
 async def _latest_snapshot(db, job) -> Optional[Dict[str, Any]]:

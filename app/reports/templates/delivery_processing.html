@@ -436,6 +436,11 @@
   written {{ ts(reconciliation.created_at) }} UTC by build {{ (reconciliation.build_sha or '')[:12] }} at migration {{ reconciliation.migration_revision }}.
   Result: {{ flag(reconciliation.passed, 'PASSED', 'FAILED') }}
 </p>
+{# Datasets stored before 2026-11-18 have no such key: read it with .get so they still render. #}
+{% set dp_followups = reconciliation.get('disposition_processing') or {} %}
+{% if dp_followups.get('notice') %}
+<p class="insufficient-data"><b>Reconciliation not current.</b> {{ dp_followups.get('notice') }}</p>
+{% endif %}
 <table class="dp-fixed dp-keep">
   {{ cols([30, 20, 50]) }}
   <caption>Accounting equation as persisted in the pinned snapshot: Received = Created + Updated + Matched/Unchanged + Held + Rejected + Missing Key + Excluded</caption>

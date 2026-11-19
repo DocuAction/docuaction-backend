@@ -104,6 +104,9 @@ TRACEABILITY = ["rce_delivery_stage_events", "rce_disposition_events", "rce_reco
                 # 20261014_iqvia_advisory_assess: append-only evidence, SELECT+INSERT
                 "iqvia_advisory_assessment"]
 AREA1_FINAL = AREA1_PRESENT + ["rce_delivery_jobs"] + TRACEABILITY + [
+    # 20261118_disposition_followups: app SELECT+INSERT+UPDATE by grant, no
+    # DELETE; kept owner-owned so that grant still binds after FINALIZE.
+    "rce_disposition_followups",
     # 20261108_source_policy: owner-owned policy storage, app SELECT only,
     # ships empty/inactive — deliberately added to the owner inventory.
     "rce_source_policies",

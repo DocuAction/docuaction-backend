@@ -252,9 +252,15 @@ class SowProgressDataService:
     async def _reconciliation(self, job) -> Dict[str, Any]:
         from app.tefca_registry.rce import reconciliation
         snap = await reconciliation.latest_snapshot(self.db, getattr(job, "id", None)) if job is not None else None
+        from app.tefca_registry.rce import disposition_followups
+        processing = await disposition_followups.summary(
+            self.db, getattr(job, "source_intake_id", None))
+        extra = {"disposition_processing": processing,
+                 "current": bool(processing.get("reconciliation_current", True))}
         if snap is None:
-            return {"available": False, "passed": None, "received": None, "sequence": None, "hash": None}
-        return {"available": True, "passed": bool(snap.passed), "received": snap.received,
+            return {"available": False, "passed": None, "received": None, "sequence": None,
+                    "hash": None, **extra}
+        return {**extra, "available": True, "passed": bool(snap.passed), "received": snap.received,
                 "sequence": snap.sequence, "hash": getattr(snap, "hash", None) or getattr(snap, "snapshot_hash", None),
                 "id": str(snap.id), "created_at": snap.created_at.isoformat() if snap.created_at else None}
 
@@ -569,6 +575,8 @@ class SowProgressDataService:
             limitations.append(f"{len(unclassified):,} open case(s) have no determination yet and are excluded from the B1–B4 table.")
         if not recon.get("available"):
             limitations.append("No persisted reconciliation snapshot for the delivery; reconciliation status is 'not on record'.")
+        if (recon.get("disposition_processing") or {}).get("notice"):
+            limitations.append(recon["disposition_processing"]["notice"])
         unresolved = sum(1 for r in scope_rows if r["qhin"] in ("Unresolved", "Not linked"))
         if unresolved:
             limitations.append(f"{unresolved:,} reviewed case(s) could not be attributed to a QHIN (no active managed_by_qhin edge).")

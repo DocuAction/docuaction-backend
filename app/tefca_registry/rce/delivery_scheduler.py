@@ -169,6 +169,13 @@ def start_delivery_scheduler():
         from app.tefca_registry.rce import automated_verification
         automated_verification.register_with_scheduler(_scheduler)
 
+        # Delivery-level processing after an analyst decision (2026-11-18).
+        # Unconditional, like the reaper above: work that was accepted must be
+        # finished even if ENABLE_DEFERRED_DISPOSITION_PROCESSING is later
+        # turned off. The ticks are no-ops while nothing is queued.
+        from app.tefca_registry.rce import disposition_followups
+        disposition_followups.register_with_scheduler(_scheduler)
+
         _scheduler.start()
         logger.info("delivery scheduler started — poller %ss, reaper %ss",
                     POLL_INTERVAL_SECONDS, REAP_INTERVAL_SECONDS)
