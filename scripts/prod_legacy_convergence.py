@@ -616,6 +616,10 @@ MANAGED_CHAIN_CREATES = {
     "iqvia_advisory_comparison_outcome",
     # 20261108_source_policy: SELECT-only for the app; owner-owned; ships empty.
     "rce_source_policies",
+    # 20261118_disposition_followups -- SELECT+INSERT+UPDATE job bookkeeping (the
+    # worker updates state and heartbeat), so app-owned at FINALIZE like the
+    # recheck and IQVIA job tables. Not append-only evidence, not Area-1.
+    "rce_disposition_followups",
 }
 # Tables the 20260917 revision declares FOREIGN KEYS to that docuaction_app owns
 # in PROD and that no pending revision ALTERs (so they are not re-owned). CREATE

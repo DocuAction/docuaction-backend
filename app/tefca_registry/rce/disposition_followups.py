@@ -332,6 +332,50 @@ async def store_exists(db) -> bool:
     return (await db.execute(text(f"SELECT to_regclass('public.{fm.TABLE}')"))).scalar() is not None
 
 
+# ── admission while earlier work is still outstanding (flag OFF) ─────────────
+#
+# The worker finishes accepted work whether or not the flag is on. So after the
+# flag is turned off there can be a window in which rows are still QUEUED or
+# PROCESSING. A synchronous save in that window would run its own
+# whole-delivery promotion and reconciliation at the same time as the worker
+# (it does not take the delivery lock) and would stamp its own reviewer on
+# records other reviewers released. It is therefore refused, having written
+# nothing, until the delivery has drained. Deferred saves are not affected:
+# they queue behind the work already there.
+
+PROCESSING_PENDING_CODE = "DELIVERY_PROCESSING_PENDING"
+PROCESSING_PENDING_MESSAGE = (
+    "Earlier decisions for this delivery are still being processed. Nothing was "
+    "recorded for this request. Wait until delivery processing completes, then "
+    "save again."
+)
+
+
+async def pending_count(db, intake_id) -> int:
+    """Accepted-but-unfinished rows for a delivery. 0 when the table is absent."""
+    if intake_id is None:
+        return 0
+    try:
+        if not await store_exists(db):
+            return 0
+    except Exception:  # noqa: BLE001 - never fail a save on this read
+        return 0
+    try:
+        iid = intake_id if isinstance(intake_id, uuid.UUID) else uuid.UUID(str(intake_id))
+    except (ValueError, TypeError):
+        return 0
+    return int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(F)
+                .where(F.intake_id == iid, F.state.in_(fm.PENDING_STATES))
+            )
+        ).scalar()
+        or 0
+    )
+
+
 # ── disclosure ───────────────────────────────────────────────────────────────
 
 _EMPTY_SUMMARY = {

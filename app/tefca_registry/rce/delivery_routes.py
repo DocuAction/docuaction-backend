@@ -2273,6 +2273,13 @@ async def post_issue_disposition(
     from app.tefca_registry.rce import disposition_followups as followups
 
     deferred = apply is not None and await followups.active(db)
+    if not deferred and await followups.pending_count(db, issue.source_intake_id):
+        # Flag off while earlier decisions are still being processed: a
+        # synchronous save would promote and reconcile the whole delivery at
+        # the same time as the worker. Refused before anything is written.
+        refusal = HTTPException(409, followups.PROCESSING_PENDING_MESSAGE)
+        refusal.code = followups.PROCESSING_PENDING_CODE
+        raise refusal
     pending_row = None
     if deferred:
         idem_key = followups.clean_key(request.headers.get("Idempotency-Key"))
@@ -2591,9 +2598,6 @@ async def _identifier_decision_slot(body: IdentifierDecisionBody,
     from app.tefca_registry.rce import disposition_followups as followups
     from app.tefca_registry.rce import models as m
 
-    if not await followups.active(db):
-        yield None
-        return
     intake_id = None
     issue_uuid, record_uuid = _as_uuid(body.issue_id), _as_uuid(body.source_record_id)
     if issue_uuid is not None:
@@ -2602,6 +2606,16 @@ async def _identifier_decision_slot(body: IdentifierDecisionBody,
     if intake_id is None and record_uuid is not None:
         record = await db.get(m.RceSourceRecord, record_uuid)
         intake_id = record.source_intake_id if record is not None else None
+    if not await followups.active(db):
+        # Flag off: this route re-promotes and reconciles inline, so it is
+        # refused while earlier decisions for the delivery are still being
+        # processed (see `disposition_followups.pending_count`).
+        if await followups.pending_count(db, intake_id):
+            refusal = HTTPException(409, followups.PROCESSING_PENDING_MESSAGE)
+            refusal.code = followups.PROCESSING_PENDING_CODE
+            raise refusal
+        yield None
+        return
     if intake_id is None:
         yield None
         return

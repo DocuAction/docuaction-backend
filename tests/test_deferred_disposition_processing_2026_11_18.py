@@ -85,11 +85,20 @@ def _module_cleanup():
 
 @pytest.fixture
 def deferred(monkeypatch):
+    """The feature enabled, with an EMPTY queue before and after the test.
+
+    The worker serves the oldest queued delivery first and the isolated
+    database is shared by every test module, so a row another test left queued
+    would be served ahead of this test's own. Draining first makes "one tick"
+    mean this test's delivery; draining afterwards leaves nothing behind."""
     monkeypatch.setenv(FLAG, "true")
     from app.tefca_registry.rce import disposition_followups as followups
 
     monkeypatch.setattr(followups, "_stage_hook", None)
-    return followups
+    run(followups.drain_all())
+    yield followups
+    followups._stage_hook = None
+    run(followups.drain_all())
 
 
 def correct(client, issue_id, *, role="reviewer", key=None, value=None, reason="synthetic check"):
@@ -251,6 +260,24 @@ def facts(delivery, issue_id=None):
 
 def drain(followups):
     return run(followups.drain_all())
+
+
+def state_of(client, pid):
+    return client.get(
+        f"{BASE}/disposition-processing/{pid}", headers=headers_for("reviewer")
+    ).json()["processing"]["state"]
+
+
+def tick_until_settled(client, followups, pid, ticks=12):
+    """Run the scheduler's OWN poll tick until this row is no longer QUEUED.
+
+    One tick serves one delivery, oldest queued first, and the isolated
+    database is shared across test modules: a tick may legitimately serve a
+    row another test left queued before it reaches this one."""
+    for _ in range(ticks):
+        run(followups._poll_tick())
+        if state_of(client, pid) != "QUEUED":
+            return
 
 
 # ── normal completion ────────────────────────────────────────────────────────
@@ -1225,3 +1252,148 @@ def test_decisions_for_one_delivery_are_recorded_one_at_a_time(client, deferred,
     assert listing["items"] == []
 
     assert correct(client, issue_id).status_code == 202  # free again: accepted
+
+
+# ── the rollback window: the flag is OFF and accepted work is outstanding ────
+#
+# These are ACTUAL failure/recovery tests through the routes and the worker's
+# own tick functions. (The UI screenshots of a FAILED state were produced by a
+# disclosed state injection; they are not the evidence for recovery. These are.)
+#
+# Turning the flag off does not make the synchronous path a safe concurrent
+# fallback: its own race between overlapping saves is unchanged. What these
+# pin is narrower: accepted work is still finished, and a synchronous save
+# cannot run on top of it.
+
+
+def test_work_accepted_before_the_flag_is_turned_off_is_still_completed(
+    client, deferred, monkeypatch
+):
+    d = fresh_delivery()
+    issue_id = d["issue_ids"][0]
+    pid = correct(client, issue_id).json()["processing"]["id"]
+
+    monkeypatch.delenv(FLAG, raising=False)
+    assert deferred.enabled() is False
+    # the readers still say work is outstanding, and that deferral is now off
+    ledger = client.get(
+        f"{BASE}/deliveries/{d['intake_id']}/exceptions", headers=headers_for("reviewer")
+    ).json()
+    assert ledger["disposition_processing"]["pending"] == 1
+    assert ledger["disposition_processing"]["reconciliation_current"] is False
+    assert ledger["disposition_processing"]["deferred_enabled"] is False
+
+    tick_until_settled(client, deferred, pid)  # the scheduler's own tick, flag OFF
+    status = client.get(
+        f"{BASE}/disposition-processing/{pid}", headers=headers_for("reviewer")
+    ).json()
+    assert status["processing"]["state"] == "COMPLETED"
+    assert status["delivery"]["reconciliation_current"] is True
+    after = facts(d, issue_id)
+    assert after["record_status"] == "CORRECTED" and after["entity"] is not None
+    assert after["corrections"] == 1 and after["snapshots"] == 1
+
+
+def test_a_synchronous_save_is_refused_while_earlier_work_is_still_pending(
+    client, deferred, monkeypatch
+):
+    """Flag off with a decision still queued: a synchronous save on the same
+    delivery would promote and reconcile at the same time as the worker. It is
+    refused with its own code and writes nothing; once drained it is accepted."""
+    d = fresh_delivery()
+    first, second = d["issue_ids"][0], d["issue_ids"][2]
+    assert correct(client, first).status_code == 202
+
+    monkeypatch.delenv(FLAG, raising=False)
+    refused = correct(client, second, role="qalead")
+    assert refused.status_code == 409, refused.text
+    assert deferred.PROCESSING_PENDING_CODE in refused.text
+    assert deferred.PROCESSING_PENDING_MESSAGE in refused.text
+    untouched = facts(d, second)
+    assert untouched["resolution"] in (None, "OPEN") and untouched["record_status"] == "HELD"
+    assert untouched["corrections"] == 1 and untouched["snapshots"] == 0  # only the first decision
+
+    assert all(o["outcome"] == "COMPLETED" for o in drain(deferred))
+    assert facts(d, first)["snapshots"] == 1  # this delivery's earlier decision is done
+    accepted = correct(client, second, role="qalead")
+    assert accepted.status_code == 200, accepted.text  # synchronous again
+    assert "processing" not in accepted.json()
+    assert accepted.json()["result"]["re_promoted"] is True
+    done = facts(d, second)
+    assert done["record_status"] == "CORRECTED" and done["entity"] is not None
+    assert done["corrections"] == 2 and done["snapshots"] == 2
+
+
+def test_with_the_flag_off_a_dead_worker_is_still_reaped_and_the_work_resumes(
+    client, deferred, monkeypatch
+):
+    d = fresh_delivery()
+    issue_id = d["issue_ids"][0]
+    pid = correct(client, issue_id).json()["processing"]["id"]
+
+    async def _crash_after_claim():
+        from sqlalchemy import text
+
+        from app.core.database import async_session_maker
+
+        async with async_session_maker() as db:
+            await db.execute(
+                text(
+                    "UPDATE rce_disposition_followups SET state='PROCESSING', attempt_count=1, "
+                    "batch_id=gen_random_uuid(), heartbeat_at=now() - interval '1 hour' "
+                    "WHERE id = CAST(:i AS uuid)"
+                ),
+                {"i": pid},
+            )
+            await db.commit()
+
+    run(_crash_after_claim())
+    monkeypatch.delenv(FLAG, raising=False)
+    run(deferred._poll_tick())  # this row is not queued: its claim died with its worker
+    assert facts(d, issue_id)["snapshots"] == 0
+    run(deferred._reap_tick())  # the scheduler's own reaper, flag OFF
+    tick_until_settled(client, deferred, pid)
+    status = client.get(
+        f"{BASE}/disposition-processing/{pid}", headers=headers_for("reviewer")
+    ).json()["processing"]
+    assert status["state"] == "COMPLETED" and status["attempt_count"] == 2
+    after = facts(d, issue_id)
+    assert after["corrections"] == 1 and after["snapshots"] == 1 and after["entity"] is not None
+
+
+def test_with_the_flag_off_a_failure_after_promotion_committed_is_retried_not_reapplied(
+    client, deferred, monkeypatch
+):
+    d = fresh_delivery()
+    issue_id = d["issue_ids"][0]
+    pid = correct(client, issue_id).json()["processing"]["id"]
+    monkeypatch.delenv(FLAG, raising=False)
+    calls = {"n": 0}
+
+    async def fail_reconciliation_once(stage):
+        if stage == "RECONCILIATION":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("synthetic failure after promotion committed")
+
+    monkeypatch.setattr(deferred, "_stage_hook", fail_reconciliation_once)
+    run(deferred._poll_tick())  # the queue held only this delivery (see the fixture)
+    mid = facts(d, issue_id)
+    assert mid["entity"] is not None and mid["snapshots"] == 0  # promotion committed, no snapshot
+    status = client.get(
+        f"{BASE}/disposition-processing/{pid}", headers=headers_for("reviewer")
+    ).json()
+    assert status["processing"]["state"] == "QUEUED"
+    assert status["delivery"]["reconciliation_current"] is False
+
+    run(deferred._poll_tick())
+    after = facts(d, issue_id)
+    assert after["events"] == mid["events"]  # no second disposition event
+    assert after["entity"] == mid["entity"]  # no second entity
+    assert after["corrections"] == 1 and after["snapshots"] == 1
+    assert (
+        client.get(f"{BASE}/disposition-processing/{pid}", headers=headers_for("reviewer")).json()[
+            "processing"
+        ]["state"]
+        == "COMPLETED"
+    )

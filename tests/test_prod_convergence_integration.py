@@ -69,7 +69,13 @@ ABSENT = {"rce_source_intakes", "rce_source_records", "rce_ingestion_runs", "rce
           # or review_records (already ABSENT above) -- none of it could exist pre-chain
           "rce_preflight_run", "rce_preflight_finding", "rce_preflight_normalization",
           "rce_shadow_comparison", "rce_shadow_finding_delta", "rce_shadow_approval",
-          "rce_successor_publication_event"}
+          "rce_successor_publication_event",
+          # 20261118_disposition_followups: FKs to rce_source_intakes and rce_issues
+          # (both ABSENT above), so it could not exist before the chain either. Its
+          # model is registered with the traceability models, so it IS in the
+          # candidate metadata and must be named here or the fixture tries to create
+          # it before the tables it references.
+          "rce_disposition_followups"}
 ADDITIVE = {"audit_logs": ["event_type", "outcome", "correlation_id"], "tefca_import_history": ["file_hash"]}
 AREA1 = {"rce_source_records", "rce_source_intakes", "rce_ingestion_runs",
          "rce_rule_execution_history", "rce_delivery_jobs",
