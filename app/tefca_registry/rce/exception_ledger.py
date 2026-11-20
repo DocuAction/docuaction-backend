@@ -409,6 +409,12 @@ def _identifier_type(issue, latest_event) -> Optional[str]:
     return key if key in IDENTIFIER_TYPES else None
 
 
+def _cannot_correct_reason(issue) -> Optional[str]:
+    from app.tefca_registry.rce import curation
+
+    return curation.cannot_correct_reason(issue)
+
+
 def _normalized_value(row, field_name: Optional[str]):
     """The curated (Area 2) value for the field the finding is about."""
     if not field_name:
@@ -473,6 +479,12 @@ def _row(row, *, job_id, intake_id, histories, ident_events, assignees, legacy,
         "stage": row.stage,
         "description": issue.description,
         "correction_authority": issue.correction_authority,
+        # Whether "Correct with value" may be offered. False for a finding
+        # that never takes a value: a rule in `NON_CORRECTABLE_RULES` (the
+        # ZIP/state mismatch), NO_CORRECTION, or a field with no curated
+        # column. `correction_authority` above stays the stored value.
+        "can_correct": _cannot_correct_reason(issue) is None,
+        "cannot_correct_reason": _cannot_correct_reason(issue),
         "reason_code": (latest_disposition or {}).get("reason_code"),
         "created_at": _iso(issue.created_at),
         "status": issue.resolution,

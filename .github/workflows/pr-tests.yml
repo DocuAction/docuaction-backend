@@ -198,6 +198,7 @@ jobs:
             tests/test_deferred_disposition_processing_2026_11_18.py \
             tests/test_disposition_followups_schema_2026_11_19.py \
             tests/test_refused_correction_leaves_no_decision_2026_11_19.py \
+            tests/test_zip_state_finding_not_correctable_2026_11_19.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
       - name: Fail if any isolation test was skipped for want of a database
         run: |

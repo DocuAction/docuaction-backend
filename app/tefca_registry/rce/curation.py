@@ -49,7 +49,7 @@ from sqlalchemy import func, select
 from app.tefca_registry.rce import models as m
 from app.tefca_registry.rce import run_selection
 from app.tefca_registry.rce.field_map import FIELD_MAP_VERSION
-from app.tefca_registry.rce.quality_rules import AUTO_SAFE_RULES
+from app.tefca_registry.rce.quality_rules import AUTO_SAFE_RULES, NON_CORRECTABLE_RULES
 
 logger = logging.getLogger(__name__)
 
@@ -447,12 +447,47 @@ def is_terminal_resolution(resolution: Optional[str]) -> bool:
     return (resolution or "OPEN") in TERMINAL_RESOLUTIONS
 
 
+#: What the reviewer is told when a rule in `NON_CORRECTABLE_RULES` is asked
+#: for a correction (the API refusal and the sentence the UI shows). A rule in
+#: the set without a sentence of its own gets the general one.
+_NON_CORRECTABLE_REASON = {
+    "FMT-003": (
+        "A ZIP/state mismatch does not establish which of the two values is "
+        "wrong, so it cannot be corrected through this finding. Accept or "
+        "reject it here; correct the postal code or the state through the "
+        "finding for that field."),
+}
+_NON_CORRECTABLE_DEFAULT = "This finding cannot be corrected with a value."
+
+
+def cannot_correct_reason(issue) -> Optional[str]:
+    """Why this finding takes no corrected value, or None when it may take one.
+
+    The exception ledger sends this to the UI (`can_correct`), which then does
+    not offer "Correct with value". It answers from the same facts the refusals
+    use (`_refuse_unapprovable`, `_correction_column`), so the screen offers
+    what the API accepts. The stored `correction_authority` is not rewritten.
+    """
+    if issue.rule_id in NON_CORRECTABLE_RULES:
+        return _NON_CORRECTABLE_REASON.get(issue.rule_id, _NON_CORRECTABLE_DEFAULT)
+    if issue.correction_authority == NO_CORRECTION:
+        return ("This finding is recorded as evidence and the delivered value is "
+                "preserved. It cannot be corrected with a value.")
+    if _FIELD_TO_CURATED_COLUMN.get(issue.field_name) is None:
+        return (f"Field {issue.field_name!r} has no corrected-value path: it does "
+                f"not map to a curated column.")
+    return None
+
+
 def _refuse_unapprovable(issue, *, actor: str, qa_actor: Optional[str]) -> None:
     """The rules a finding must meet to reach APPROVED. Reads only its arguments.
 
     One definition, used where the transition is made (`transition_issue`) and
     before a correction's first write (`_refuse_unappliable_correction`).
     """
+    if issue.rule_id in NON_CORRECTABLE_RULES:
+        raise CorrectionRefused(
+            _NON_CORRECTABLE_REASON.get(issue.rule_id, _NON_CORRECTABLE_DEFAULT))
     if issue.correction_authority == NO_CORRECTION:
         raise CorrectionRefused(
             f"Issue {issue.issue_code} is NO_CORRECTION: the finding is "
@@ -614,6 +649,10 @@ async def apply_correction(db, issue_id, *, actor: str,
         raise CorrectionRefused(
             f"Issue {issue.issue_code} is {issue.resolution}, not APPROVED. "
             f"Only an approved correction may be applied.")
+    if issue.rule_id in NON_CORRECTABLE_RULES:
+        # An approval given before the rule was listed is not applied either.
+        raise CorrectionRefused(
+            _NON_CORRECTABLE_REASON.get(issue.rule_id, _NON_CORRECTABLE_DEFAULT))
     if issue.correction_authority == NO_CORRECTION:
         raise CorrectionRefused(
             f"Issue {issue.issue_code} is NO_CORRECTION and must not be applied.")
