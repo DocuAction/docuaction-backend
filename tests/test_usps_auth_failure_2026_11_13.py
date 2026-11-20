@@ -1,0 +1,514 @@
+"""USPS: a rejected credential is said to be a rejected credential, and is not retried.
+
+Cause of the DEV failure (recorded live 2026-10-29; re-confirmed 2026-11-13 by
+calling the token endpoint with placeholder values): `POST /oauth2/v3/token`
+answers HTTP 401 `{"error": "invalid_client", "error_description": "InvalidApiKey:
+The client application credentials provided in the request are missing, invalid,
+inactive or not approved for access."}`. The request format is the one USPS
+documents. Before this change the client kept only the status code, reported the
+address check as "request could not be completed", and asked for a token again
+on every call.
+
+Every response here is CONTROLLED (httpx.MockTransport) - no test calls USPS.
+The 401 body is the one USPS returned on 2026-11-13.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from types import SimpleNamespace
+
+import httpx
+import pytest
+
+from app.tefca_registry import usps_client as uc
+from app.tefca_registry.usps_client import USPSClient
+
+SECRET = "client-secret-do-not-log-xyz789"
+CLIENT_ID = "consumer-key-do-not-echo-123"
+INVALID_CLIENT = {
+    "error": "invalid_client",
+    "error_description": ("InvalidApiKey: The client application credentials provided in the "
+                          "request are missing, invalid, inactive or not approved for access."),
+    "error_uri": "https://datatracker.ietf.org/doc/html/rfc6749#page-45",
+}
+ADDRESS_OK = {"address": {"streetAddress": "123 N MAIN ST", "city": "SPRINGFIELD", "state": "VA",
+                          "ZIPCode": "22150", "ZIPPlus4": "1234"},
+              "additionalInfo": {"DPVConfirmation": "Y"}}
+
+
+class FakeClock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, seconds):
+        self.t += seconds
+
+
+def _client(handler, **kw) -> USPSClient:
+    kw.setdefault("environment", "production")     # never the machine's USPS_ENV
+    client = USPSClient(client_id=CLIENT_ID, client_secret=SECRET,
+                        transport=httpx.MockTransport(handler), **kw)
+    client.slept = []
+
+    async def _sleep(seconds):
+        client.slept.append(seconds)
+
+    client._sleep = _sleep
+    return client
+
+
+def _check(client, street="123 Main St"):
+    return asyncio.run(client.standardize(street, city="Springfield", state="VA"))
+
+
+def test_rejected_credentials_are_reported_as_such_and_not_asked_again():
+    calls = {"token": 0, "address": 0}
+
+    def handler(request):
+        if request.url.path == uc.OAUTH_ENDPOINT:
+            calls["token"] += 1
+            return httpx.Response(401, json=INVALID_CLIENT)
+        calls["address"] += 1
+        return httpx.Response(200, json=ADDRESS_OK)
+
+    clock = FakeClock()
+    client = _client(handler, clock=clock)
+    first = _check(client)
+    assert first.available is False and first.method == "usps_error"       # never "usps_api"
+    assert first.failure_kind == uc.FAILURE_CREDENTIALS_REJECTED
+    assert "rejected this deployment's credentials (invalid_client)" in first.error
+    assert "not a finding about the address" in first.error
+    assert first.standardized_street is None and first.dpv_confirmed is False
+
+    for _ in range(12):                                # a queue of reviews being opened
+        again = _check(client)
+        assert again.failure_kind == uc.FAILURE_CREDENTIALS_REJECTED and again.available is False
+    assert calls == {"token": 1, "address": 0}, "an authorization failure was retried"
+    assert client.slept == []                          # no backoff loop either
+    # the breaker measures USPS's health, not our settings: it stays closed
+    assert client.circuit.status == uc.CircuitBreaker.CLOSED
+
+    # Default payload (copied into each delivery job's stored readiness, readable
+    # by the viewer role): the status line only - no USPS detail, no setting names.
+    plain = client.health()
+    assert plain["status"] == "Authentication failed"
+    assert not {"auth_error", "auth_retry_in_s", "action_required"} & set(plain)
+
+    health = client.health(include_auth_detail=True)      # the administrator health route
+    assert health["status"] == "Authentication failed"
+    assert health["auth_error"] == {"http_status": 401, "usps_error": "invalid_client",
+                                    "usps_description": INVALID_CLIENT["error_description"],
+                                    "endpoint": uc.OAUTH_ENDPOINT, "environment": "production"}
+    assert 0 < health["auth_retry_in_s"] <= uc.AUTH_FAILURE_HOLD_S
+    assert "USPS_CLIENT_ID" in health["action_required"]
+    assert SECRET not in repr(health) and CLIENT_ID not in repr(health)
+
+
+def test_one_new_attempt_after_the_hold_and_a_good_credential_clears_the_state():
+    state = {"good": False, "token": 0}
+
+    def handler(request):
+        if request.url.path == uc.OAUTH_ENDPOINT:
+            state["token"] += 1
+            if state["good"]:
+                return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+            return httpx.Response(401, json=INVALID_CLIENT)
+        return httpx.Response(200, json=ADDRESS_OK)
+
+    clock = FakeClock()
+    client = _client(handler, clock=clock)
+    _check(client)
+    clock.advance(uc.AUTH_FAILURE_HOLD_S - 1)
+    _check(client)
+    assert state["token"] == 1                          # still inside the hold
+    clock.advance(2)
+    assert _check(client).failure_kind == uc.FAILURE_CREDENTIALS_REJECTED
+    assert state["token"] == 2                          # exactly one new attempt, then held again
+    _check(client)
+    assert state["token"] == 2
+
+    state["good"] = True
+    clock.advance(uc.AUTH_FAILURE_HOLD_S + 1)
+    ok = _check(client)
+    assert ok.available is True and ok.method == "usps_api" and ok.failure_kind is None
+    assert ok.dpv_confirmed is True and ok.zip4 == "1234"
+    health = client.health(include_auth_detail=True)
+    assert health["status"] == "Operational" and "auth_error" not in health
+
+
+@pytest.mark.parametrize("status,kind,address_calls", [
+    (403, uc.FAILURE_NOT_ENTITLED, 1),          # not retried
+    (400, uc.FAILURE_INVALID_REQUEST, 1),       # not retried
+    (404, uc.FAILURE_INVALID_REQUEST, 1),       # not retried
+    (429, uc.FAILURE_RATE_LIMITED, 1 + uc.MAX_RETRIES),     # bounded backoff, then says so
+    (503, uc.FAILURE_UPSTREAM, 1 + uc.MAX_RETRIES),
+])
+def test_each_unavailable_outcome_says_which_it_is_and_none_is_a_validation(status, kind, address_calls):
+    calls = {"address": 0}
+
+    def handler(request):
+        if request.url.path == uc.OAUTH_ENDPOINT:
+            return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+        calls["address"] += 1
+        return httpx.Response(status, json={"error": {"code": str(status)}})
+
+    client = _client(handler)
+    result = _check(client)
+    assert result.available is False and result.method == "usps_error"
+    assert result.failure_kind == kind and f"HTTP {status}" in result.error
+    assert result.dpv_confirmed is False and result.is_deliverable is False
+    assert calls["address"] == address_calls
+    assert len(client.slept) == address_calls - 1 and client.slept == list(uc.BACKOFF_SCHEDULE[:address_calls - 1])
+
+
+def test_not_configured_circuit_open_and_network_failure_are_distinct_kinds(monkeypatch):
+    monkeypatch.delenv("USPS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("USPS_CLIENT_SECRET", raising=False)
+    bare = USPSClient(transport=httpx.MockTransport(lambda r: httpx.Response(500)))
+    none = asyncio.run(bare.standardize("1 Main St", state="VA"))
+    assert (none.method, none.failure_kind) == ("usps_not_configured", uc.FAILURE_NOT_CONFIGURED)
+
+    def boom(request):
+        if request.url.path == uc.OAUTH_ENDPOINT:
+            return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+        raise httpx.ConnectTimeout("synthetic timeout")
+
+    client = _client(boom)
+    assert _check(client).failure_kind == uc.FAILURE_UPSTREAM
+    for _ in range(uc.CIRCUIT_FAILURE_THRESHOLD):
+        _check(client)
+    assert _check(client).failure_kind == uc.FAILURE_CIRCUIT_OPEN
+
+
+def test_the_rejection_is_logged_with_usps_reason_and_without_any_credential(caplog):
+    def handler(request):
+        return httpx.Response(401, json=INVALID_CLIENT)
+
+    client = _client(handler)
+    with caplog.at_level(logging.DEBUG):
+        _check(client)
+    text = caplog.text
+    assert "USPS token rejected" in text and "usps_error=invalid_client" in text and "http_status=401" in text
+    assert SECRET not in text and CLIENT_ID not in text
+
+
+async def test_workspace_shows_a_rejected_credential_as_unavailable_never_as_an_address_result(monkeypatch):
+    """The analyst's case view (GET /api/tefca/workflow/reviews/{id}/workspace ->
+    workspace._section_usps): the submitted address is shown untouched, there is no
+    USPS-observed address, and the reason is the deployment's credentials."""
+    from app.tefca_registry import workspace
+
+    client = _client(lambda request: httpx.Response(401, json=INVALID_CLIENT))
+    monkeypatch.setattr(uc, "_client", client)
+    source = SimpleNamespace(parsed={"address_line": "1 Synthetic Way", "address_city": "Testville",
+                                     "address_state": "MA", "address_postalCode": "02101",
+                                     "address_country": "USA"})
+    section = await workspace._section_usps(None, source, None)
+    assert section["available"] is False and section["status"] == "SOURCE_UNAVAILABLE"
+    assert section["failure_kind"] == uc.FAILURE_CREDENTIALS_REJECTED
+    assert section["method"] == "usps_error" and section["usps_observed_address"] is None
+    assert section["dpv_confirmed"] is False and section["is_deliverable"] is False
+    assert section["source_modified"] is False
+    assert section["onc_address"]["street"] == "1 Synthetic Way"          # submitted address preserved
+    assert "credentials" in section["error"] and SECRET not in repr(section)
+
+
+def test_a_rejected_token_on_the_half_open_probe_does_not_wedge_the_breaker():
+    """Breaker open after upstream failures; the cooldown passes; the one probe
+    allowed through meets a rejected credential. The probe slot must be given
+    back - otherwise every later call is refused until restart, even once USPS
+    accepts the credentials again."""
+    state = {"mode": "down", "token": 0}
+
+    def handler(request):
+        if request.url.path == uc.OAUTH_ENDPOINT:
+            state["token"] += 1
+            if state["mode"] == "rejected":
+                return httpx.Response(401, json=INVALID_CLIENT)
+            return httpx.Response(200, json={"access_token": f"t{state['token']}", "expires_in": 90})
+        if state["mode"] == "down":
+            return httpx.Response(500, json={})
+        return httpx.Response(200, json=ADDRESS_OK)
+
+    clock = FakeClock()
+    client = _client(handler, clock=clock)
+    for _ in range(uc.CIRCUIT_FAILURE_THRESHOLD):
+        _check(client)
+    assert client.circuit.status == uc.CircuitBreaker.OPEN
+    clock.advance(uc.CIRCUIT_COOLDOWN_S + 1)              # cooldown over; the cached token has expired too
+    state["mode"] = "rejected"
+    assert _check(client).failure_kind == uc.FAILURE_CREDENTIALS_REJECTED      # this WAS the probe
+    assert client.circuit._half_open is False, "the probe slot was never released"
+    state["mode"] = "up"                                   # the app is approved again
+    clock.advance(uc.AUTH_FAILURE_HOLD_S + 1)
+    recovered = _check(client)
+    assert recovered.available is True and recovered.method == "usps_api"
+    assert client.circuit.status == uc.CircuitBreaker.CLOSED
+
+
+def test_an_upstream_description_that_echoes_a_credential_is_scrubbed():
+    body = {"error": "invalid_client",
+            "error_description": f"client {CLIENT_ID} with secret {SECRET} is not\x07 approved\n" + "x" * 400}
+    client = _client(lambda request: httpx.Response(401, json=body))
+    result = _check(client)
+    health = client.health(include_auth_detail=True)
+    text = repr(health) + repr(result)
+    assert SECRET not in text and CLIENT_ID not in text
+    description = health["auth_error"]["usps_description"]
+    assert "[redacted]" in description and len(description) <= 200
+    assert "\x07" not in description and "\n" not in description
+
+
+def test_delivery_readiness_and_the_admin_route_ask_for_different_detail():
+    """The two callers of health(): the delivery runner (stored per job, viewer
+    readable) takes the default; only the admin health route opts in."""
+    import inspect
+
+    from app.api import admin_health
+    from app.tefca_registry.rce import delivery_runner
+
+    assert "health(include_auth_detail=True)" in inspect.getsource(admin_health._usps)
+    runner = inspect.getsource(delivery_runner)
+    assert "get_usps_client().health()" in runner and "include_auth_detail" not in runner
+
+
+# -- first CodeRabbit review of #215 (2026-11-14) ------------------------------
+
+def test_the_rejection_is_classified_on_usps_own_code_not_on_the_scrubbed_text():
+    """Before: the error code was scrubbed of the configured key BEFORE it was
+    compared. With client_id "client", `invalid_client` became
+    `invalid_[redacted]`, the comparison failed, no hold was recorded, and every
+    later check asked for a token again and counted against the breaker."""
+    calls = {"token": 0}
+
+    def handler(request):
+        if request.url.path == uc.OAUTH_ENDPOINT:
+            calls["token"] += 1
+            return httpx.Response(400, json=INVALID_CLIENT)      # 400, so only the code can classify it
+        return httpx.Response(200, json=ADDRESS_OK)
+
+    client = USPSClient(client_id="client", client_secret=SECRET, environment="production",
+                        transport=httpx.MockTransport(handler), clock=FakeClock())
+    first = asyncio.run(client.standardize("123 Main St", city="Springfield", state="VA"))
+    assert first.failure_kind == uc.FAILURE_CREDENTIALS_REJECTED
+    for _ in range(5):
+        again = asyncio.run(client.standardize("123 Main St", city="Springfield", state="VA"))
+        assert again.failure_kind == uc.FAILURE_CREDENTIALS_REJECTED
+    assert calls["token"] == 1, "a rejected credential was asked for again"
+    assert client.circuit.status == uc.CircuitBreaker.CLOSED
+    health = client.health(include_auth_detail=True)
+    assert health["status"] == "Authentication failed"
+    # What is SHOWN is still scrubbed of the configured key.
+    assert health["auth_error"]["usps_error"] == "invalid_[redacted]"
+    assert SECRET not in repr(health)
+
+
+@pytest.mark.parametrize("split", [
+    "\n", "\r", "\r\n", "\t", "\x00", "\x07", "\x1b", "\x7f",       # control characters
+    "​", "‍", "﻿", " ", "­",               # zero-width / format / separators
+    " ", "  \n  ", " ",                                       # white space
+])
+def test_a_credential_echoed_with_a_character_inserted_in_it_is_still_scrubbed(split, caplog):
+    """Before: the credential was replaced first and control characters were
+    dropped afterwards, so `client-<newline>secret-...` did not match the
+    replacement and then BECAME the complete secret once the newline was
+    dropped. It was stored in the auth detail and written to the log."""
+    broken_secret = SECRET[:7] + split + SECRET[7:]
+    broken_id = CLIENT_ID[:9] + split + CLIENT_ID[9:]
+    body = {"error": "invalid_client",
+            "error_description": f"client {broken_id} with secret {broken_secret} is not approved"}
+    client = _client(lambda request: httpx.Response(401, json=body))
+    with caplog.at_level(logging.DEBUG):
+        result = _check(client)
+    health = client.health(include_auth_detail=True)
+    description = health["auth_error"]["usps_description"]
+    for text in (repr(health), repr(result), caplog.text, description):
+        assert SECRET not in text and CLIENT_ID not in text
+        squeezed = "".join(ch for ch in text if ch.isalnum() or ch == "-")
+        assert SECRET not in squeezed and CLIENT_ID not in squeezed, split
+    assert description.count("[redacted]") == 2 and description.endswith("is not approved")
+
+
+@pytest.mark.parametrize("echo", [
+    SECRET.upper(),                                                # another case
+    SECRET.replace("-", "%2D"),                                    # percent-encoded
+    SECRET.replace("-", "%2d").replace("x", "%78"),
+])
+def test_a_credential_echoed_in_another_case_or_percent_encoded_is_scrubbed(echo, caplog):
+    body = {"error": "invalid_client", "error_description": f"secret {echo} is not approved"}
+    client = _client(lambda request: httpx.Response(401, json=body))
+    with caplog.at_level(logging.DEBUG):
+        _check(client)
+    health = client.health(include_auth_detail=True)
+    from urllib.parse import unquote
+    for text in (repr(health), caplog.text):
+        assert SECRET.lower() not in unquote(text).lower()
+    assert "[redacted]" in health["auth_error"]["usps_description"]
+
+
+def test_an_ordinary_description_is_shown_unchanged():
+    client = _client(lambda request: httpx.Response(401, json=INVALID_CLIENT))
+    _check(client)
+    detail = client.health(include_auth_detail=True)["auth_error"]
+    assert detail["usps_error"] == "invalid_client"
+    assert detail["usps_description"] == INVALID_CLIENT["error_description"]
+
+
+def test_the_test_client_does_not_read_the_machines_usps_env(monkeypatch):
+    """`_client` pins the environment: a developer machine that sets the
+    documented USPS_ENV=testing must not change what these tests assert."""
+    monkeypatch.setenv("USPS_ENV", "testing")
+    client = _client(lambda request: httpx.Response(401, json=INVALID_CLIENT))
+    assert client.environment == "production"
+    _check(client)
+    assert client.health(include_auth_detail=True)["auth_error"]["environment"] == "production"
+    explicit = _client(lambda request: httpx.Response(401, json=INVALID_CLIENT), environment="testing")
+    assert explicit.environment == "testing"
+
+
+# -- second CodeRabbit round on #215 (2026-11-14) ------------------------------
+
+_NOT_AN_ERROR_OBJECT = [
+    b"<html>Service Unavailable</html>",        # not JSON at all
+    b"",                                        # empty body
+    b"[\"invalid_client\"]",                    # JSON, but a list
+    b"\"invalid_client\"",                      # JSON, but a string
+    b"42",                                      # JSON, but a number
+    b"null",
+]
+
+
+@pytest.mark.parametrize("body", _NOT_AN_ERROR_OBJECT)
+@pytest.mark.parametrize("status", [400, 401, 500])
+def test_a_token_refusal_whose_body_is_not_an_error_object_is_an_unavailable_result(status, body):
+    """Before (introduced by the previous fix, 30b563d): `_oauth_error` returned
+    two values on the not-JSON and not-an-object paths while `_get_token` unpacked
+    three, so these responses raised ValueError into the caller instead of
+    producing an unavailable result - and a 401 recorded no hold."""
+    calls = {"token": 0, "address": 0}
+
+    def handler(request):
+        if request.url.path == uc.OAUTH_ENDPOINT:
+            calls["token"] += 1
+            return httpx.Response(status, content=body,
+                                  headers={"content-type": "application/json"})
+        calls["address"] += 1
+        return httpx.Response(200, json=ADDRESS_OK)
+
+    client = _client(handler, clock=FakeClock())
+    first = _check(client)                                  # must not raise
+    assert first.available is False and first.method == "usps_error"
+    assert first.standardized_street is None and calls["address"] == 0
+    again = _check(client)
+    assert again.available is False
+    health = client.health(include_auth_detail=True)
+    if status == 401:
+        # A 401 is a rejected credential whatever its body says: held, asked once.
+        assert first.failure_kind == uc.FAILURE_CREDENTIALS_REJECTED
+        assert again.failure_kind == uc.FAILURE_CREDENTIALS_REJECTED
+        assert calls["token"] == 1, "a rejected credential was asked for again"
+        assert health["status"] == "Authentication failed"
+        assert health["auth_error"]["http_status"] == 401
+        assert health["auth_error"]["usps_error"] is None
+        assert health["auth_error"]["usps_description"] is None
+        assert "authentication failed" in first.error
+    else:
+        # Not a credential verdict: no hold is recorded, the next check asks again.
+        assert first.failure_kind != uc.FAILURE_CREDENTIALS_REJECTED
+        assert calls["token"] == 2
+        assert health["status"] != "Authentication failed"
+    assert SECRET not in repr(health) and CLIENT_ID not in repr(health)
+
+
+def test_oauth_error_answers_three_values_on_every_path():
+    client = _client(lambda request: httpx.Response(200, json=ADDRESS_OK))
+    for response in (httpx.Response(401, content=b"not json"),
+                     httpx.Response(401, json=["a", "list"]),
+                     httpx.Response(401, json="a string"),
+                     httpx.Response(401, json=7),
+                     httpx.Response(401, json={}),
+                     httpx.Response(401, json={"error": 5, "error_description": ["x"]}),
+                     httpx.Response(401, json=INVALID_CLIENT)):
+        answer = client._oauth_error(response)
+        assert isinstance(answer, tuple) and len(answer) == 3, response.content
+
+
+def _squeezed(text: str) -> str:
+    return "".join(ch for ch in text if not ch.isspace() and ch.isprintable()).lower()
+
+
+@pytest.mark.parametrize("secret,text,gone", [
+    # the reviewer's case: the credential is a piece of the old marker text
+    ("redact", "re\ndact and re\ndact", "redact"),
+    ("redact", "redact redact re\tdact REDACT", "redact"),
+    ("redacted", "redacted and re dacted", "redacted"),
+    ("[redacted]", "x [redacted] y [reda\ncted] z", "[redacted]"),
+    ("ed", "ed and e\nd and ed", "ed"),
+    # overlapping and adjacent echoes
+    ("aa", "aaaa a\na aaa", "aa"),
+    ("abab", "ababab and ab\nabab", "abab"),
+    ("key-1", "key-1key-1 key-1\nkey-1", "key-1"),
+    # the marker TOGETHER with the text beside it must not spell the credential
+    ("]q", "]q q", "]q"),
+    ("d]x", "re d]x d]x x", "d]x"),
+])
+def test_every_echo_is_replaced_not_only_the_first(secret, text, gone):
+    """Before: after the first replacement the loop stopped whenever the
+    credential was contained in the marker text, so `re<newline>dact and
+    re<newline>dact` with the secret `redact` kept its second echo."""
+    out = uc._scrub_credentials(text, (secret,))
+    assert gone not in _squeezed(out), out
+    assert uc._scrub_credentials(out, (secret,)) == out, "scrubbing is stable"
+
+
+def test_the_marker_never_contains_a_configured_credential():
+    for secret in ("redact", "redacted", "[redacted]", "ed", "re", "[", "removed", "*"):
+        out = uc._scrub_credentials(f"00 {secret} 99", (secret,))
+        assert _squeezed(secret) not in _squeezed(out), (secret, out)
+        assert out.startswith("00 ") and out.endswith(" 99") and len(out) > 6, (secret, out)
+    # With an ordinary credential the marker is the usual one.
+    assert uc._scrub_credentials(f"secret {SECRET} here", (SECRET,)) == "secret [redacted] here"
+
+
+def test_both_credentials_echoed_in_one_text_more_than_once_are_all_replaced(caplog):
+    body = {"error": "invalid_client",
+            "error_description": (f"key {CLIENT_ID} secret {SECRET} again {CLIENT_ID[:5]}\n{CLIENT_ID[5:]} "
+                                  f"and {SECRET[:3]}\t{SECRET[3:]} and {SECRET.upper()}{CLIENT_ID} end")}
+    client = _client(lambda request: httpx.Response(401, json=body))
+    with caplog.at_level(logging.DEBUG):
+        result = _check(client)
+    health = client.health(include_auth_detail=True)
+    for text in (repr(health), repr(result), caplog.text):
+        assert SECRET.lower() not in _squeezed(text) and CLIENT_ID.lower() not in _squeezed(text)
+    description = health["auth_error"]["usps_description"]
+    assert description.startswith("key [redacted] secret [redacted] again [redacted] and [redacted] and")
+    assert description.endswith(" end") and len(description) <= 200
+
+
+def test_scrubbing_a_long_text_of_repeated_echoes_finishes_quickly():
+    import time as _time
+
+    text = ("re\ndact " * 20000) + "tail"
+    started = _time.perf_counter()
+    out = uc._scrub_credentials(text, ("redact",))
+    assert _time.perf_counter() - started < 5.0
+    assert "redact" not in _squeezed(out) and out.endswith("tail")
+
+
+@pytest.mark.parametrize("text,secrets", [
+    ("]#*", ("#", "]*")),                 # removing one credential joins its neighbours into another
+    ("a]#*b", ("#", "]*")),
+    ("xx]##*yy", ("#", "]*")),
+])
+def test_when_no_marker_is_safe_the_description_is_withheld_whole(text, secrets):
+    """Review finding 2026-11-14: with no usable marker the spans were removed,
+    the neighbours joined into a configured credential, and the fallback
+    returned that credential. It now fails closed: nothing is returned."""
+    out = uc._scrub_credentials(text, secrets)
+    squeezed = "".join(ch for ch in out if not ch.isspace())
+    assert all(secret not in squeezed for secret in secrets), out
+    assert out == ""
