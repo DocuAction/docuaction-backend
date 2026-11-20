@@ -177,7 +177,7 @@
             <tr>
               <td><b>Did processing finish?</b></td>
               <td>{% if outcome.code == 'COMPLETED_CLEAN' %}{{ chip('ok', outcome.value) }}{% elif outcome.code == 'COMPLETED_WITH_EXCEPTIONS' %}{{ chip('warn', outcome.value) }}{% else %}{{ chip('bad', outcome.value) }}{% endif %}</td>
-              <td class="q">{% if outcome.code == 'COMPLETED_CLEAN' %}All received records reconciled and no exceptions remain.{% elif outcome.code == 'COMPLETED_WITH_EXCEPTIONS' %}Records reconciled; {{ findings.open_high|number }} HIGH/CRITICAL finding(s) remain undecided.{% else %}{{ outcome.detail }}{% endif %}</td>
+              <td class="q">{% if outcome.code == 'COMPLETED_CLEAN' %}All received records reconciled. No HIGH/CRITICAL findings remain undecided.{% elif outcome.code == 'COMPLETED_WITH_EXCEPTIONS' %}Records reconciled; {{ findings.open_high|number }} HIGH/CRITICAL finding(s) remain undecided.{% else %}{{ outcome.detail }}{% endif %}</td>
             </tr>
             <tr>
               <td><b>What was found?</b></td>
