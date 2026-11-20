@@ -131,6 +131,89 @@ def file_sha256(path: Path, *, chunk_bytes: int = 1024 * 1024) -> str:
     return h.hexdigest()
 
 
+#: The one decoding of a staged reference file, shared with the preflight that
+#: gates it (see reference_preflight.REFERENCE_FILE_ENCODING). Before 2026-11-14
+#: this module opened the file as "utf-8": a leading UTF-8 byte-order mark,
+#: which the preflight tolerates (REF-SCH-010), stayed in the first column's
+#: name, no row carried the identity column, and every row was rejected.
+from app.tefca_registry.rce.reference_preflight import REFERENCE_FILE_ENCODING  # noqa: E402
+
+
+#: Which reader staged a snapshot's rows, recorded in the snapshot's metadata
+#: ("reference_reader") when staging starts. A snapshot holds the rows of ONE
+#: reader: a resume is allowed only where the recorded reader is this one, or
+#: where no reader is recorded and the earlier reader (plain "utf-8") provably
+#: read the file the same way - that is, the file has no leading byte-order
+#: mark. Change this value whenever a change to the read can change a row's
+#: keys, payload or hash.
+REFERENCE_READER = f"iqvia_import/{REFERENCE_FILE_ENCODING}"
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+
+class ReaderChangeRefused(ValueError):
+    """A resume into a snapshot whose staged rows came from a different reader.
+
+    Nothing is staged, rewritten or deleted. The snapshot stays PENDING, is
+    marked in its metadata ("reference_reader_refused") and can never
+    reconcile, so it can never be approved. This module has no way to discard
+    a PENDING snapshot's rows; what happens to it is an owner decision."""
+
+
+def _starts_with_utf8_bom(path) -> bool:
+    with open_no_follow(path, "rb") as fh:
+        return fh.read(3) == _UTF8_BOM
+
+
+async def _admit_reader(db, snapshot, *, model, path) -> None:
+    """Record this reader on the snapshot, or refuse the resume.
+
+    Decided BEFORE the preflight is recorded and before any row is staged."""
+    meta = dict(snapshot.metadata_ or {})
+    recorded = meta.get("reference_reader")
+    if recorded == REFERENCE_READER:
+        return
+    staged = int((await db.execute(
+        select(func.count()).select_from(model)
+        .where(model.source_snapshot_id == snapshot.id))).scalar() or 0)
+    # No recorded reader means the plain utf-8 reader, which differs from this
+    # one in exactly one case: a leading byte-order mark (it stayed in the
+    # first column's name, so that column was lost from every staged row).
+    differs = _starts_with_utf8_bom(path) if recorded is None else True
+    if staged and differs:
+        snapshot.metadata_ = {**meta, "reference_reader_refused": {
+            "code": "READER_CHANGED_AFTER_STAGING",
+            "rows_already_staged": staged,
+            "staged_by": recorded or "utf-8 (earlier reader, not recorded)",
+            "refused_by": REFERENCE_READER,
+            "refused_at": datetime.now(timezone.utc).isoformat()}}
+        await db.commit()
+        raise ReaderChangeRefused(
+            f"snapshot {snapshot.id}: {staged} row(s) were staged by an earlier reader that "
+            "kept a byte-order mark or read differently; resume refused, nothing staged or "
+            "changed. It cannot reconcile. No automated recovery: owner decision.")
+    meta.pop("reference_reader_refused", None)
+    snapshot.metadata_ = {**meta, "reference_reader": REFERENCE_READER}
+    await db.commit()
+
+
+def iter_reference_rows(path):
+    """(line number, row) for every data row of a staged reference file - the
+    ONLY reader of that file's rows in this module.
+
+    Decoded with REFERENCE_FILE_ENCODING, so a byte-order mark at the very
+    start of the file is not part of the first column's name. Only those three
+    bytes are treated specially: a U+FEFF anywhere else is data and is kept,
+    and nothing else about the read differs from a plain utf-8 read (an
+    unmarked file yields exactly the rows it always did). The file itself is
+    opened read-only and is never rewritten; its sha256 is taken from the raw
+    bytes by `file_sha256`, mark included. The header is line 1."""
+    # open_no_follow, not open(): same TOCTOU reason as file_sha256 above --
+    # this is the actual multi-GB import read, the highest-value target for
+    # a file swapped in between validation and this call.
+    with open_no_follow(path, "r", encoding=REFERENCE_FILE_ENCODING, newline="") as fh:
+        yield from enumerate(csv.DictReader(fh), start=2)
+
+
 def _row_sha256(row: Dict[str, str]) -> str:
     """Of the row's own fields, canonically ordered -- reproducible from the
     stored `payload` alone, independent of the source CSV's column order."""
@@ -230,6 +313,11 @@ async def _import_csv(
             record_count=0, received_at=datetime.now(timezone.utc),
             created_by=created_by, metadata={"original_path": str(path)})
 
+    # ONE READER PER SNAPSHOT (2026-11-14): recorded when staging starts, and a
+    # resume into rows staged by a different reader is refused here, before the
+    # preflight is recorded and before any row is staged (see REFERENCE_READER).
+    await _admit_reader(db, snapshot, model=model, path=path)
+
     # REFERENCE-SNAPSHOT PREFLIGHT (2026-10-04, Part B; reference_preflight.py).
     # Always RUN and always RECORDED on the snapshot -- the shadow record.
     # ENFORCED (the import refused before any row is staged) only when
@@ -265,46 +353,41 @@ async def _import_csv(
     cid = _cid()
 
     buffer: List[Dict[str, Any]] = []
-    # open_no_follow, not open(): same TOCTOU reason as file_sha256 above --
-    # this is the actual multi-GB import read, the highest-value target for
-    # a file swapped in between validation and this call.
-    with open_no_follow(path, "r", encoding="utf-8", newline="") as fh:
-        reader = csv.DictReader(fh)
-        for line_no, row in enumerate(reader, start=2):  # header is line 1
-            summary.rows_read += 1
-            built = build_payload_and_keys(row)
-            # `built is None` is the one universal rejection signal every
-            # extract's builder uses -- the field that actually carries the
-            # row's identity differs by extract (`source_record_key` for
-            # HCO/HCP, `hcp_record_key`/`hco_record_key` for affiliation),
-            # so this check cannot also hardcode a field name without
-            # silently rejecting every row of whichever extract doesn't use
-            # it (confirmed the hard way: this previously rejected 100% of
-            # affiliation rows).
-            if built is None:
-                summary.rows_rejected += 1
-                if len(summary.rejected_sample_lines) < _MAX_SAMPLE_REJECTED_LINES:
-                    summary.rejected_sample_lines.append(line_no)
-                continue
-            buffer.append({
-                "id": uuid.uuid4(), "source_snapshot_id": snapshot.id,
-                "record_sha256": _row_sha256(row), "observed_at": datetime.now(timezone.utc),
-                "correlation_id": cid, "payload": row,
-                **{k: v for k, v in built.items()},
-            })
-            if len(buffer) >= chunk_size:
-                staged = await _stage_rows(db, snapshot_id=snapshot.id, model=model, rows=buffer)
-                summary.rows_staged += staged
-                summary.rows_already_staged += len(buffer) - staged
-                await db.commit()
-                buffer = []
-                await _notify_progress(progress_cb, summary)
-        if buffer:
+    for line_no, row in iter_reference_rows(path):
+        summary.rows_read += 1
+        built = build_payload_and_keys(row)
+        # `built is None` is the one universal rejection signal every
+        # extract's builder uses -- the field that actually carries the
+        # row's identity differs by extract (`source_record_key` for
+        # HCO/HCP, `hcp_record_key`/`hco_record_key` for affiliation),
+        # so this check cannot also hardcode a field name without
+        # silently rejecting every row of whichever extract doesn't use
+        # it (confirmed the hard way: this previously rejected 100% of
+        # affiliation rows).
+        if built is None:
+            summary.rows_rejected += 1
+            if len(summary.rejected_sample_lines) < _MAX_SAMPLE_REJECTED_LINES:
+                summary.rejected_sample_lines.append(line_no)
+            continue
+        buffer.append({
+            "id": uuid.uuid4(), "source_snapshot_id": snapshot.id,
+            "record_sha256": _row_sha256(row), "observed_at": datetime.now(timezone.utc),
+            "correlation_id": cid, "payload": row,
+            **{k: v for k, v in built.items()},
+        })
+        if len(buffer) >= chunk_size:
             staged = await _stage_rows(db, snapshot_id=snapshot.id, model=model, rows=buffer)
             summary.rows_staged += staged
             summary.rows_already_staged += len(buffer) - staged
             await db.commit()
+            buffer = []
             await _notify_progress(progress_cb, summary)
+    if buffer:
+        staged = await _stage_rows(db, snapshot_id=snapshot.id, model=model, rows=buffer)
+        summary.rows_staged += staged
+        summary.rows_already_staged += len(buffer) - staged
+        await db.commit()
+        await _notify_progress(progress_cb, summary)
 
     # Correct record_count to the real total now that the file has been read
     # in full, and persist the rejected count alongside it -- the exact
@@ -501,6 +584,12 @@ async def verify_snapshot_staged_completely(db, snapshot_id) -> Dict[str, Any]:
     ref_preflight = (snapshot.metadata_ or {}).get("reference_preflight") or {}
     if ref_preflight.get("gate") == "BLOCKED":
         reasons.append("reference preflight gate is BLOCKED for this snapshot")
+    # A snapshot whose resume was refused holds rows of an earlier reader and
+    # is incomplete by construction; said explicitly so the reason is not read
+    # as an ordinary interrupted import that a retry would finish.
+    if (snapshot.metadata_ or {}).get("reference_reader_refused"):
+        reasons.append("rows were staged by an earlier reader and the resume was refused "
+                       "(READER_CHANGED_AFTER_STAGING); this snapshot cannot be completed")
     return {
         "snapshot_id": str(snapshot_id), "source_system": snapshot.source_system,
         "declared_record_count": snapshot.record_count, "rows_rejected": rejected,
