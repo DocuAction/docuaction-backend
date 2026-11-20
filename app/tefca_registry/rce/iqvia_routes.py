@@ -88,7 +88,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import request_context
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import require_role
+from app.core.security import require_role, role_at_least
 from app.core.upload_security import safe_existing_path
 from app.tefca_registry.rce import iqvia_import as ii
 from app.tefca_registry.rce import iqvia_match as im
@@ -199,7 +199,13 @@ async def _register_and_enqueue(
     admin — see `stage_source`): resolved and confined to the configured
     IQVIA drop directory or the server's own chunked-upload temp directory,
     never opened outside either (CodeQL py/path-injection)."""
-    path = safe_existing_path(file_path, settings.IQVIA_IMPORT_DIR, _UPLOAD_DIR)
+    # The chunked-upload temp directory is reachable ONLY through `/uploads/{id}/complete` (`upload_id` set), which
+    # enforces creator-only ownership and the row-lock close protocol. The server-local stage route (no upload_id)
+    # is confined to the operator drop directory, so a reviewer who knows another upload's id cannot register its
+    # `<id>.part` file under their own identity (review finding, #233, 2026-11-15).
+    allowed_dirs = ((settings.IQVIA_IMPORT_DIR, _UPLOAD_DIR) if upload_id is not None
+                    else (settings.IQVIA_IMPORT_DIR,))
+    path = safe_existing_path(file_path, *allowed_dirs)
 
     file_sha = ii.file_sha256(path)
     # Duplicate submission: the SAME bytes under the SAME label for the SAME
@@ -216,6 +222,29 @@ async def _register_and_enqueue(
                sm.SourceSnapshot.supersedes_snapshot_id.is_(None))
         .order_by(sm.SourceSnapshot.created_at.asc()).limit(1))).scalars().first()
     if existing is not None:
+        # An interrupted registration of THIS upload, finished rather than
+        # refused. `register_snapshot` commits before the job is enqueued, and
+        # the upload is linked after that; a failure in between left a snapshot
+        # that the same upload's own retry was then told is a duplicate, with no
+        # job and no way forward (review finding, #218, 2026-11-14). It is this
+        # upload's registration only when the snapshot was registered from this
+        # upload's own server-side file AND either no job was ever created for
+        # it, or its job names this upload. The upload is not reopened; no
+        # second snapshot and no second job are created. Every other caller -
+        # another upload of the same bytes, a server-local stage - is refused
+        # below exactly as before.
+        if upload_id is not None and \
+                (existing.metadata_ or {}).get("original_path") == str(path):
+            job = await jobs.latest_job_for_snapshot(db, existing.id)
+            if job is None:
+                job = await jobs.enqueue_import_job(
+                    db, snapshot_id=existing.id, source=source, file_path=str(path),
+                    label=label, created_by=created_by, upload_id=upload_id)
+            if job.upload_id == upload_id:
+                return {"snapshot_id": str(existing.id), "source": source,
+                        "status": "PENDING", "import_status": "staging",
+                        "job_id": str(job.id), "job_state": job.state,
+                        "resumed_registration": True}
         raise HTTPException(409, detail={
             "error": (f"this exact file (sha256 {file_sha[:12]}...) is already registered "
                       f"for {source} as snapshot {existing.id} (label {existing.snapshot_label!r}, "
@@ -248,6 +277,85 @@ async def _register_and_enqueue(
 
     return {"snapshot_id": str(snapshot.id), "source": source, "status": "PENDING",
            "import_status": "staging", "job_id": str(job.id), "job_state": job.state}
+
+
+#: Who may read the progress of an upload they did not start. Reading only:
+#: writing bytes into, or completing, another person's upload stays refused for
+#: every role (see `_owns_upload`).
+UPLOAD_OVERSIGHT_ROLE = "qalead"
+
+
+def _owns_upload(user, session) -> bool:
+    """Is `user` the person who started this upload?
+
+    WHY THE CREATOR ONLY, WITH NO SENIOR-ROLE OVERRIDE. `complete_upload`
+    registers the snapshot under `session.created_by`, and approval refuses
+    only that registrant (maker/checker). If a QA lead could write bytes into,
+    or complete, someone else's upload, the same QA lead could then approve the
+    snapshot as "a different person" while having supplied its content. So the
+    two acts that decide WHAT the snapshot is belong to its creator alone.
+
+    `created_by` falls back to the literal "UNKNOWN" when a user has no e-mail;
+    that placeholder never matches anyone, including another e-mail-less user.
+    """
+    owner = str(getattr(session, "created_by", "") or "").strip().lower()
+    email = str(getattr(user, "email", "") or "").strip().lower()
+    return bool(email) and owner not in ("", "unknown") and owner == email
+
+
+async def _refuse_foreign_upload(db, user, upload_id, *, act: str) -> None:
+    """Record that a non-owner reached for an upload. The caller then answers
+    with the route's ordinary 404 body, so the response does not confirm that
+    the upload exists."""
+    await _audit(db, user, action="IQVIA_UPLOAD_ACCESS_REFUSED", outcome="blocked",
+                 resource_type="iqvia_upload", resource_id=upload_id,
+                 details={"act": act, "reason": "caller did not start this upload"})
+
+
+def _expected_chunk_length(session, index: int) -> int:
+    """Every chunk is `chunk_size` bytes except the last, which is the remainder."""
+    return max(0, min(session.chunk_size, session.total_size - index * session.chunk_size))
+
+
+async def _read_chunk(request: Request, expected: int) -> bytes:
+    """The chunk body, refused as soon as it is known to be the wrong size.
+
+    A declared Content-Length that is too large is refused before a byte is
+    read, and a streamed body is abandoned at the first byte past `expected`,
+    so an oversized request cannot be buffered whole. A body of the wrong
+    length would either overwrite the neighbouring chunk's bytes or leave a run
+    of zeros inside the assembled file.
+    """
+    def _too_large():
+        return HTTPException(413, detail={
+            "error": f"chunk is larger than the {expected} bytes this index holds",
+            "code": "CHUNK_TOO_LARGE", "expected_bytes": expected})
+
+    headers = getattr(request, "headers", None) or {}
+    declared = headers.get("content-length") if hasattr(headers, "get") else None
+    if declared is not None:
+        try:
+            if int(declared) > expected:
+                raise _too_large()
+        except ValueError:
+            raise HTTPException(400, "Content-Length is not a number")
+    stream = getattr(request, "stream", None)
+    if stream is None:
+        data = await request.body()
+    else:
+        buffer = bytearray()
+        async for part in stream():
+            buffer.extend(part)
+            if len(buffer) > expected:
+                raise _too_large()
+        data = bytes(buffer)
+    if len(data) > expected:
+        raise _too_large()
+    if len(data) != expected:
+        raise HTTPException(422, detail={
+            "error": f"chunk is {len(data)} bytes; this index holds exactly {expected}",
+            "code": "CHUNK_SIZE_MISMATCH", "expected_bytes": expected})
+    return data
 
 
 class StartUploadRequest(BaseModel):
@@ -298,9 +406,33 @@ async def upload_chunk(upload_id: uuid.UUID, index: int, request: Request,
         raise HTTPException(404, detail={
             "error": f"no upload {upload_id} (unknown, or already completed)",
             "code": "UPLOAD_NOT_FOUND"})
+    if not _owns_upload(user, session):
+        await _refuse_foreign_upload(db, user, upload_id, act="chunk")
+        raise HTTPException(404, detail={
+            "error": f"no upload {upload_id} (unknown, or already completed)",
+            "code": "UPLOAD_NOT_FOUND"})
+    if session.snapshot_id is not None or session.status != um.IqviaUploadSession.STATUS_UPLOADING:
+        # The file's sha256 is taken at completion and the import reads the
+        # same file afterwards: bytes must not change once it is closed.
+        raise HTTPException(409, detail={
+            "error": "this upload is closed; its bytes can no longer be changed",
+            "code": "UPLOAD_CLOSED", "status": session.status})
     if not (0 <= index < session.total_chunks):
         raise HTTPException(422, f"chunk index out of range 0..{session.total_chunks-1}")
-    chunk_bytes = await request.body()
+    chunk_bytes = await _read_chunk(request, _expected_chunk_length(session, index))
+    # The body read above can take as long as the client likes, and the check
+    # before it was made on an unlocked row. Re-check under the same row lock
+    # completion takes, and write while holding it: a chunk that was still
+    # arriving when the upload was completed must not change the staged bytes.
+    session = await jobs.lock_upload_session(db, upload_id)
+    if (session is None or session.snapshot_id is not None
+            or session.status != um.IqviaUploadSession.STATUS_UPLOADING):
+        closed_status = getattr(session, "status", None)   # read BEFORE the rollback expires the row
+        await db.rollback()
+        raise HTTPException(409, detail={
+            "error": "this upload was closed while the chunk was being sent; "
+                     "its bytes can no longer be changed",
+            "code": "UPLOAD_CLOSED", "status": closed_status})
     offset = index * session.chunk_size
     with open(session.temp_path, "r+b") as fh:
         fh.seek(offset)
@@ -329,6 +461,9 @@ async def upload_status(upload_id: uuid.UUID, db: AsyncSession = Depends(get_db)
     session = await jobs.get_upload_session(db, upload_id)
     if session is None:
         raise HTTPException(404, f"no upload {upload_id}")
+    if not (_owns_upload(user, session) or role_at_least(user, UPLOAD_OVERSIGHT_ROLE)):
+        await _refuse_foreign_upload(db, user, upload_id, act="status")
+        raise HTTPException(404, f"no upload {upload_id}")
     received = await jobs.received_chunk_indices(db, upload_id)
     missing = sorted(set(range(session.total_chunks)) - received)
     return {"upload_id": str(upload_id), "received_chunks": len(received),
@@ -345,6 +480,9 @@ async def complete_upload(upload_id: uuid.UUID, db: AsyncSession = Depends(get_d
     _require_licensed_access(user)
     session = await jobs.get_upload_session(db, upload_id)
     if session is None:
+        raise HTTPException(404, f"no upload {upload_id}")
+    if not _owns_upload(user, session):
+        await _refuse_foreign_upload(db, user, upload_id, act="complete")
         raise HTTPException(404, f"no upload {upload_id}")
     if session.snapshot_id is not None:
         # Idempotent re-completion: the durable session row is never deleted
@@ -366,18 +504,40 @@ async def complete_upload(upload_id: uuid.UUID, db: AsyncSession = Depends(get_d
                 "job_id": str(job.id) if job else None,
                 "job_state": job.state if job else None,
                 "already_completed": True}
+    # Take the lock a chunk write takes, then decide. Everything from here to
+    # `close_upload_to_writes` happens with no chunk able to land.
+    session = await jobs.lock_upload_session(db, upload_id)
+    if session is None:
+        await db.rollback()
+        raise HTTPException(404, f"no upload {upload_id}")
+    if session.snapshot_id is not None:
+        # A concurrent complete won the lock first: same answer as a repeat.
+        await db.rollback()
+        # `require_role` and this route share one request-scoped session, so the rollback expired the authenticated
+        # ORM user; reading `user.email` lazily in the recursive call would raise MissingGreenlet (HTTP 500).
+        from sqlalchemy import inspect as _sa_inspect
+        _state = _sa_inspect(user, raiseerr=False)
+        if _state is not None and _state.persistent:
+            await db.refresh(user)
+        return await complete_upload(upload_id, db, user)
     received = await jobs.received_chunk_indices(db, upload_id)
     missing = sorted(set(range(session.total_chunks)) - received)
     if missing:
+        await db.rollback()
         raise HTTPException(409, detail={
             "error": f"{len(missing)} chunk(s) still missing; cannot complete",
             "code": "UPLOAD_INCOMPLETE", "missing_chunk_indices": missing[:200]})
     actual_size = Path(session.temp_path).stat().st_size
-    if actual_size != session.total_size:
+    declared_size = session.total_size              # read BEFORE the rollback: rollback expires the instance
+    if actual_size != declared_size:
+        await db.rollback()
         raise HTTPException(409, detail={
             "error": f"assembled file is {actual_size} bytes, declared total_size was "
-                     f"{session.total_size} -- refusing to stage a size mismatch",
+                     f"{declared_size} -- refusing to stage a size mismatch",
             "code": "UPLOAD_SIZE_MISMATCH"})
+    # Closed to writes BEFORE the file is hashed: the sha256 registered below is
+    # then the hash of bytes nothing can change any more.
+    await jobs.close_upload_to_writes(db, upload_id)
     result = await _register_and_enqueue(
         db, source=session.source, file_path=session.temp_path, label=session.label,
         created_by=session.created_by, upload_id=upload_id)

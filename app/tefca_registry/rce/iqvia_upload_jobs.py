@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -45,6 +45,31 @@ async def get_upload_session(db, upload_id) -> Optional[IqviaUploadSession]:
     return await db.get(IqviaUploadSession, upload_id)
 
 
+async def lock_upload_session(db, upload_id) -> Optional[IqviaUploadSession]:
+    """The session row, locked FOR UPDATE and re-read from the database.
+
+    Writing a chunk and completing an upload both take this lock before they
+    look at `status` / `snapshot_id`, so the two cannot interleave: a chunk
+    whose body was still arriving when the upload was completed sees the closed
+    state and writes nothing. The lock is released by the caller's next commit
+    or rollback. `populate_existing` matters: without it the session's cached
+    copy of the row would be returned and the re-check would test stale state.
+    """
+    return (await db.execute(
+        select(IqviaUploadSession).where(IqviaUploadSession.id == upload_id)
+        .with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
+
+
+async def close_upload_to_writes(db, upload_id) -> None:
+    """UPLOADING -> COMPLETE ("all chunks received, not yet staged"), committed.
+    Called with the row lock held; the commit releases it. From here no chunk
+    can be written, so the hash taken next is the hash of the bytes staged."""
+    session = await db.get(IqviaUploadSession, upload_id)
+    if session is not None and session.status == IqviaUploadSession.STATUS_UPLOADING:
+        session.status = IqviaUploadSession.STATUS_COMPLETE
+    await db.commit()
+
+
 async def record_chunk_received(db, *, upload_id, chunk_index: int) -> None:
     """Idempotent: retrying the same chunk index is a no-op here (the bytes
     themselves are overwritten at their file offset regardless; this table
@@ -64,11 +89,19 @@ async def received_chunk_indices(db, upload_id) -> set:
 
 
 async def mark_upload_complete(db, upload_id, *, snapshot_id) -> None:
-    session = await db.get(IqviaUploadSession, upload_id)
-    if session is None:
-        return
-    session.status = IqviaUploadSession.STATUS_STAGING_QUEUED
-    session.snapshot_id = snapshot_id
+    """Link the snapshot and queue staging - as ONE conditional statement.
+
+    The worker may already have finished (STAGED / FAILED) by the time linkage runs, and it may commit between a read
+    and a write here; so the terminal status is protected by the UPDATE itself (evaluated against the row as it is at
+    write time), never by a value read earlier. `snapshot_id` is always linked."""
+    stmt = (update(IqviaUploadSession).where(IqviaUploadSession.id == upload_id)
+            .values(snapshot_id=snapshot_id,
+                    status=case((IqviaUploadSession.status.in_([IqviaUploadSession.STATUS_STAGED,
+                                                                IqviaUploadSession.STATUS_FAILED]),
+                                 IqviaUploadSession.status),
+                                else_=IqviaUploadSession.STATUS_STAGING_QUEUED))
+            .execution_options(synchronize_session="fetch"))
+    await db.execute(stmt)
     await db.commit()
 
 
