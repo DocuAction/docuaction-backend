@@ -769,7 +769,10 @@ def test_recovery_resumes_delivery_work_for_a_decision_that_had_completed(client
 def test_a_refusal_after_a_partial_commit_closes_the_row(client, deferred):
     d = fresh_delivery()
     issue_id = d["issue_ids"][0]
-    r = correct(client, issue_id, value="123")  # not a valid NPI
+    # The stale-value refusal: the one refusal that still follows a commit (an
+    # invalid value is refused before anything is written since 2026-11-19).
+    run(_set_issue(issue_id, original_value="0000000000"))
+    r = correct(client, issue_id)
     assert r.status_code == 409, r.text
     listing = client.get(
         f"{BASE}/deliveries/{d['intake_id']}/disposition-processing",

@@ -447,6 +447,108 @@ def is_terminal_resolution(resolution: Optional[str]) -> bool:
     return (resolution or "OPEN") in TERMINAL_RESOLUTIONS
 
 
+def _refuse_unapprovable(issue, *, actor: str, qa_actor: Optional[str]) -> None:
+    """The rules a finding must meet to reach APPROVED. Reads only its arguments.
+
+    One definition, used where the transition is made (`transition_issue`) and
+    before a correction's first write (`_refuse_unappliable_correction`).
+    """
+    if issue.correction_authority == NO_CORRECTION:
+        raise CorrectionRefused(
+            f"Issue {issue.issue_code} is NO_CORRECTION: the finding is "
+            f"recorded as evidence and the delivered value is preserved. "
+            f"There is nothing to approve.")
+    if issue.correction_authority == QA_REQUIRED:
+        if not qa_actor:
+            raise CorrectionRefused(
+                f"Issue {issue.issue_code} is QA_REQUIRED and needs a QA "
+                f"approver in addition to the reviewer.")
+        if qa_actor == actor:
+            raise CorrectionRefused(
+                f"QA approval must come from someone other than the "
+                f"reviewer ({actor}). A single person supplying both "
+                f"approvals defeats the control.")
+
+
+def _correction_column(issue, curated) -> str:
+    """The curated column a correction of this finding writes, or a refusal.
+    Reads only its arguments."""
+    if curated is None:
+        raise CorrectionRefused(
+            f"No curated record for source record {issue.source_record_id}.")
+    column = _FIELD_TO_CURATED_COLUMN.get(issue.field_name)
+    if column is None:
+        raise CorrectionRefused(
+            f"Field {issue.field_name!r} does not map to a curated column.")
+    return column
+
+
+def _refuse_unusable_value(issue, column: str, new_value) -> None:
+    """Whether `new_value` may be written to `column`. Reads only its arguments."""
+    if new_value is None:
+        raise CorrectionRefused(
+            f"Issue {issue.issue_code} carries no corrected value to apply.")
+    if column == "npi":
+        # A correction is a human write of an identifier; it passes the same
+        # validator promotion applies (review finding L-1, 2026-09-16).
+        from app.services.npi_validator import validate_npi
+        ok, message = validate_npi(new_value)
+        if not ok:
+            raise CorrectionRefused(
+                f"Corrected NPI {new_value!r} is not a valid NPI ({message}); a "
+                f"correction cannot register an invalid identifier.")
+
+
+async def _invalidate_if_stale(db, issue, curated, column: str):
+    """THE STALENESS GUARD. Returns the stored value when it is still the value
+    the finding was raised against; otherwise invalidates the approval, returns
+    the finding to UNDER_REVIEW, commits that and refuses.
+
+    Called by `apply_correction` at the moment the value is written (always),
+    and by `apply_disposition` before an identifier decision that would change
+    the registry (see there). The outcome is the same in both places.
+    """
+    current = getattr(curated, column, None)
+    if value_hash(current) != value_hash(issue.original_value):
+        issue.resolution = "UNDER_REVIEW"
+        issue.resolution_notes = (
+            f"Approval invalidated before application: the value of {column} "
+            f"changed after approval (approved against "
+            f"{issue.original_value!r}, found {current!r}). Re-review required — "
+            f"the approval was given for a value that no longer exists.")
+        await db.commit()
+        raise CorrectionRefused(issue.resolution_notes)
+    return current
+
+
+def _refuse_unappliable_correction(issue, curated, new_value, *, actor: str,
+                                   qa_actor: Optional[str],
+                                   value_gated_elsewhere: bool = False) -> None:
+    """Refuse, BEFORE ANYTHING IS WRITTEN, a correction that could not be applied.
+
+    `apply_disposition` walks a finding to APPROVED (every step commits) and
+    only then calls `apply_correction`. A refusal there left the finding
+    APPROVED with the reviewer's name and "[CORRECT] reason" on it - a decision
+    on record for a request that was answered 409 (DEV, 2026-11-19, finding
+    DQ-20260930-6a2df06e-000021). Every refusal that depends only on the
+    request and the stored rows is therefore made here first, by the same
+    functions the walk and `apply_correction` use, so the two cannot disagree.
+
+    NOT here, deliberately: the stale-value guard. It belongs to the moment the
+    value is written (`apply_correction`, under the row lock on the deferred
+    path) and it returns the finding to UNDER_REVIEW by design.
+
+    `value_gated_elsewhere`: on an identifier conflict the corrected value is
+    judged by `identifier_decisions.decide`, which refuses a bad one before it
+    writes and answers with its own error (422). That gate keeps the first
+    word, so the value is not judged here for those decisions.
+    """
+    _refuse_unapprovable(issue, actor=actor, qa_actor=qa_actor)
+    column = _correction_column(issue, curated)
+    if not value_gated_elsewhere:
+        _refuse_unusable_value(issue, column, new_value)
+
+
 async def transition_issue(db, issue_id, *, to_status: str, actor: str,
                            notes: Optional[str] = None,
                            qa_actor: Optional[str] = None) -> Dict[str, Any]:
@@ -467,21 +569,8 @@ async def transition_issue(db, issue_id, *, to_status: str, actor: str,
             f"{current}: {sorted(_ALLOWED_TRANSITIONS.get(current, set()))}.")
 
     if to_status == "APPROVED":
-        if issue.correction_authority == NO_CORRECTION:
-            raise CorrectionRefused(
-                f"Issue {issue.issue_code} is NO_CORRECTION: the finding is "
-                f"recorded as evidence and the delivered value is preserved. "
-                f"There is nothing to approve.")
+        _refuse_unapprovable(issue, actor=actor, qa_actor=qa_actor)
         if issue.correction_authority == QA_REQUIRED:
-            if not qa_actor:
-                raise CorrectionRefused(
-                    f"Issue {issue.issue_code} is QA_REQUIRED and needs a QA "
-                    f"approver in addition to the reviewer.")
-            if qa_actor == actor:
-                raise CorrectionRefused(
-                    f"QA approval must come from someone other than the "
-                    f"reviewer ({actor}). A single person supplying both "
-                    f"approvals defeats the control.")
             issue.qa_approved_by = qa_actor
             issue.qa_approved_at = datetime.utcnow()
 
@@ -535,41 +624,13 @@ async def apply_correction(db, issue_id, *, actor: str,
         curated_query = (curated_query.with_for_update(key_share=True)
                          .execution_options(populate_existing=True))
     curated = (await db.execute(curated_query)).scalar_one_or_none()
-    if curated is None:
-        raise CorrectionRefused(
-            f"No curated record for source record {issue.source_record_id}.")
+    column = _correction_column(issue, curated)
     already_promoted = curated.canonical_entity_id is not None
 
-    column = _FIELD_TO_CURATED_COLUMN.get(issue.field_name)
-    if column is None:
-        raise CorrectionRefused(
-            f"Field {issue.field_name!r} does not map to a curated column.")
-
-    current = getattr(curated, column, None)
-    expected_hash = value_hash(issue.original_value)
-    if value_hash(current) != expected_hash:
-        issue.resolution = "UNDER_REVIEW"
-        issue.resolution_notes = (
-            f"Approval invalidated before application: the value of {column} "
-            f"changed after approval (approved against "
-            f"{issue.original_value!r}, found {current!r}). Re-review required — "
-            f"the approval was given for a value that no longer exists.")
-        await db.commit()
-        raise CorrectionRefused(issue.resolution_notes)
+    current = await _invalidate_if_stale(db, issue, curated, column)
 
     new_value = corrected_value if corrected_value is not None else issue.suggested_value
-    if new_value is None:
-        raise CorrectionRefused(
-            f"Issue {issue.issue_code} carries no corrected value to apply.")
-    if column == "npi":
-        # A correction is a human write of an identifier; it passes the same
-        # validator promotion applies (review finding L-1, 2026-09-16).
-        from app.services.npi_validator import validate_npi
-        ok, message = validate_npi(new_value)
-        if not ok:
-            raise CorrectionRefused(
-                f"Corrected NPI {new_value!r} is not a valid NPI ({message}); a "
-                f"correction cannot register an invalid identifier.")
+    _refuse_unusable_value(issue, column, new_value)
 
     db.add(m.RceCorrectionDetail(
         curated_record_id=curated.id,
@@ -900,6 +961,21 @@ async def apply_disposition(db, issue_id, *, decision: str, reason: str,
             f"{decision} applies only to identifier conflicts; issue "
             f"{issue.issue_code} is {issue.issue_type}.")
 
+    # A correction that could not be applied is refused HERE: before the
+    # accepted-work row is added, before an identifier decision changes the
+    # registry and before the walk commits anything. The two branches below
+    # that call `apply_correction` are the two tested here, each with the value
+    # it passes.
+    applies_suggestion = decision == "ACCEPT" and not (
+        issue.correction_authority == NO_CORRECTION
+        or (issue.suggested_value is None and corrected_value is None))
+    if decision == "CORRECT" or applies_suggestion:
+        _refuse_unappliable_correction(
+            issue, curated,
+            corrected_value if decision == "CORRECT" else issue.suggested_value,
+            actor=actor, qa_actor=qa_actor,
+            value_gated_elsewhere=is_conflict and decision in _CONFLICT_DECISION)
+
     from app.tefca_registry.rce import dispositions as disp
     history_before = len(await disp.history_for_record(db, issue.source_record_id))
 
@@ -927,6 +1003,16 @@ async def apply_disposition(db, issue_id, *, decision: str, reason: str,
                 f"Issue {issue.issue_code} is an identifier conflict but no "
                 f"conflict event names it; the ledger and the decision table "
                 f"disagree and must be reconciled before a decision is recorded.")
+        if decision == "CORRECT":
+            # CORRECT changes the registered identifier in `decide` and only
+            # afterwards reaches `apply_correction`, whose staleness guard
+            # then refused with the registry change already committed
+            # (2026-11-19). The same guard is therefore consulted first: a
+            # stale value ends UNDER_REVIEW exactly as before, with the
+            # registry untouched. `apply_correction` still runs the guard
+            # again when it writes; this call replaces nothing.
+            await _invalidate_if_stale(db, issue, curated,
+                                       _correction_column(issue, curated))
         identifier_event = await identifier_decisions.decide(
             db, entity_id=latest.entity_id,
             identifier_type=latest.identifier_type,
