@@ -466,6 +466,16 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # and verification coverage. Same principle as the audit-trail and
         # export exceptions above: the viewer role exists so that a person can
         # follow the work without seeing the identifiers.
+        # Delivery processing that follows an analyst decision (2026-11-18) -
+        # reviewer (4), the SAME floor as /exceptions and /dispositions listed
+        # below, of which these are the companion reads: each row names the
+        # finding, the record, the decision taken and the STAFF MEMBER who took
+        # it (the LOGIN-013 category the audit-trail exception turns on). A
+        # viewer still sees what they need to follow the work: the job detail
+        # and the dashboard carry the counts-only summary and the
+        # "reconciliation not current" notice at viewer.
+        "/api/tefca/rce/disposition-processing/{processing_id}",
+        "/api/tefca/rce/deliveries/{intake_id}/disposition-processing",
         "/api/tefca/rce/deliveries/{intake_id}/records",
         "/api/tefca/rce/deliveries/{intake_id}/curated",
         "/api/tefca/rce/curated/{curated_id}/lineage",

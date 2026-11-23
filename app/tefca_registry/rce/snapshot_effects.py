@@ -494,6 +494,12 @@ async def approval_gates(db, intake_id) -> Dict[str, Any]:
     from app.tefca_registry.rce import delivery_jobs as jobs
     from app.tefca_registry.rce import reconciliation
 
+    from app.tefca_registry.rce import disposition_followups
+    # Freshness FIRST, then the snapshot it qualifies. A decision's completion
+    # and the snapshot that covers it are one transaction, so "nothing is
+    # outstanding" read here means every processed decision's snapshot is
+    # already committed and the read below cannot return an older one.
+    processing = await disposition_followups.summary(db, intake_id)
     tip = await snapshot_tip(db, intake_id)
     job = await jobs.job_for_intake(db, intake_id)
     recon = await reconciliation.latest_snapshot(db, job.id if job else None)
@@ -504,6 +510,10 @@ async def approval_gates(db, intake_id) -> Dict[str, Any]:
         "reconciliation_after_effects": bool(
             recon is not None and tip is not None and recon.created_at is not None
             and tip.created_at is not None and recon.created_at >= tip.created_at),
+        # 2026-11-18: a recorded analyst decision whose delivery processing is
+        # pending or failed means the persisted reconciliation predates it.
+        "no_disposition_processing_outstanding": bool(
+            processing.get("reconciliation_current", True)),
     }
     return {"gates": gates, "all": all(gates.values()),
             "tip_status": tip.status if tip else None, "tip_id": str(tip.id) if tip else None,
@@ -543,6 +553,10 @@ async def approve_delivery_snapshot(db, intake_id, *, user, approval_ref: str,
         raise ApprovalRefused("reconciliation has not PASSED with a persisted snapshot hash")
     if not gates["reconciliation_after_effects"]:
         raise ApprovalRefused("the passing reconciliation snapshot predates the effects; re-run reconciliation")
+    if not gates["no_disposition_processing_outstanding"]:
+        raise ApprovalRefused(
+            "analyst decisions for this delivery have delivery processing that is "
+            "pending or failed; the persisted reconciliation predates them")
     live = await reconciliation.reconcile_delivery(db, intake_id)
     if not live.get("passed"):
         failed = [c["check"] for c in live.get("checks", []) if not c["passed"]]

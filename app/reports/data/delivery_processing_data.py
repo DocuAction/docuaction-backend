@@ -1099,7 +1099,14 @@ class DeliveryProcessingDataService:
                        "row); the job lifecycle (queued/running/failed) is unknown.")
 
         build = await self._build()
+        from app.tefca_registry.rce import disposition_followups
+        disposition_processing = await disposition_followups.summary(
+            self.db, getattr(intake, "id", None))
+        if disposition_processing.get("notice"):
+            self.limit(disposition_processing["notice"])
         reconciliation = {
+            "disposition_processing": disposition_processing,
+            "current": bool(disposition_processing.get("reconciliation_current", True)),
             "available": snapshot is not None,
             "history_count": history,
             "is_latest": is_latest,

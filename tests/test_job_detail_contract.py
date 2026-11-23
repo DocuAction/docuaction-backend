@@ -110,7 +110,16 @@ def test_failed_job_without_intake_renders_failed_not_ready_and_guidance(client,
     assert body["status"]["review_state"]["value"] == "Not Ready"
     assert body["status"]["review_state"]["code"] == "NOT_READY"
     assert body["dispositions"] is None
-    assert body["reconciliation"] == {"snapshot": None, "history_count": 0}
+    # 2026-11-18 contract ADDITION (deferred disposition processing): the block
+    # also says whether recorded analyst decisions are still being processed.
+    # A job with no intake has none, so the snapshot facts are exactly as before
+    # and the two new fields say "nothing outstanding".
+    assert body["reconciliation"] == {
+        "snapshot": None, "history_count": 0, "current": True,
+        "disposition_processing": {
+            "store_present": False, "received": 0, "queued": 0, "processing": 0,
+            "pending": 0, "failed": 0, "oldest_pending_at": None,
+            "reconciliation_current": True, "notice": None}}
     # nothing after Area 1 ever ran
     for block in ("verification", "reports"):
         assert body["availability"][block] == "never_ran", block

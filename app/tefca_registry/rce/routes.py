@@ -549,14 +549,32 @@ async def promote(
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("reviewer")),
 ):
+    from app.tefca_registry.rce import disposition_followups
     from app.tefca_registry.rce.promotion import promote_delivery
 
-    try:
-        return await promote_delivery(
-            db, intake_id, actor=getattr(user, "email", None) or "SYSTEM",
-            actor_id=getattr(user, "id", None))
-    except ValueError as exc:
-        raise HTTPException(409, str(exc))
+    # One promotion/reconciliation per delivery at a time (2026-11-18): if the
+    # worker processing recorded analyst decisions holds the delivery, refuse
+    # rather than overlap it or make the caller wait.
+    async with disposition_followups.delivery_lock(intake_id) as slot:
+        if not slot.acquired:
+            raise HTTPException(409, disposition_followups.DELIVERY_BUSY_MESSAGE)
+        # Accepted analyst decisions are promoted by the worker, which carries
+        # each record's human attribution. A manual promotion here would take
+        # the record first and write it as SYSTEM, so it waits for them.
+        # The same holds for a decision whose processing FAILED and awaits a
+        # retry: its record is released and unpromoted, and only the worker
+        # carries its reviewer's attribution.
+        blocked = await disposition_followups.admission_refusal(db, intake_id)
+        if blocked is not None:
+            refusal = HTTPException(409, blocked[1])
+            refusal.code = blocked[0]
+            raise refusal
+        try:
+            return await promote_delivery(
+                db, intake_id, actor=getattr(user, "email", None) or "SYSTEM",
+                actor_id=getattr(user, "id", None))
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
 
 
 # ── P9/P10 — verification and classification ─────────────────────────────────
@@ -757,23 +775,33 @@ async def persist_manual_reconciliation_snapshot(
                                  "reconciliation snapshot must belong to one.")
 
     actor = getattr(user, "email", None) or "SYSTEM"
-    result = await reconciliation.reconcile_delivery(db, intake_id)
     from sqlalchemy.exc import IntegrityError
-    try:
-        snapshot = await reconciliation.persist_snapshot(
-            db, intake_id, result, job_id=job.id, actor=actor, trigger="MANUAL")
-    except IntegrityError as exc:
-        # Two concurrent persists computed the same max(sequence)+1; the
-        # UNIQUE (job_id, sequence) constraint (uq_rce_snapshot_sequence)
-        # made the slower one lose instead of letting duplicate sequences
-        # exist. The other caller's snapshot IS the current state — refusing
-        # with 409 is correct, retrying automatically is not (the operator
-        # should read what was just pinned before pinning again).
-        await db.rollback()
-        raise HTTPException(
-            409, "A concurrent reconciliation snapshot was persisted for this "
-                 "delivery; read the current snapshot before persisting "
-                 "again.") from exc
+
+    from app.tefca_registry.rce import disposition_followups
+
+    # One promotion/reconciliation per delivery at a time (2026-11-18): a
+    # MANUAL snapshot taken while the worker is mid-way through recorded
+    # analyst decisions would pin a half-processed delivery. Refused, not
+    # queued and not waited for.
+    async with disposition_followups.delivery_lock(intake_id) as slot:
+        if not slot.acquired:
+            raise HTTPException(409, disposition_followups.DELIVERY_BUSY_MESSAGE)
+        result = await reconciliation.reconcile_delivery(db, intake_id)
+        try:
+            snapshot = await reconciliation.persist_snapshot(
+                db, intake_id, result, job_id=job.id, actor=actor, trigger="MANUAL")
+        except IntegrityError as exc:
+            # Two concurrent persists computed the same max(sequence)+1; the
+            # UNIQUE (job_id, sequence) constraint (uq_rce_snapshot_sequence)
+            # made the slower one lose instead of letting duplicate sequences
+            # exist. The other caller's snapshot IS the current state — refusing
+            # with 409 is correct, retrying automatically is not (the operator
+            # should read what was just pinned before pinning again).
+            await db.rollback()
+            raise HTTPException(
+                409, "A concurrent reconciliation snapshot was persisted for this "
+                     "delivery; read the current snapshot before persisting "
+                     "again.") from exc
 
     # Read every response fact NOW, while the row is fresh from persist's own
     # commit+refresh: if the audit commit below fails, the session's ORM
