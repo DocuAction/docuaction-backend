@@ -110,6 +110,20 @@ def _long_unbreakable_token(d):
     return d
 
 
+def _pending_disposition_processing(d, failed=False):
+    """2026-11-18: analyst decisions are recorded but their delivery processing has not completed (or failed). The
+    report must say, in the rendered PDF, that the reconciliation shown is not current. Wording comes from the module
+    that produces it, so this renders what a real report would print."""
+    from app.tefca_registry.rce.disposition_followups import FAILED_NOTICE, PENDING_NOTICE
+    notice = (FAILED_NOTICE if failed else PENDING_NOTICE).format(n=3)
+    d["dataset"]["reconciliation"]["disposition_processing"] = {
+        "store_present": True, "received": 0, "queued": 0 if failed else 2, "processing": 0 if failed else 1,
+        "pending": 0 if failed else 3, "failed": 3 if failed else 0, "oldest_pending_at": None,
+        "reconciliation_current": False, "notice": notice}
+    d["dataset"]["reconciliation"]["current"] = False
+    return d
+
+
 SCENARIOS = {
     "clean_060": lambda: _fixture("060"),
     "long_unbreakable_token": lambda: _long_unbreakable_token(_fixture("061")),
@@ -124,6 +138,8 @@ SCENARIOS = {
     "every_action_long_status": lambda: _every_action_and_long_status(_fixture("060")),
     "every_action_long_status_worst": lambda: _long_timeline(_every_action_and_long_status(_many_rules(_fixture("061")))),
     "worst_case": lambda: _long_timeline(_busy_cover(_many_rules(_fixture("061")))),
+    "pending_disposition_processing": lambda: _pending_disposition_processing(_fixture("068")),
+    "failed_disposition_processing": lambda: _pending_disposition_processing(_fixture("068"), failed=True),
 }
 
 
@@ -313,3 +329,28 @@ def test_a_long_unbreakable_token_stays_inside_the_table_and_is_complete(pdfs):
     # complete: its fragments, in reading order, rebuild the whole token (a wrap may split it across lines)
     joined = "".join(w["text"] for p in pages for w in p["words"])
     assert LONG_TOKEN in joined.replace("'", "")
+
+
+@needs_weasyprint
+@pytest.mark.parametrize("name,failed", [("pending_disposition_processing", False),
+                                         ("failed_disposition_processing", True)])
+def test_the_reconciliation_not_current_notice_is_printed_whole_in_the_pdf(pdfs, name, failed):
+    """The notice must be in the rendered PDF (not only the HTML), complete, on the reconciliation appendix page and
+    inside the page margins."""
+    from app.tefca_registry.rce.disposition_followups import FAILED_NOTICE, PENDING_NOTICE
+    expected = " ".join((FAILED_NOTICE if failed else PENDING_NOTICE).format(n=3).split())
+    pages = pdfs[name]
+    hits = [pi for pi, p in enumerate(pages, start=1)
+            if expected in " ".join(p["text"].split())]
+    assert len(hits) == 1, f"notice found whole on pages {hits}"
+    page = pages[hits[0] - 1]
+    flat = " ".join(page["text"].split())
+    assert "Reconciliation not current." in flat
+    assert "Appendix C. Reconciliation detail" in flat
+    assert not words_past_margin(page)
+
+
+@needs_weasyprint
+def test_a_report_without_pending_processing_prints_no_such_notice(pdfs):
+    assert not [pi for pi, p in enumerate(pdfs["live_068_three_open_high"], start=1)
+                if "Reconciliation not current." in p["text"]]

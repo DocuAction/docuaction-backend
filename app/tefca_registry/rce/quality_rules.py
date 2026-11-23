@@ -1319,6 +1319,18 @@ NON_QUALITY_ISSUE_TYPES: Dict[str, Tuple[str, str, str]] = {
 #: `curation.py`; listed here so the set is reviewable in one place.
 AUTO_SAFE_RULES = frozenset({"FMT-001", "FMT-002", "FMT-004"})
 
+#: Rules whose findings never take a corrected value, whatever correction
+#: authority the finding carries. The finding is still raised for a person to
+#: review (its authority is unchanged, so it still opens a review case); what
+#: is removed is "Correct with value". Enforced in `curation`, which also tells
+#: the exception ledger so the UI does not offer it.
+#:
+#: FMT-003 (owner decision 2026-11-19): a ZIP/state mismatch cannot say which
+#: of the two fields is wrong, and the value it stores is the PAIR
+#: "<zip> / <state>", which is the value of neither column.
+NON_CORRECTABLE_RULES = frozenset({"FMT-003"})
+
+
 
 class DuplicateRuleId(RuntimeError):
     """Two rules claim the same rule_id. Raised at import, never at run time."""

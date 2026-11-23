@@ -73,11 +73,18 @@ CURRENT_DISPOSITIONS_VIEW = "rce_current_dispositions"
 #: traceability and 20261112_rce_record_comments). Startup
 #: `create_all` excludes them: a table the runtime role created would be owned
 #: by the runtime role, and "append-only by grant" would be void.
+#:
+#: `rce_disposition_followups` (Alembic 20261118_disposition_followups) is here
+#: for the first half of that reason only. It is job bookkeeping the app
+#: updates, not append-only evidence; but a startup that created it would make
+#: the migration fail on an existing table and would skip its indexes, CHECKs
+#: and grants. Alembic creates it or nothing does.
 MIGRATION_OWNED_TABLES = (
     "rce_delivery_stage_events", "rce_disposition_events",
     "rce_reconciliation_snapshots", "tefca_identifier_decision_events",
     "rce_delivery_report_links", "rce_record_comments",
     "rce_supplemental_npi_research",
+    "rce_disposition_followups",
 )
 
 
@@ -455,3 +462,7 @@ TRACEABILITY_TABLE_ORDER = [
     "tefca_identifier_decision_events",
     "rce_delivery_report_links",
 ]
+
+# Registered on Base with the traceability models so Alembic autogenerate and
+# the startup exclusion above always see it, whichever module is imported first.
+from app.tefca_registry.rce import disposition_followup_models  # noqa: E402,F401
