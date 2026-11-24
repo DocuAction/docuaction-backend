@@ -77,11 +77,18 @@ def test_the_migration_is_the_single_head_and_chains_on_the_previous_head():
     from alembic.script import ScriptDirectory
 
     scripts = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert scripts.get_heads() == ["20261118_disposition_followups"]
+    # 20261118 is applied to DEV and keeps its parent. 20261124_iqvia_reconciliation
+    # follows it and is the single head on this branch. Draft #233 also parents on
+    # 20261118: whichever of the two merges second must be re-parented first.
     assert (
         scripts.get_revision("20261118_disposition_followups").down_revision
         == "20261108_iqvia_advisory_outcome"
     )
+    assert (
+        scripts.get_revision("20261124_iqvia_reconciliation").down_revision
+        == "20261118_disposition_followups"
+    )
+    assert scripts.get_heads() == ["20261124_iqvia_reconciliation"]
 
 
 async def _catalog():
