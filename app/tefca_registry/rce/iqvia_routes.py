@@ -92,6 +92,7 @@ from app.core.security import require_role, role_at_least
 from app.core.upload_security import safe_existing_path
 from app.tefca_registry.rce import iqvia_import as ii
 from app.tefca_registry.rce import iqvia_match as im
+from app.tefca_registry.rce import iqvia_reconciliation as rec
 from app.tefca_registry.rce import iqvia_upload_jobs as jobs
 from app.tefca_registry.rce import iqvia_upload_models as um
 from app.tefca_registry.rce import snapshot_models as sm
@@ -585,6 +586,8 @@ def _stored_counters(metadata: Dict[str, Any]) -> Dict[str, Any]:
         "basis": "stored_import_counters",
         "rows_read": summary.get("rows_read"),
         "rows_staged": summary.get("rows_staged"),
+        "rows_inserted_latest_attempt": summary.get("rows_staged"),
+        "rows_already_present": summary.get("rows_already_staged"),
         "rows_rejected": summary.get("rows_rejected", metadata.get("rows_rejected")),
         "reference_preflight_gate": preflight.get("gate"),
     }
@@ -820,8 +823,15 @@ async def snapshot_status(
     job = await jobs.latest_job_for_snapshot(db, snapshot_id)
     if job is not None:
         out["job"] = job.to_dict()
+    # OPEN / status polling never counts the observation table (2026-11-24: on DEV
+    # that count took 42-181 s and timed the portal out). It returns what the
+    # importer recorded, labelled as such, plus the stored result of the exact
+    # background reconciliation. Pure read: no count, no write.
+    out["counters"] = rec.recorded_counters(snapshot.metadata_, snapshot.record_count)
     if (snapshot.metadata_ or {}).get("import_status") == "completed":
-        out["reconciliation"] = await ii.verify_snapshot_staged_completely(db, snapshot_id)
+        out["reconciliation"] = await rec.view_for_snapshot(db, snapshot)
+        out["reconciliation"]["reference_preflight_gate"] = (
+            (snapshot.metadata_ or {}).get("reference_preflight") or {}).get("gate")
     # Who registered it (the maker) -- the UI states the maker/checker rule
     # against a name, and a QA lead who IS the registrant learns before
     # clicking that their approval will be refused, not after.
@@ -850,6 +860,34 @@ async def snapshot_status(
     # existed -- shown as "not evaluated", never as clear.
     out["reference_preflight"] = (snapshot.metadata_ or {}).get("reference_preflight")
     return out
+
+
+@router.post("/snapshots/{snapshot_id}/reconcile", status_code=202,
+             summary="Queue the exact staged-row reconciliation (single-flight, background)")
+async def start_reconciliation(
+    snapshot_id: uuid.UUID, response: Response, db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("reviewer")),
+):
+    """Enqueue the exact count and return immediately. Idempotent: if a check is
+    already queued or running for this snapshot, or a PASSED result for the
+    current staged data exists, that row is returned and nothing new starts. The
+    count itself runs in the scheduler (`iqvia_import_scheduler`), never in this
+    request. Mechanical, not a decision: reviewer role suffices."""
+    _require_licensed_access(user)
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        row, outcome = await rec.request_reconciliation(
+            db, snapshot_id, requested_by=getattr(user, "email", None) or "UNKNOWN")
+    except rec.ReconciliationRefused as exc:
+        http = {"NOT_FOUND": 404, "RECONCILIATION_COOLDOWN": 429}.get(exc.code, 409)
+        raise HTTPException(http, detail={"error": str(exc), "code": exc.code})
+    if outcome == "started":
+        await _audit(db, user, action="IQVIA_RECONCILIATION_REQUESTED", outcome="success",
+                     resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                     details={"reconciliation_id": str(row.id)})
+    snapshot = await db.get(sm.SourceSnapshot, snapshot_id)
+    view = rec.describe(row, await rec.current_staging_token(db, snapshot))
+    return {"snapshot_id": str(snapshot_id), "outcome": outcome, "reconciliation": view}
 
 
 def _matching_capability(source_system: str, snapshot=None) -> Dict[str, Any]:
@@ -929,7 +967,11 @@ async def approve(
     import job got requeued/resumed after a worker died stays
     `import_status: "staging"` until the RESUMED run actually completes."""
     _require_licensed_access(user)
-    snapshot = await db.get(sm.SourceSnapshot, snapshot_id)
+    # Row lock for the whole approval transaction: the importer's progress and
+    # completion writes touch this row, so nothing can change the staged data's
+    # recorded state between the gate below and the append-only approval.
+    snapshot = await db.get(sm.SourceSnapshot, snapshot_id, with_for_update=True,
+                            populate_existing=True)
     if snapshot is None:
         raise HTTPException(404, f"no snapshot {snapshot_id}")
     import_status = (snapshot.metadata_ or {}).get("import_status")
@@ -940,15 +982,15 @@ async def approve(
         raise HTTPException(409, detail={
             "error": f"snapshot import_status is {import_status!r}, not 'completed'",
             "code": "IMPORT_NOT_COMPLETE"})
-    reconciliation = await ii.verify_snapshot_staged_completely(db, snapshot_id)
-    if not reconciliation["reconciles"]:
+    ok, gate_code, reconciliation = await rec.approval_gate(db, snapshot)
+    if not ok:
         await _audit(db, user, action="IQVIA_SNAPSHOT_APPROVAL", outcome="rejected",
                      resource_type="iqvia_snapshot", resource_id=snapshot_id,
-                     details={"code": "RECONCILIATION_FAILED", "reconciliation": reconciliation})
+                     details={"code": gate_code, "reconciliation": reconciliation})
         raise HTTPException(409, detail={
-            "error": "staged row count does not reconcile with rows read minus "
-                     "rows rejected -- refusing to approve a partial import",
-            "code": "RECONCILIATION_FAILED", "reconciliation": reconciliation})
+            "error": "the exact staged-row reconciliation has not passed for the snapshot "
+                     "as it stands now -- refusing to approve",
+            "code": gate_code, "reconciliation": reconciliation})
     try:
         approved = await sx.approve_snapshot(db, snapshot_id, user=user,
                                              approval_ref=body.approval_ref)
@@ -979,7 +1021,9 @@ async def approve(
                  details={"successor_snapshot_id": str(approved.id),
                           "approval_ref": body.approval_ref,
                           "registrant": snapshot.created_by,
-                          "reconciliation": reconciliation})
+                          "reconciliation": reconciliation,
+                          "reconciliation_id": reconciliation.get("reconciliation_id"),
+                          "staged_row_count": reconciliation.get("staged_row_count")})
     return {"snapshot_id": str(approved.id), "status": approved.status,
            "approved_by": approved.approved_by, "approved_at": approved.approved_at.isoformat(),
            "supersedes_snapshot_id": str(snapshot_id)}

@@ -1,7 +1,7 @@
 """Append-only, non-decision record comments (QA original / second reviewer / report clarification).
 
 Revision ID: 20261112_rce_record_comments
-Revises: 20261118_disposition_followups
+Revises: 20261124_iqvia_reconciliation
 Create Date: 2026-11-12
 
 REVISION ID LENGTH: alembic_version.version_num is VARCHAR(32); this id is 28 characters.
@@ -42,7 +42,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql as pg
 
 revision = "20261112_rce_record_comments"
-down_revision = "20261118_disposition_followups"  # re-pointed 2026-11-22 (owner decision): main's 20261118 was applied to DEV first and keeps its place
+down_revision = "20261124_iqvia_reconciliation"  # re-pointed 2026-11-24: main's 20261118 (on DEV) and 20261124 (merged first) keep their places
 branch_labels = None
 depends_on = None
 

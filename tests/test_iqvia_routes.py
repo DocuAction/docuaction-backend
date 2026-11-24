@@ -22,6 +22,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import delete, select, text
 
+from app.tefca_registry.rce import iqvia_reconciliation as rec
 from app.tefca_registry.rce import iqvia_routes as routes
 from app.tefca_registry.rce import iqvia_upload_jobs as jobs
 from app.tefca_registry.rce import iqvia_upload_models as um
@@ -71,6 +72,8 @@ async def db(db_required):
         from app.models.database import AuditLog
         audited = [str(i) for i in (_created_snapshot_ids + _created_upload_ids)] or ["none"]
         await cleanup.execute(delete(AuditLog).where(AuditLog.resource_id.in_(audited)))
+        await cleanup.execute(delete(rec.IqviaSnapshotReconciliation).where(
+            rec.IqviaSnapshotReconciliation.snapshot_id.in_(_created_snapshot_ids or [uuid.uuid4()])))
         await cleanup.execute(delete(um.IqviaImportJob).where(
             um.IqviaImportJob.snapshot_id.in_(_created_snapshot_ids or [uuid.uuid4()])))
         await cleanup.execute(delete(um.IqviaUploadSession).where(
@@ -140,6 +143,20 @@ async def _run_one_queued_job(db) -> str:
     return job.state
 
 
+async def _reconcile(db, snapshot_id, *, user=None) -> dict:
+    """What the portal and the scheduler do together: queue the exact count
+    through the route, then claim and run it exactly as `_reconcile_tick` does.
+    Returns the route's outcome body; the terminal state is read from the row."""
+    from fastapi import Response
+    sid = uuid.UUID(str(snapshot_id))
+    queued = await routes.start_reconciliation(sid, Response(), db, user=user or _User("reviewer"))
+    row = await rec.claim_next(db)
+    if row is not None:
+        await rec.run_reconciliation(str(row.id))
+    await db.rollback()
+    return queued
+
+
 async def _stage_and_complete(db, tmp_path, monkeypatch, *, n=3):
     """Stage, then run the durable job exactly as the scheduler would."""
     _iqvia_sources(monkeypatch, True)
@@ -199,8 +216,20 @@ class TestStageStatusApprove:
         assert status["status"] == sm.SNAPSHOT_PENDING
         assert status["import_status"] == "completed"
         assert status["import_summary"]["rows_staged"] == 3
-        assert status["reconciliation"]["reconciles"] is True
         assert status["job"]["state"] == um.IqviaImportJob.STATE_SUCCEEDED
+        # Open returns what the importer recorded, labelled, with NO count...
+        assert status["counters"]["label"] == "Recorded at import"
+        assert status["counters"]["rows_inserted_latest_attempt"] == 3
+        assert status["counters"]["rows_already_present"] == 0
+        assert status["counters"]["resumed"] is False
+        # ...and the exact reconciliation has not been asked for yet.
+        assert status["reconciliation"]["status"] == "not_checked"
+        queued = await _reconcile(db, snapshot_id)
+        assert queued["outcome"] == "started"
+        status = await routes.snapshot_status(uuid.UUID(snapshot_id), db, user=_User("reviewer"))
+        assert status["reconciliation"]["status"] == "passed"
+        assert status["reconciliation"]["label"] == "Passed"
+        assert status["reconciliation"]["staged_row_count"] == 3
 
     async def test_approve_refused_before_import_completes(self, db, monkeypatch):
         _iqvia_sources(monkeypatch, True)
@@ -221,6 +250,7 @@ class TestStageStatusApprove:
     async def test_approve_succeeds_after_completion_and_reconciliation(
             self, db, tmp_path, monkeypatch):
         snapshot_id = await _stage_and_complete(db, tmp_path, monkeypatch, n=2)
+        await _reconcile(db, snapshot_id)
         body = routes.ApproveRequest(approval_ref=f"{SYN}-ref")
         approved = await routes.approve(uuid.UUID(snapshot_id), body, db, user=_User("qalead"))
         assert approved["status"] == sm.SNAPSHOT_APPROVED
@@ -229,6 +259,7 @@ class TestStageStatusApprove:
 class TestMatchRoute:
     async def test_match_hco_runs(self, db, tmp_path, monkeypatch):
         snapshot_id = await _stage_and_complete(db, tmp_path, monkeypatch, n=2)
+        await _reconcile(db, snapshot_id)
         body = routes.ApproveRequest(approval_ref=f"{SYN}-ref")
         approved = await routes.approve(uuid.UUID(snapshot_id), body, db, user=_User("qalead"))
         result = await routes.match_snapshot(uuid.UUID(approved["snapshot_id"]), db=db,
@@ -389,6 +420,9 @@ class TestMakerCheckerAndDuplicates:
         snapshot_id = uuid.UUID(result["snapshot_id"])
         _created_snapshot_ids.append(snapshot_id)
         assert await _run_one_queued_job(db) == um.IqviaImportJob.STATE_SUCCEEDED
+        # A check that PASSED, so the refusal below is the maker/checker one and
+        # not the reconciliation gate.
+        await _reconcile(db, snapshot_id, user=maker)
 
         with pytest.raises(HTTPException) as exc:
             await routes.approve(snapshot_id, routes.ApproveRequest(approval_ref=f"{SYN}-r"),
@@ -506,6 +540,7 @@ class TestAuditTrailAndCapability:
             snapshot_id = uuid.UUID(done["snapshot_id"])
             _created_snapshot_ids.append(snapshot_id)
             assert await _run_one_queued_job(db) == um.IqviaImportJob.STATE_SUCCEEDED
+            await _reconcile(db, snapshot_id)
             approved = await routes.approve(
                 snapshot_id, routes.ApproveRequest(approval_ref=f"{SYN}-r"), db, user=_User("qalead"))
             approved_id = uuid.UUID(approved["snapshot_id"])
@@ -606,7 +641,8 @@ class TestSnapshotStatusOverHttp:
         assert isinstance(pre["findings"], list) and isinstance(pre["held_checks"], list)
         assert pre["bound"] and pre["schema_version"] and pre["preflight_version"]
         assert body["reconciliation"]["reference_preflight_gate"] == pre["gate"]
-        assert body["reconciliation"]["refusal_reasons"] == []
+        assert body["reconciliation"]["status"] == "not_checked"
+        assert body["counters"]["label"] == "Recorded at import"
         # no row content, path or licensed value leaks through the findings
         assert str(tmp_path) not in as_reviewer.text
 
