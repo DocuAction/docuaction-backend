@@ -203,7 +203,8 @@ B1_NO_LATER_EVIDENCE = ("evidence saved after that review is NOT re-evaluated by
 
 
 def b1_evidence_verdict(review: Any, *, rules: Optional[List[dict]], policy_active: bool,
-                        cutoff_rows: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                        cutoff_rows: Optional[Dict[str, Any]] = None,
+                        not_attributed: Optional[List[str]] = None) -> Dict[str, Any]:
     """May an approved B4 -> B1 move be REPORTED as B1? {"established": bool, "reason": str}.
 
     Owner authorization 2026-11-17: B1 only when saved evidence at the cutoff
@@ -267,6 +268,11 @@ def b1_evidence_verdict(review: Any, *, rules: Optional[List[dict]], policy_acti
     if pending:
         why.append("pending exclusion candidate with no recorded determination: " + ", ".join(sorted(set(pending)))
                    + "; a clear SAM extract never clears a live SAM candidate")
+    if not_attributed:
+        # The loader withheld these sources' rows at the cutoff as another identifier's result. They were not
+        # evaluated for this record, which is stated - an unevaluated source is never "no pending candidate".
+        why.append("evidence at the cutoff not attributed to this record, so not evaluated: "
+                   + ", ".join(sorted(set(not_attributed))))
     for key, text in (("prior_risk_not_cleared", "an earlier risk signal on the entity has not been cleared"),
                       ("analyst_review_dimensions", "the review routed evidence dimension(s) to analyst review")):
         if vr.get(key):

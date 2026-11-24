@@ -204,3 +204,23 @@ def test_the_dataset_applies_b1_only_when_the_fact_states_established_evidence()
     s = ds["summary"]
     assert s["buckets"] == {"B1": 1, "B2": 0, "B3": 1, "B4": 4} and s["held_inside_b4"] == 1
     assert s["reclassification_transitions"] == {"B4 -> B1": 1, "B4 -> B3": 1}
+
+
+# 2026-11-24: a source whose row at the cutoff the loader did not attribute to this record is named as not
+# evaluated. It is never read as "no pending candidate", and another identifier's candidate is never cited.
+
+def test_a_source_not_attributed_to_the_record_is_stated_as_not_evaluated():
+    from types import SimpleNamespace
+
+    from app.reports.data import reviewed_disposition as rd
+
+    review = SimpleNamespace(review_id="REV-SYN-1", verification_results={}, classification_rule_version=None,
+                             classification_bucket="B4", classification_rule="RULE-006")
+    verdict = rd.b1_evidence_verdict(review, rules=None, policy_active=True,
+                                     cutoff_rows={"SAM_GOV": None, "OIG_LEIE": None, "SAM extract": None},
+                                     not_attributed=["SAM_GOV", "SAM_GOV"])
+    assert verdict["established"] is False
+    assert "not attributed to this record, so not evaluated: SAM_GOV" in verdict["reason"]
+    assert "pending exclusion candidate" not in verdict["reason"]
+    plain = rd.b1_evidence_verdict(review, rules=None, policy_active=True, cutoff_rows=None)
+    assert plain["established"] is False and "not attributed" not in plain["reason"]
