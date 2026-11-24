@@ -398,11 +398,13 @@ def treatment_combined_scope_missing_npi(
     assessment_date: date,
     requirement_effective: date,
 ) -> Optional[dict]:
-    """Methodology v1.3-A (REVISED B) amendment, relayed in the 2026-11-15 prompt: the exact
-    parsed T-TRTMNT token ALONE OR COMBINED with other purposes is in scope (token order
-    irrelevant; T-TREAT and near-match tokens never count). Every other condition is the ONC
-    scope's. IMPLEMENTED, NOT WIRED: no rule, component or pipeline calls it; activation and
-    the effective date are owner decisions."""
+    """Submitted methodology v1.4 RULE-006 (owner-confirmed submitted copy, 2026-11-24; first
+    drafted as revision 1.3-A): the exact parsed T-TRTMNT token ALONE OR COMBINED with other
+    purposes is in scope (token order irrelevant; T-TREAT and near-match tokens never count).
+    Every other condition is the ONC scope's. Emitted by `treatment_field_signals` for both
+    classification paths and consumed only by the component `treatment_b4_combined_scope`,
+    which is NOT activated: ONC acceptance and the effective date are not recorded, and
+    activation is a governed owner act."""
     return _treatment_scope_signal(
         purposes_raw, npi_raw, active_raw, participation_raw, assessment_date=assessment_date,
         requirement_effective=requirement_effective, combined_purposes=True)
@@ -463,7 +465,7 @@ def _treatment_scope_signal(
         "status": True,
         "reason_code": ("TREATMENT_TOKEN_NPI_MISSING_COMBINED_SCOPE" if combined_purposes
                         else "TREATMENT_SOLE_PURPOSE_NPI_MISSING_ONC_SCOPE"),
-        "scope_basis": ("Methodology v1.3-A combined-purpose Treatment scope (DRAFT; acceptance and "
+        "scope_basis": ("Submitted methodology v1.4 combined-purpose Treatment scope (ONC acceptance and "
                         "effective date not recorded)" if combined_purposes
                         else "ONC updated Treatment scope (relayed 2026-11-09)"),
         "participation_level": participation,
@@ -581,6 +583,15 @@ def treatment_field_signals(
         requirement_effective=requirement_effective)
     if onc_signal is not None:
         fields["treatment_onc_scope_missing_npi"] = onc_signal
+    # Submitted methodology v1.4 RULE-006: T-TRTMNT alone OR with other purposes. Its own signal, emitted for
+    # both paths like the others and INERT until the component `treatment_b4_combined_scope` is activated. A
+    # sole-purpose record carries both signals; only the active regime's rule reads one of them.
+    combined_signal = treatment_combined_scope_missing_npi(
+        purposes_raw, npi_raw, active_raw, participation_raw,
+        assessment_date=assessment_date,
+        requirement_effective=requirement_effective)
+    if combined_signal is not None:
+        fields["treatment_combined_scope_missing_npi"] = combined_signal
     return fields
 
 
