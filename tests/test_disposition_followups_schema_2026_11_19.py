@@ -178,7 +178,11 @@ def test_the_migrated_table_matches_the_model(catalog):
     from app.core.database import Base
 
     model = Base.metadata.tables[TABLE]
-    assert catalog["version"] == "20261118_disposition_followups"
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    # The database is migrated to the chain's head, whichever revision that is on this branch.
+    assert catalog["version"] == ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
     assert set(catalog["columns"]) == {c.name for c in model.columns}
     for column in model.columns:
         assert catalog["columns"][column.name][1] is (not column.nullable), column.name
