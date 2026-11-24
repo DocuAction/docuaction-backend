@@ -870,3 +870,181 @@ async def test_a_held_record_with_a_review_rationale_keeps_the_exact_hold_reason
         assert hold in reasons                                      # and the hold reason is no longer dropped
         assert reasons.index("rationale for") < reasons.index(hold) # distinguishable, rationale first
         assert facts[line]["held_reason"] == hold
+
+
+# ── 2026-11-24: evidence stored under a shared entity is attributed to a record only by the identifier it was
+#    queried by. Another record's result (other delivery, coverage or recheck run) is never shown as this record's. ──
+
+async def _keyed(db, entity_id, source, dimension, disposition, created, query_identifier):
+    row = await _evidence(db, entity_id, source, dimension, disposition, created)
+    row.query_identifier = query_identifier
+    await db.flush()
+    return row
+
+
+async def test_a_newer_result_queried_by_another_npi_is_not_shown_and_the_records_own_row_is_used(rolled_back_db):
+    db = rolled_back_db
+    rows = make_rows(1, arc="9.99.777.60")
+    rows[0]["NPI"] = "1234567893"
+    intake_id, _ = await seed_intake(db, rows, with_job=False)
+    await _run(db, intake_id)
+    rec = (await _records(db, intake_id))[1]
+    ent = await _entity(db, "attr1")
+    await _curate(db, intake_id, rec, "CLEAN", entity_id=ent)
+    own = await _keyed(db, ent, "OIG_LEIE", "EXCLUSION_REVOCATION", "PASS", T_OLD, "npi=1234567893")
+    other = await _keyed(db, ent, "OIG_LEIE", "EXCLUSION_REVOCATION", "FAIL", T_NEW, "npi=1659346005")
+    out = await _load(db, intake_id)
+    f = out["facts"][0]
+    assert f["leie"].startswith("PASS")                              # the record's own screen, not the newer foreign FAIL
+    assert f"OIG_LEIE:{own.id}@" in f["evidence_reference"]
+    assert str(other.id) not in f["evidence_reference"]
+    assert out["meta"]["stats"]["evidence_rows_reselected_for_record"] == 1
+    assert out["meta"]["stats"]["evidence_rows_not_attributed"] == 0
+
+
+async def test_two_deliveries_sharing_an_entity_each_show_only_their_own_npis_result(rolled_back_db):
+    db = rolled_back_db
+    rows_a, rows_b = make_rows(1, arc="9.99.777.61"), make_rows(1, arc="9.99.777.61")
+    rows_a[0]["NPI"], rows_b[0]["NPI"] = "1234567893", "1659346005"
+    a_id, _ = await seed_intake(db, rows_a, with_job=False)
+    b_id, _ = await seed_intake(db, rows_b, with_job=False)
+    await _run(db, a_id)
+    await _run(db, b_id)
+    ra, rb = (await _records(db, a_id))[1], (await _records(db, b_id))[1]
+    shared = await _entity(db, "attr2")
+    await _curate(db, a_id, ra, "CLEAN", entity_id=shared)
+    await _curate(db, b_id, rb, "CLEAN", entity_id=shared)
+    await _keyed(db, shared, "OIG_LEIE", "EXCLUSION_REVOCATION", "PASS", T_OLD, "npi=1234567893")
+    await _keyed(db, shared, "OIG_LEIE", "EXCLUSION_REVOCATION", "FAIL", T_NEW, "npi=1659346005")
+    fa = (await _load(db, a_id))["facts"][0]
+    fb = (await _load(db, b_id))["facts"][0]
+    assert fa["leie"].startswith("PASS") and fb["leie"].startswith("FAIL")
+
+
+async def test_with_no_row_of_its_own_the_cell_says_not_attributed_and_never_borrows_the_result(rolled_back_db):
+    db = rolled_back_db
+    rows = make_rows(2, arc="9.99.777.62")
+    rows[0]["NPI"], rows[1]["NPI"] = "1234567893", ""            # second record submitted NO NPI
+    intake_id, _ = await seed_intake(db, rows, with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    ent = await _entity(db, "attr3")
+    await _curate(db, intake_id, recs[1], "CLEAN", entity_id=ent)
+    await _curate(db, intake_id, recs[2], "CLEAN", entity_id=ent)
+    foreign = await _keyed(db, ent, "OIG_LEIE", "EXCLUSION_REVOCATION", "PASS", T_OLD, "npi=1659346005")
+    out = await _load(db, intake_id)
+    facts = _by_line(out)
+    for line, why in ((1, "a different NPI than this record's submitted NPI"),
+                      (2, "an NPI although this record's submitted NPI is blank")):
+        cell = facts[line]["leie"]
+        assert cell.startswith("Not attributed to this record") and why in cell
+        assert "PASS" not in cell and "1659346005" not in cell   # neither the result nor the other identifier
+        assert str(foreign.id) not in facts[line]["evidence_reference"]
+    assert out["meta"]["stats"]["evidence_rows_not_attributed"] == 2
+    assert facts[2]["submitted_npi"] == ""                       # the blank stays blank
+
+
+async def test_a_name_screen_of_another_organisation_is_not_attributed_and_the_delivered_name_is(rolled_back_db):
+    db = rolled_back_db
+    rows = make_rows(1, arc="9.99.777.63")
+    rows[0]["NPI"] = ""
+    intake_id, _ = await seed_intake(db, rows, with_job=False)
+    await _run(db, intake_id)
+    rec = (await _records(db, intake_id))[1]
+    ent = await _entity(db, "attr4")
+    await _curate(db, intake_id, rec, "CLEAN", entity_id=ent)
+    await _keyed(db, ent, "OIG_LEIE", "EXCLUSION_REVOCATION", "PASS", T_OLD, f"org={SYN} SOME OTHER ORGANISATION")
+    assert "not this record's delivered name" in (await _load(db, intake_id))["facts"][0]["leie"]
+    await _keyed(db, ent, "OIG_LEIE", "EXCLUSION_REVOCATION", "PASS", T_NEW, f"org={rows[0]['name']}")
+    assert (await _load(db, intake_id))["facts"][0]["leie"].startswith("PASS")
+
+
+async def test_rows_without_a_recorded_identifier_or_keyed_by_uei_are_shown_as_before(rolled_back_db):
+    db = rolled_back_db
+    rows = make_rows(1, arc="9.99.777.64")
+    rows[0]["NPI"] = "1234567893"
+    intake_id, _ = await seed_intake(db, rows, with_job=False)
+    await _run(db, intake_id)
+    rec = (await _records(db, intake_id))[1]
+    ent = await _entity(db, "attr5")
+    await _curate(db, intake_id, rec, "CLEAN", entity_id=ent)
+    await _evidence(db, ent, "NPPES", "IDENTITY", "PASS", T_OLD)                              # no identifier recorded
+    await _keyed(db, ent, "SAM_GOV", "EXCLUSION_REVOCATION", "PASS", T_OLD, "uei=SYNTHETICUEI1")
+    out = await _load(db, intake_id)
+    f = out["facts"][0]
+    assert f["nppes"].startswith("PASS") and f["sam"].startswith("PASS")
+    assert out["meta"]["stats"]["evidence_rows_not_attributed"] == 0
+
+
+# ── 2026-11-24: one FROZEN dataset. Curated status (HELD) has no history, so a re-read of the database after a hold
+#    is released gives different totals for the same cutoff. A dataset saved once as JSON renders Excel, CSV and
+#    PDF-HTML again with identical rows and totals, without reading current status. ──
+
+async def test_a_saved_dataset_regenerates_identical_outputs_after_a_hold_is_released_past_the_cutoff(rolled_back_db):
+    import json
+
+    from app.reports.engine.xlsx_engine import render_workbook
+    from openpyxl import load_workbook
+
+    db = rolled_back_db
+    intake_id, _ = await seed_intake(db, make_rows(3, arc="9.99.777.65"), with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    ent1, ent3 = await _entity(db, "fz1"), await _entity(db, "fz3")
+    await _curate(db, intake_id, recs[1], "CLEAN", entity_id=ent1)
+    await _curate(db, intake_id, recs[2], "HELD", reason="blocking identity issue")
+    await _curate(db, intake_id, recs[3], "CLEAN", entity_id=ent3)
+    await _review(db, recs[1], ent1, "REV-9965-000001", "B1", T_OLD)
+    await _review(db, recs[3], ent3, "REV-9965-000003", "B4", T_OLD, rule="RULE-006")
+
+    def xlsx_rows(data):
+        ws = load_workbook(io.BytesIO(data), read_only=True)["Records"]
+        return [["" if c is None else str(c) for c in row] for row in ws.iter_rows(values_only=True)]
+
+    first = await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=CUTOFF, report_id="R-FROZEN")
+    assert first["summary"]["held_inside_b4"] == 1
+    saved = json.dumps(first, ensure_ascii=False, default=str)        # the frozen dataset, as it would be stored
+    out_first = (ds_mod.to_csv(first), ds_mod.to_html(first), xlsx_rows(render_workbook(first)))
+
+    # AFTER the cutoff: the hold is released and the record is promoted and classified.
+    held = (await db.execute(select(m.RceCuratedRecord).where(
+        m.RceCuratedRecord.source_record_id == recs[2].id))).scalar_one()
+    ent2 = await _entity(db, "fz2")
+    held.record_status, held.status_reason, held.canonical_entity_id = "CLEAN", None, ent2
+    await _review(db, recs[2], ent2, "REV-9965-000002", "B1", T_AFTER_CUTOFF)
+    await db.flush()
+
+    frozen = json.loads(saved)                                         # nothing is read from the database
+    assert frozen["summary"] == json.loads(json.dumps(first["summary"], default=str))
+    assert ds_mod.to_csv(frozen) == out_first[0]                       # byte-identical CSV
+    assert ds_mod.to_html(frozen) == out_first[1]                      # identical PDF source
+    assert xlsx_rows(render_workbook(frozen)) == out_first[2]          # identical workbook rows
+    assert frozen["summary"]["held_inside_b4"] == 1
+
+    # The limitation the frozen copy removes: the SAME cutoff re-read now reports no HELD record.
+    reread = await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=CUTOFF, report_id="R-FROZEN")
+    assert reread["summary"]["held_inside_b4"] == 0
+    assert ds_mod.to_csv(reread) != out_first[0]
+
+
+async def test_reselect_accepts_only_a_positively_keyed_row_so_row_order_decides_a_uei_keyed_result(rolled_back_db):
+    """Stated limit, pinned: a `uei=` row cannot be judged. Newest, it is shown as before. Under a newer row
+    queried by another organisation's name, it is not accepted as this record's own and the cell is withheld."""
+    db = rolled_back_db
+    rows = make_rows(2, arc="9.99.777.66")
+    rows[0]["NPI"], rows[1]["NPI"] = "1234567893", "1234567893"
+    intake_id, _ = await seed_intake(db, rows, with_job=False)
+    await _run(db, intake_id)
+    recs = await _records(db, intake_id)
+    older_uei, newer_uei = await _entity(db, "ord1"), await _entity(db, "ord2")
+    await _curate(db, intake_id, recs[1], "CLEAN", entity_id=older_uei)
+    await _curate(db, intake_id, recs[2], "CLEAN", entity_id=newer_uei)
+    other = f"legal_name={SYN} SOME OTHER ORGANISATION"
+    await _keyed(db, older_uei, "SAM_GOV", "EXCLUSION_REVOCATION", "PASS", T_OLD, "uei=SYNTHETICUEI1")
+    await _keyed(db, older_uei, "SAM_GOV", "EXCLUSION_REVOCATION", "FAIL", T_NEW, other)
+    await _keyed(db, newer_uei, "SAM_GOV", "EXCLUSION_REVOCATION", "FAIL", T_OLD, other)
+    await _keyed(db, newer_uei, "SAM_GOV", "EXCLUSION_REVOCATION", "PASS", T_NEW, "uei=SYNTHETICUEI1")
+    facts = _by_line(await _load(db, intake_id))
+    assert facts[1]["sam"].startswith("Not attributed to this record")     # never the other organisation's FAIL
+    assert "not established to be this record's result" in facts[1]["sam"]
+    assert facts[2]["sam"].startswith("PASS")                               # unjudged uei= row, shown as before

@@ -29,6 +29,20 @@ NO JOIN FAN-OUT, NO CROSS-DELIVERY LEAKAGE
       to the source-record set.
     Evidence is keyed by the canonical ENTITY by design (an entity verified for
     an earlier delivery keeps its evidence); the cutoff bounds it in time.
+    ATTRIBUTION (2026-11-24): a row whose RECORDED query identifier positively
+    names a different NPI, or an organisation name that is not the delivered
+    name, is another record's result. It is never shown as this record's: the
+    record's own newest row at/before the cutoff is used instead, and where
+    none exists the cell says "Not attributed to this record". LIMITS, stated
+    rather than guessed: a row is judged only when its identifier is an NPI or
+    the source's own name key. NPPES rows carry no query identifier and PECOS
+    rows carry a dataset / snapshot key, so those two sources are NEVER judged
+    here; nor is a `uei=` SAM row or an older row with no identifier. They are
+    shown as before. The reselect is stricter than the first pass: it accepts
+    only a row positively keyed by this record's NPI or delivered name, so a
+    foreign newest row over an older `uei=` row yields "Not attributed". A
+    name-keyed row is withheld whenever the queried name is not the delivered
+    name, including a screen run on the entity's name for this same record.
 
 ASSESSMENT RUN AND EVIDENCE CUTOFF
     The assessment date comes from the selected run (explicit `run_id`, else the
@@ -86,7 +100,7 @@ from sqlalchemy import and_, exists, func, or_, select, text
 from app.reports.data import reviewed_disposition as rd
 from app.reports.data.october_review_dataset import STORED_COMMENT_KEY
 
-LOADER_VERSION = "1.0.0"
+LOADER_VERSION = "1.1.0"
 BATCH_SIZE = 2000
 BUCKETS = ("B1", "B2", "B3", "B4")
 
@@ -115,7 +129,62 @@ NOT_PROMOTED = ("Not established by this loader: the record has no linked entity
 NO_EVIDENCE = ("Not established by this loader: no evidence row for the linked "
                "entity at or before the cutoff exists in the evidence store it "
                "reads. This does not show the source was never checked elsewhere")
+NOT_ATTRIBUTED = ("Not attributed to this record: the evidence on file for the linked entity at or "
+                  "before the cutoff was queried by {why}. It is not established to be this record's "
+                  "result and is not shown as this one's. This does not show the source was never "
+                  "checked for this record elsewhere")
+#: how many of an entity's rows of one source are read when looking for the record's own row
+OWN_ROW_LOOKBACK = 200
 NO_ANCHORED_REVIEW = "no review anchored to this source record at or before the cutoff"
+
+
+def _foreign_evidence_reason(source: str, query_identifier: Any, submitted_npi: str,
+                             delivered_name: str) -> str:
+    """'' unless the row's RECORDED query identifier positively names an NPI or an organisation
+    name this record does not carry; otherwise a short reason (no identifier value is printed).
+
+    Evidence rows are stored under the canonical ENTITY, which other deliveries (and coverage /
+    recheck runs) share. The identifier a row was queried by is what ties it to a delivered
+    record, under the same rules the single-record path uses (`review_service`): an NPI must be
+    the record's own submitted NPI exactly; a name must equal the delivered name under
+    `record_name_identity`. Deliberately conservative: a row with NO recorded identifier (older
+    rows), an ambiguous bare value, or a key that is neither NPI nor name (`uei=`) is NOT judged
+    here and is shown as before."""
+    from app.tefca_registry import review_service as rs
+
+    value = _s(query_identifier).strip()
+    if not value:
+        return ""
+    submitted = _s(submitted_npi).strip()
+    queried_npi = rs.evidence_query_npi(value)
+    if queried_npi and (value.casefold().startswith("npi=") or (queried_npi.isdigit() and len(queried_npi) == 10)):
+        if queried_npi.casefold() == submitted.casefold():
+            return ""
+        return ("an NPI although this record's submitted NPI is blank" if not submitted
+                else "a different NPI than this record's submitted NPI")
+    if rs.persisted_evidence_is_name_keyed(source, value):
+        if rs.names_establish_one_identity(rs.evidence_query_name(source, value), delivered_name):
+            return ""
+        return "an organisation name that is not this record's delivered name"
+    return ""
+
+
+async def _own_evidence_row(db, E, *, entity_id: str, source: str, dimension: str, cutoff,
+                            submitted_npi: str, delivered_name: str):
+    """The newest row of this entity and source, at or before the cutoff, whose recorded query
+    identifier IS one this record carries (`review_service.persisted_evidence_is_for_record`), or
+    None. Used only after the entity's newest row was found to be another record's."""
+    from app.tefca_registry import review_service as rs
+
+    identity = rs.record_name_identity(delivered_name)
+    for row in (await db.execute(
+            select(E).where(E.entity_id == entity_id, E.source == source,
+                            E.evidence_dimension == dimension, E.created_at <= cutoff)
+            .order_by(E.created_at.desc(), E.id.desc()).limit(OWN_ROW_LOOKBACK))).scalars().all():
+        if rs.persisted_evidence_is_for_record(source, row.query_identifier, submitted_npi=submitted_npi,
+                                               record_identity=identity, names_usable=bool(identity)):
+            return row
+    return None
 
 
 class LoaderRefused(ValueError):
@@ -320,6 +389,7 @@ async def load_record_facts(
     stats = {"held": 0, "rejected": 0, "no_curated_row": 0, "not_promoted": 0,
              "classified": 0, "no_review": 0, "review_without_bucket": 0,
              "records_with_multiple_reviews": 0, "evidence_rows_used": 0,
+             "evidence_rows_not_attributed": 0, "evidence_rows_reselected_for_record": 0,
              "records_with_unanchored_entity_reviews": 0,
              "stored_comments": {"QA_ORIGINAL": 0, "QA_IZAAN": 0, "REPORT_CLARIFICATION": 0},
              "records_with_multiple_current_comments_of_one_kind": 0,
@@ -451,6 +521,7 @@ async def load_record_facts(
                     reasons = f"{reasons} | Hold reason: {hold}" if reasons else hold
 
             cells: Dict[str, str] = {}
+            own_rows: Dict[str, Any] = {}      # source -> the evidence row attributed to THIS record
             ev_refs: List[str] = []
             nppes_row = None
             for key, (source, _dim) in EVIDENCE_SOURCES.items():
@@ -461,6 +532,19 @@ async def load_record_facts(
                 if row is None:
                     cells[key] = NO_EVIDENCE
                     continue
+                # The entity's newest row may be ANOTHER delivered record's result (another delivery, a
+                # coverage or recheck run keyed by a different identifier). It is never shown as this
+                # record's: the record's own newest row is used instead, or the cell says so.
+                foreign = _foreign_evidence_reason(source, row.query_identifier, submitted, _s(parsed.get("name")))
+                if foreign:
+                    row = await _own_evidence_row(db, E, entity_id=ent, source=source, dimension=_dim, cutoff=cutoff,
+                                                  submitted_npi=submitted, delivered_name=_s(parsed.get("name")))
+                    if row is None:
+                        stats["evidence_rows_not_attributed"] += 1
+                        cells[key] = NOT_ATTRIBUTED.format(why=foreign)
+                        continue
+                    stats["evidence_rows_reselected_for_record"] += 1
+                own_rows[source] = row
                 stats["evidence_rows_used"] += 1
                 ev_refs.append(f"{source}:{row.id}@{_s(row.generation_timestamp)}")
                 if key == "nppes":
