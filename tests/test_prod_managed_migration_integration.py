@@ -107,6 +107,9 @@ AREA1_FINAL = AREA1_PRESENT + ["rce_delivery_jobs"] + TRACEABILITY + [
     # 20261118_disposition_followups: app SELECT+INSERT+UPDATE by grant, no
     # DELETE; kept owner-owned so that grant still binds after FINALIZE.
     "rce_disposition_followups",
+    # 20261124_iqvia_reconciliation: app SELECT+INSERT+UPDATE by grant, no DELETE;
+    # owner-owned so the grant still binds after FINALIZE.
+    "iqvia_snapshot_reconciliation",
     # 20261108_source_policy: owner-owned policy storage, app SELECT only,
     # ships empty/inactive — deliberately added to the owner inventory.
     "rce_source_policies",

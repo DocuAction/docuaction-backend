@@ -80,17 +80,21 @@ def _script_directory():
 
 
 def test_the_migration_chains_on_the_previous_head_and_the_chain_has_one_head():
-    # 20261118 was applied to DEV first, so it keeps its parent. The record-comment
-    # and NPI-research migrations follow it (re-pointed 2026-11-22, owner decision),
-    # which makes 20261115_rce_npi_research the single head.
+    # 20261118 (on DEV) and 20261124_iqvia_reconciliation (merged to main first) keep
+    # their places. The record-comment and NPI-research migrations follow 20261124
+    # (re-pointed 2026-11-24), which makes 20261115_rce_npi_research the single head.
     scripts = _script_directory()
     assert (
         scripts.get_revision("20261118_disposition_followups").down_revision
         == "20261108_iqvia_advisory_outcome"
     )
     assert (
-        scripts.get_revision("20261112_rce_record_comments").down_revision
+        scripts.get_revision("20261124_iqvia_reconciliation").down_revision
         == "20261118_disposition_followups"
+    )
+    assert (
+        scripts.get_revision("20261112_rce_record_comments").down_revision
+        == "20261124_iqvia_reconciliation"
     )
     assert scripts.get_heads() == ["20261115_rce_npi_research"]
 

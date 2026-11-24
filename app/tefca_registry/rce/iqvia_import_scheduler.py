@@ -78,9 +78,33 @@ async def _poll_tick():
         logger.error("IQVIA import poll tick error: %s", exc)
 
 
-async def _reap_tick():
-    """Requeue or fail IQVIA import jobs whose worker stopped heartbeating."""
+async def _reconcile_tick():
+    """Claim and run one queued exact snapshot reconciliation (2026-11-24).
+
+    A SEPARATE scheduler job from the import poller on purpose: a minutes-long
+    count must not wait behind a multi-hour import (`max_instances=1` on the
+    import poller). `claim_next` refuses to start while another check is live,
+    so at most one count runs against the database at a time."""
     from app.core.database import async_session_maker
+    from app.tefca_registry.rce import iqvia_reconciliation as rec
+
+    try:
+        async with async_session_maker() as db:
+            row = await rec.claim_next(db)
+            if row is None:
+                return
+            logger.info("IQVIA reconciliation claimed %s (snapshot %s)", row.id, row.snapshot_id)
+            rid = str(row.id)
+        await rec.run_reconciliation(rid)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("IQVIA reconciliation tick error: %s", type(exc).__name__)
+
+
+async def _reap_tick():
+    """Requeue or fail IQVIA import jobs whose worker stopped heartbeating, and
+    close exact-reconciliation rows whose worker is gone."""
+    from app.core.database import async_session_maker
+    from app.tefca_registry.rce import iqvia_reconciliation as rec
     from app.tefca_registry.rce import iqvia_upload_jobs as jobs
 
     try:
@@ -91,6 +115,13 @@ async def _reap_tick():
                            len(reaped), reaped)
     except Exception as exc:  # noqa: BLE001
         logger.error("IQVIA import reap tick error: %s", exc)
+    try:
+        async with async_session_maker() as db:
+            closed = await rec.reap_stale(db)
+        if closed:
+            logger.warning("IQVIA reconciliation reaper closed %d row(s)", closed)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("IQVIA reconciliation reap tick error: %s", type(exc).__name__)
 
 
 def start_iqvia_import_scheduler():
@@ -108,6 +139,10 @@ def start_iqvia_import_scheduler():
                            IntervalTrigger(seconds=POLL_INTERVAL_SECONDS),
                            id="iqvia_import_poller",
                            name="IQVIA durable import queue poller", **defaults)
+        _scheduler.add_job(_reconcile_tick,
+                           IntervalTrigger(seconds=POLL_INTERVAL_SECONDS),
+                           id="iqvia_reconciliation_runner",
+                           name="IQVIA exact snapshot reconciliation runner", **defaults)
         _scheduler.add_job(_reap_tick,
                            IntervalTrigger(seconds=REAP_INTERVAL_SECONDS),
                            id="iqvia_import_reaper",

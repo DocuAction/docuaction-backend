@@ -137,6 +137,9 @@ AREA1_OWNER_TABLES = {
     # FINALIZE would make that grant stop binding. OWNER-OWNED, like
     # rce_delivery_jobs (also app-updated by grant).
     "rce_disposition_followups",
+    # 20261124_iqvia_reconciliation: exact-count job rows. App SELECT+INSERT+UPDATE
+    # by grant, no DELETE; owner-owned so that grant still binds after FINALIZE.
+    "iqvia_snapshot_reconciliation",
 }
 
 
@@ -642,6 +645,9 @@ MANAGED_CHAIN_CREATES = {
     # Owner-owned, so it is in AREA1_OWNER_TABLES and is NOT moved to
     # docuaction_app at FINALIZE (an owning app could delete accepted work).
     "rce_disposition_followups",
+    # 20261124_iqvia_reconciliation: exact-count job rows. App SELECT+INSERT+UPDATE
+    # by grant, no DELETE; owner-owned so that grant still binds after FINALIZE.
+    "iqvia_snapshot_reconciliation",
 }
 # Tables the 20260917 revision declares FOREIGN KEYS to that docuaction_app owns
 # in PROD and that no pending revision ALTERs (so they are not re-owned). CREATE
