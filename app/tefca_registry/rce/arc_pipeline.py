@@ -1002,6 +1002,21 @@ async def verify_and_classify(
                 resolution_failures.append({"entity_ref": ref,
                     "reason": "submitted NPI differs from the identifier used by source probes; no record classification written"})
                 continue
+            # ONE NPI for every probe (2026-11-24). NPPES / LEIE / SAM key on the registered identifier checked
+            # above, but the CMS enrollment and revocation probes key on the entity's RCE NPI FIRST
+            # (evidence_service.build_evidence: `rce_npi(entity) or identifier`), and another delivery of a shared
+            # entity can have set that value. If it is not the NPI this record delivered, the enrollment evidence
+            # describes a different NPI: nothing is classified or persisted for this record. Compared with
+            # `npi_key`, the rule `verification_findings.validated_delivery_context` applies to coverage and rechecks.
+            if selected is not None:
+                from app.Tefca import rce_fields as _rce_fields_gate
+                from app.tefca_registry.rce.verification_findings import npi_key as _npi_key
+                enrollment_probe_npi = _rce_fields_gate.rce_npi(entity) or registered_npi or ""
+                if _npi_key(enrollment_probe_npi) != _npi_key(submitted_npi):
+                    unresolved.append(ref)
+                    resolution_failures.append({"entity_ref": ref,
+                        "reason": "the CMS enrollment and revocation probes used an NPI this record did not submit; no record classification written"})
+                    continue
 
             name_screens_withheld: List[Dict[str, str]] = []
             if selected is not None and not submitted_npi:

@@ -727,7 +727,8 @@ def test_policy_determination_cites_its_own_code_never_default_unmatched():
     non_treatment = set(COMPONENTS) - treatment
     regimes = [{"treatment_review_b3", "treatment_b4"},
                {"treatment_b4_owner_adopted"},
-               {"treatment_b4_onc_scope"}]
+               {"treatment_b4_onc_scope"},
+               {"treatment_b4_combined_scope"}]
     assert set().union(*regimes) == treatment, "a treatment regime escaped this check"
     all_codes = set()
     for regime in regimes:

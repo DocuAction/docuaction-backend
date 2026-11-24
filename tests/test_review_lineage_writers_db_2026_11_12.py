@@ -620,3 +620,38 @@ async def test_bulk_refuses_source_evidence_for_a_different_npi(rolled_back_db, 
     assert result["unresolved"] == [ref] and result["processed"] == 0
     assert result["resolution_failures"] and result["outcomes"] == []
     assert (await db.execute(select(func.count()).select_from(reg.ReviewRecord))).scalar_one() == before
+
+
+# 2026-11-24: every source probe must be about the NPI the record delivered. The CMS enrollment / revocation
+# probes key on the entity's RCE NPI first, which another delivery of a shared entity can have set.
+
+async def test_bulk_refuses_when_the_enrollment_probes_used_an_npi_the_record_did_not_submit(rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    ent, d = await _deliveries_sharing_one_entity(db, "9.99.778.12", [
+        ("record", {"NPI": "1234567893"}, "2026-11-08")])
+    ref = d["record"]["record"].source_rce_id
+    _patch_bulk_gather(monkeypatch, {ref: ent.id})
+    original = ap._gather_all_evidence
+
+    def with_entity_npis(identifier_npi, rce_npi):
+        async def gather(refs, timing_log=None):
+            items = await original(refs, timing_log=timing_log)
+            for item in items:
+                item["entity"]["identifier"] = [{"system": "http://hl7.org/fhir/sid/us-npi", "value": identifier_npi}]
+                item["entity"]["_rce"] = {"NPI": rce_npi}
+            return items
+        return gather
+
+    before = (await db.execute(select(func.count()).select_from(reg.ReviewRecord))).scalar_one()
+    # The registered identifier matches the submission, but the entity's RCE NPI (what CMS enrollment and
+    # revocation are asked about) is another delivery's value.
+    monkeypatch.setattr(ap, "_gather_all_evidence", with_entity_npis("1234567893", "1659346005"))
+    result = await ap.verify_and_classify(db, [ref], intake_id=d["record"]["intake"])
+    assert result["unresolved"] == [ref] and result["processed"] == 0 and result["outcomes"] == []
+    assert "enrollment and revocation probes" in result["resolution_failures"][0]["reason"]
+    assert (await db.execute(select(func.count()).select_from(reg.ReviewRecord))).scalar_one() == before
+
+    # Consistent NPIs (formatting aside) are classified as before.
+    monkeypatch.setattr(ap, "_gather_all_evidence", with_entity_npis("1234567893", " 1234567893 "))
+    result = await ap.verify_and_classify(db, [ref], intake_id=d["record"]["intake"])
+    assert result["unresolved"] == [] and len(result["outcomes"]) == 1

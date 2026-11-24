@@ -633,3 +633,28 @@ async def test_a_failed_preflight_read_fails_one_item_and_the_batch_session_stay
     _untouched(await _state(db, ent_fail, rec_fail))                        # nothing persisted for the failed item
     ok = await _state(db, ent_ok, rec_ok)                                   # the other item was fully processed
     assert ok["evidence"] > 0 and [i.source_record_id for i in ok["issues"]] == [rec_ok.id]
+
+
+# -- 2026-11-24: KNOWN GAP, pinned so it cannot be forgotten or silently "fixed" by halves --
+# Without a validated delivered-record context the coverage attempt still gathers evidence and stores it under the
+# resolved entity, and still moves the entity to in_review. That is the only thing that stops the candidate query
+# re-selecting the entity on every batch (it has no other attempt marker). Refusing to store without first adding
+# a durable attempt marker would starve the scheduler: it takes ONE delivery per tick. The marker needs new schema
+# (owner decision, not made). Until then: keep ENABLE_AUTOMATED_VERIFICATION_COVERAGE off and do not run the
+# coverage route for the official delivery. When the marker exists, this test must be inverted.
+
+async def test_known_gap_coverage_without_a_validated_context_still_stores_evidence_and_flips_status(rolled_back_db):
+    from app.tefca_registry import models as reg
+
+    db = rolled_back_db
+    ent, (_intake_a, rec_a), (intake_b, rec_b) = await _two_deliveries(db, a_promoted_later=True)
+    before = (await _state(db, ent, rec_a, rec_b))["evidence"]
+    out, build = await _coverage(db, ref=rec_b.source_rce_id, ent=ent, intake=intake_b,
+                                 resolved=_resolved(ent, OTHER_NPI))     # probes would use an NPI delivery B did not submit
+    assert out["npi_outcome_not_anchored"]
+    assert build.await_count == 1                                          # the sources WERE asked
+    after = await _state(db, ent, rec_a, rec_b)
+    assert after["evidence"] > before                                      # and the rows WERE stored under the entity
+    assert after["issues"] == []                                           # only the ledger row is withheld
+    row = await db.get(reg.TefcaRegEntity, ent)
+    assert row.verification_status == "in_review"                         # and the status WAS changed
