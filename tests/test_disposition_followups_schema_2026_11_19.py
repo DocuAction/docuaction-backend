@@ -77,11 +77,18 @@ def test_the_migration_is_the_single_head_and_chains_on_the_previous_head():
     from alembic.script import ScriptDirectory
 
     scripts = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert scripts.get_heads() == ["20261118_disposition_followups"]
+    # 20261118 is applied to DEV and keeps its parent. 20261124_iqvia_reconciliation
+    # follows it and is the single head on this branch. Draft #233 also parents on
+    # 20261118: whichever of the two merges second must be re-parented first.
     assert (
         scripts.get_revision("20261118_disposition_followups").down_revision
         == "20261108_iqvia_advisory_outcome"
     )
+    assert (
+        scripts.get_revision("20261124_iqvia_reconciliation").down_revision
+        == "20261118_disposition_followups"
+    )
+    assert scripts.get_heads() == ["20261124_iqvia_reconciliation"]
 
 
 async def _catalog():
@@ -171,7 +178,11 @@ def test_the_migrated_table_matches_the_model(catalog):
     from app.core.database import Base
 
     model = Base.metadata.tables[TABLE]
-    assert catalog["version"] == "20261118_disposition_followups"
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    # The database is migrated to the chain's head, whichever revision that is on this branch.
+    assert catalog["version"] == ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
     assert set(catalog["columns"]) == {c.name for c in model.columns}
     for column in model.columns:
         assert catalog["columns"][column.name][1] is (not column.nullable), column.name

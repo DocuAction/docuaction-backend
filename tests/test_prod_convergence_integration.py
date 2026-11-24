@@ -75,7 +75,9 @@ ABSENT = {"rce_source_intakes", "rce_source_records", "rce_ingestion_runs", "rce
           # model is registered with the traceability models, so it IS in the
           # candidate metadata and must be named here or the fixture tries to create
           # it before the tables it references.
-          "rce_disposition_followups"}
+          "rce_disposition_followups",
+          # 20261124_iqvia_reconciliation: FK to source_snapshot (ABSENT above).
+          "iqvia_snapshot_reconciliation"}
 ADDITIVE = {"audit_logs": ["event_type", "outcome", "correlation_id"], "tefca_import_history": ["file_hash"]}
 AREA1 = {"rce_source_records", "rce_source_intakes", "rce_ingestion_runs",
          "rce_rule_execution_history", "rce_delivery_jobs",

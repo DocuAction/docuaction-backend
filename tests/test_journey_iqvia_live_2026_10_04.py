@@ -147,6 +147,21 @@ async def test_journey_iqvia_live(tmp_path, monkeypatch, db_required):
         print(f"[iqvia] snapshot status: {r.status_code} {r.text[:500]}")
         assert r.status_code == 200
 
+        # The exact staged-row reconciliation is a queued background job (2026-11-24):
+        # queue it over the LIVE server, run it the way the scheduler tick does
+        # (this journey has no scheduler), and read the stored result back.
+        r = client.post(f"{LIVE}/api/tefca/rce/iqvia/snapshots/{snapshot_id}/reconcile", headers=HA)
+        print(f"[iqvia] queue reconciliation: {r.status_code} {r.text[:300]}")
+        assert r.status_code == 202 and r.json()["reconciliation"]["status"] == "checking"
+        import app.tefca_registry.rce.iqvia_reconciliation as rec
+        async with async_session_maker() as db:
+            claimed = await rec.claim_next(db)
+        assert claimed is not None
+        await rec.run_reconciliation(str(claimed.id))
+        r = client.get(f"{LIVE}/api/tefca/rce/iqvia/snapshots/{snapshot_id}", headers=HA)
+        assert r.json()["reconciliation"]["status"] == "passed", r.text
+        assert r.json()["counters"]["label"] == "Recorded at import"
+
         # Analyst (reviewer role) attempting approve -> should be refused,
         # approve requires qalead per iqvia_routes.py:475.
         r = client.post(f"{LIVE}/api/tefca/rce/iqvia/snapshots/{snapshot_id}/approve", headers=HA,
