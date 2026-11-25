@@ -287,7 +287,7 @@ async def import_comments(db, *, intake_id: Any, entries: List[Dict[str, Any]], 
     # refuse the WHOLE call with nothing written. A tail whose entries are all imported is unaffected, and so is a
     # full-batch retry (no position moves).
     imported_content = {(r.source_record_id, r.comment_kind, r.text_sha256) for r in replayed.values()}
-    shifted, would_write = False, False
+    shifted, displaced, would_write, takes_free_position = False, False, False, False
     for i, entry in enumerate(entries):
         if not isinstance(entry, dict):
             continue
@@ -299,9 +299,16 @@ async def import_comments(db, *, intake_id: Any, entries: List[Dict[str, Any]], 
         at_position_content = (at_position.source_record_id, at_position.comment_kind, at_position.text_sha256)             if at_position is not None else None
         if at_position_content is not None and at_position_content != content and content in imported_content:
             shifted = True
+        if at_position_content is not None and at_position_content != content and content not in imported_content:
+            # A never-imported entry sits at a position an imported row already holds: it will be rejected below. If the
+            # same call also writes another entry, that one takes a position key of this batch and the rejected entry
+            # can then never be imported under it (a tail of ONLY never-imported entries, 2026-11-25).
+            displaced = True
         if content not in imported_content:
             would_write = True
-    if replayed and shifted and would_write:
+            if at_position is None:
+                takes_free_position = True             # this entry WILL be written, under a position key of the batch
+    if replayed and ((shifted and would_write) or (displaced and takes_free_position)):
         raise CommentRefused(
             "this call re-sends part of an already imported batch at shifted positions and also carries entries that "
             "batch never imported; nothing was written. Re-send the whole batch (re-sending is safe and idempotent)")

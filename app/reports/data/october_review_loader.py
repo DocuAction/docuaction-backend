@@ -48,8 +48,11 @@ ASSESSMENT RUN AND EVIDENCE CUTOFF
     The assessment date comes from the selected run (explicit `run_id`, else the
     intake's own current completed run) via `assessment_context`, validated
     against the intake - never "the latest run in the table". The evidence cutoff
-    is REQUIRED and explicit: nothing newer than it is read. No completed run, or
-    no cutoff, is a refusal.
+    is REQUIRED and explicit: no evidence, review or comment newer than it is
+    read. ONE EXCEPTION: curated status and hold reasons (`rce_curated_records`,
+    one mutable row per record with no status history) are read as they are at
+    generation; the dataset states this as `curated_status_basis`. No completed
+    run, or no cutoff, is a refusal.
 
 REVIEW LINEAGE (review_records.source_record_id)
     New reviews carry the delivered record they are ABOUT: the bulk writer takes it

@@ -679,7 +679,10 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
         "moves_without_structured_finding": unstructured,
         "moves_without_structured_finding_applied": unstructured_applied,
         "move_limitations": move_limitations,
-        "curated_status_basis": "generation_time" if held_or_rejected else "not_applicable",
+        # Always stated: curated status is read at generation whether or not any record is HELD or REJECTED now. A
+        # record held at the cutoff and released since shows no HELD here, and that is exactly the case in which a
+        # reader needs to know the basis. (Was "not_applicable" when nothing was HELD or REJECTED at generation.)
+        "curated_status_basis": "generation_time",
     }
     summary_rows = ([[b, str(counts[b])] for b in BUCKETS]
                     + [["Total (unique records)", str(len(rows))],

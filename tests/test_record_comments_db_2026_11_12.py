@@ -871,3 +871,32 @@ async def test_a_shifted_tail_that_also_holds_never_imported_entries_is_refused_
     # ... and the corrected FULL batch still imports the new entries under the same batch id.
     full = await _import(db, intake_id, [a, b, c, d], batch_id=first["batch_id"])
     assert [r["status"] for r in full["results"]] == [rc.ALREADY_PRESENT, rc.ALREADY_PRESENT, rc.INSERTED, rc.INSERTED]
+
+
+async def test_a_tail_of_only_never_imported_entries_is_refused_before_any_write(rolled_back_db):
+    """The variant the round-3 fix left open (found 2026-11-25). Batch X = [A, B, C, D, E]; A and B import, C, D and E
+    fail validation. Re-sending only the corrected tail [C, D, E] under X: C and D land on A's and B's position keys
+    and are rejected, but E landed on a FREE position key (X/2, C's own) and was inserted - after which the corrected C
+    could never import under X. Such a call is refused whole, with nothing written."""
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, n=5, arc="9.99.779.21")
+    blank = {"file_name": "src.xlsx", "file_sha256": SHA, "sheet": "", "column": "QA Comments", "row": 1}
+    a, b = _entry(recs[1], body="alpha"), _entry(recs[2], body="beta")
+    bad = [_entry(recs[i], body=body, source=dict(blank)) for i, body in ((3, "gamma"), (4, "delta"), (5, "epsilon"))]
+    first = await _import(db, intake_id, [a, b, *bad])
+    assert [r["status"] for r in first["results"]] == [rc.INSERTED, rc.INSERTED, rc.REJECTED, rc.REJECTED, rc.REJECTED]
+    before = (await db.execute(select(func.count()).select_from(RceRecordComment))).scalar()
+    c, d, e = (_entry(recs[i], body=body) for i, body in ((3, "gamma"), (4, "delta"), (5, "epsilon")))
+
+    with pytest.raises(rc.CommentRefused, match="whole batch"):
+        await _import(db, intake_id, [c, d, e], batch_id=first["batch_id"])
+    assert (await db.execute(select(func.count()).select_from(RceRecordComment))).scalar() == before   # nothing written
+
+    # unchanged: a tail no longer than the imported part writes nothing and is answered per entry ...
+    short = await _import(db, intake_id, [c, d], batch_id=first["batch_id"])
+    assert [r["status"] for r in short["results"]] == [rc.REJECTED, rc.REJECTED]
+    assert (await db.execute(select(func.count()).select_from(RceRecordComment))).scalar() == before
+    # ... and the corrected FULL batch imports every new entry at its own position.
+    full = await _import(db, intake_id, [a, b, c, d, e], batch_id=first["batch_id"])
+    assert [r["status"] for r in full["results"]] == [rc.ALREADY_PRESENT, rc.ALREADY_PRESENT,
+                                                      rc.INSERTED, rc.INSERTED, rc.INSERTED]
