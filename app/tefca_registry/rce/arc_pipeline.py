@@ -922,6 +922,9 @@ async def verify_and_classify(
     tiers: Dict[int, int] = {}
     unresolved: List[str] = []
     resolution_failures: List[Dict[str, str]] = []
+    #: References reviewed WITHOUT their evidence being appended to the entity evidence store,
+    #: because the named delivery does not anchor them to one delivered record (reported, never silent).
+    evidence_not_stored: List[Dict[str, str]] = []
 
     # Held for the whole batch — see `_lock_review_id_allocation`. Acquired
     # even when entity_refs is empty or every ref is unresolved, which costs
@@ -1023,7 +1026,23 @@ async def verify_and_classify(
                 evidence, name_screens_withheld = withhold_unestablished_name_screens(
                     evidence, delivered_name=delivered.get("name"), entity_name=entity.get("name"))
 
-            if persist_evidence:
+            # THE ENTITY EVIDENCE STORE IS WRITTEN ONLY FOR AN ANCHORED RECORD (2026-11-25).
+            # `tefca_dimension_evidence` is keyed by entity and is read back per delivery through the
+            # curated record's entity link (coverage, rechecks, the single-record review, the record
+            # report). When a delivery is named and the reference is NOT anchored to exactly one of its
+            # delivered records - a duplicate delivered id, a reference that resolves to a different
+            # entity than the record links, or a reference the delivery does not carry - `selected` is
+            # None, so neither NPI gate above ran and no delivered name was compared: nothing establishes
+            # that the probes were about a record of this delivery. Appending those rows under the
+            # resolved entity would let that delivery (or another one sharing the entity) read them as
+            # its record's evidence. They are not stored. NOTHING ELSE CHANGES: the review below is still
+            # created, with the same bucket, rule, tier and status, and it carries its own frozen
+            # snapshot of this evidence - which is what a report issued from the review reads. A call
+            # that names no delivery is unchanged.
+            store_evidence = persist_evidence and (_intake_uuid is None or _lineage == LINEAGE_ANCHORED)
+            if persist_evidence and not store_evidence:
+                evidence_not_stored.append({"entity_ref": ref, "lineage": _lineage})
+            if store_evidence:
                 rows = evidence_rows_for_persistence(
                     str(entity_uuid or entity.get("id")), None, evidence)
                 for row in rows:
@@ -1248,6 +1267,7 @@ async def verify_and_classify(
                 "review_id": review_id,
                 "source_record_id": str(source_record_id) if source_record_id else None,
                 "lineage": _lineage,
+                "evidence_stored": bool(store_evidence),
                 "bucket": classification.bucket,
                 "rule_code": rule_code,
                 "rule_version": rule_version,
@@ -1301,6 +1321,9 @@ async def verify_and_classify(
         "rule_set_size": len(rules),
         "outcomes": outcomes,
         "lineage": lineage,
+        # Reviews whose evidence was kept in the review's own snapshot only (see the comment at the
+        # evidence write): the named delivery does not anchor the reference to one delivered record.
+        "evidence_not_stored_unanchored": evidence_not_stored,
         "separation_note": (
             "Verification result (D1-D6), ARC determination (B1-B4) and review "
             "tier (T1-T3) are stored separately and are not collapsed. A B1 "
