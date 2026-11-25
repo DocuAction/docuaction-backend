@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     # client-supplied file_path is allowed to resolve into; see
     # app.core.upload_security.safe_existing_path.
     IQVIA_IMPORT_DIR: str = "./uploads/iqvia-source"
+    # Directory of registered IQVIA intake contracts (manifest.json + one JSON
+    # per vendor layout). Kept OUTSIDE this public repository. Unset = no
+    # contract registered: new imports stage as "unregistered contract" and
+    # cannot reconcile; see app.tefca_registry.rce.iqvia_contract_registry.
+    IQVIA_CONTRACTS_DIR: str = ""
     WHISPER_MODEL: str = "whisper-1"
 
     # ── Optional integrations ─────────────────────────────────────────────────

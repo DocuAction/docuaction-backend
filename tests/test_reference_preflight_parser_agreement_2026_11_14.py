@@ -74,7 +74,10 @@ def test_the_importers_reader_is_what_these_tests_call():
     assert ('open_no_follow(path, "r", encoding=REFERENCE_FILE_ENCODING, newline="")'
             in source)
     assert ii.REFERENCE_FILE_ENCODING == rp.REFERENCE_FILE_ENCODING == "utf-8-sig"
-    assert "csv.DictReader(fh)" in source
+    # 2026-11-25: the same non-strict csv reader, read cell by cell; rows are built by
+    # iqvia_intake_validation.legacy_row, pinned equal to csv.DictReader record for record
+    # in tests/test_iqvia_contract_registry_2026_11_25.py.
+    assert "csv.reader(fh)" in source and "strict" not in inspect.getsource(ii._reference_cells)
     assert "field_size_limit" not in source, "the importer does not change the reader's limit"
 
 

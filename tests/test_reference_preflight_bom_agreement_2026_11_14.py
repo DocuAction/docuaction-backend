@@ -208,7 +208,11 @@ def test_the_importer_has_one_reader_of_the_staged_file_and_it_uses_that_encodin
     import re
 
     source = inspect.getsource(ii)
-    assert "for line_no, row in iter_reference_rows(path)" in inspect.getsource(ii._import_csv)
+    # 2026-11-25: the engine iterates the same single reader cell by cell
+    # (`_iter_reference_records`), so it can see a record before it is keyed by name.
+    assert "in _iter_reference_records(path, validation)" in inspect.getsource(ii._import_csv)
+    assert "_reference_cells(path)" in inspect.getsource(ii._iter_reference_records)
+    assert "_reference_cells(path)" in inspect.getsource(ii.iter_reference_rows)
     text_opens = re.findall(r'open_no_follow\([^)]*encoding=([^,)]+)', source)
     assert text_opens == ["REFERENCE_FILE_ENCODING"], text_opens
     assert "csv.DictReader" not in inspect.getsource(ii._import_csv)

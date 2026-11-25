@@ -137,6 +137,14 @@ def file_sha256(path: Path, *, chunk_bytes: int = 1024 * 1024) -> str:
 #: which the preflight tolerates (REF-SCH-010), stayed in the first column's
 #: name, no row carried the identity column, and every row was rejected.
 from app.tefca_registry.rce.reference_preflight import REFERENCE_FILE_ENCODING  # noqa: E402
+from app.tefca_registry.rce import iqvia_contract_registry as contract_registry  # noqa: E402
+from app.tefca_registry.rce import iqvia_intake_validation as intake  # noqa: E402
+
+#: Snapshot metadata keys written by the intake-contract work (2026-11-25).
+#: None of them is read by `iqvia_reconciliation.compute_staging_token`.
+META_SOURCE_HEADER = "source_header"          # ordered header names + digest, as delivered
+META_CONTRACT_BINDING = "contract_binding"    # which registered contract the header binds to, by name
+META_IMPORT_VALIDATION = "import_validation"  # full-file validation summary, written once at the end
 
 
 #: Which reader staged a snapshot's rows, recorded in the snapshot's metadata
@@ -206,12 +214,58 @@ def iter_reference_rows(path):
     and nothing else about the read differs from a plain utf-8 read (an
     unmarked file yields exactly the rows it always did). The file itself is
     opened read-only and is never rewritten; its sha256 is taken from the raw
-    bytes by `file_sha256`, mark included. The header is line 1."""
+    bytes by `file_sha256`, mark included. The header is line 1.
+
+    A row is built by `iqvia_intake_validation.legacy_row`, which reproduces
+    `csv.DictReader` exactly (pinned by tests/test_iqvia_contract_registry_2026_11_25.py).
+    `_import_csv` reads the same records through `_iter_reference_records` so
+    that it can see each record's cells before they are keyed by name."""
+    records = _reference_cells(path)
+    header = next(records, None)
+    if header is None:
+        return
+    line_no = 1
+    for cells in records:
+        if not cells:
+            continue
+        line_no += 1
+        yield line_no, intake.legacy_row(header, cells)
+
+
+def _reference_cells(path):
+    """Every row of the file as `csv.reader` returns it, the header row first.
+    The ONE text-mode open of a staged reference file in this module."""
     # open_no_follow, not open(): same TOCTOU reason as file_sha256 above --
     # this is the actual multi-GB import read, the highest-value target for
     # a file swapped in between validation and this call.
     with open_no_follow(path, "r", encoding=REFERENCE_FILE_ENCODING, newline="") as fh:
-        yield from enumerate(csv.DictReader(fh), start=2)
+        yield from csv.reader(fh)
+
+
+#: Which delivered column each lifted identifier column is taken from.
+_LIFTED_SOURCE_COLUMNS = {
+    sm.SOURCE_IQVIA_HCO: {"npi": "ORG_NPI", "ccn": "ORG_CCN_ID"},
+    sm.SOURCE_IQVIA_HCP: {"npi": "NPI"},
+    sm.SOURCE_IQVIA_AFFILIATION: {},
+}
+
+
+def _iter_reference_records(path, validation):
+    """(record number, cells) for every data record, read with `csv.reader`:
+    the same file, decoding and reader settings as `iter_reference_rows`, minus
+    the name-keyed mapping. The header row is consumed and not yielded; blank
+    lines are skipped (and counted on `validation`), exactly as DictReader skips
+    them. Record numbers start at 1."""
+    records = _reference_cells(path)
+    if next(records, None) is None:
+        return
+    record_no = 0
+    for cells in records:
+        if not cells:
+            validation.blank_lines += 1
+            continue
+        record_no += 1
+        yield record_no, cells
 
 
 def _row_sha256(row: Dict[str, str]) -> str:
@@ -330,7 +384,19 @@ async def _import_csv(
 
     preflight = _rp.preflight_reference_file(path, source_system)
     enforce = bool(getattr(_settings, "ENABLE_PREFLIGHT_ENFORCEMENT", False))
-    snapshot.metadata_ = {**(snapshot.metadata_ or {}), "reference_preflight": {
+    # INTAKE CONTRACT (2026-11-25), RECORD ONLY. The header is read with
+    # csv.reader BEFORE any row is keyed by name, bound by NAME to the registered
+    # contracts of this source, and stored with the preflight in ONE commit.
+    # Nothing here refuses, and no row's stored content depends on it.
+    registry = contract_registry.get_registry()
+    header, header_error = intake.read_reference_header(path)
+    source_header = contract_registry.describe_header(registry, source_system, header)
+    if header_error:
+        source_header["unreadable"] = header_error
+    binding = contract_registry.bind_header(registry, source_system, header)
+    snapshot.metadata_ = {**(snapshot.metadata_ or {}),
+                          META_SOURCE_HEADER: source_header, META_CONTRACT_BINDING: binding,
+                          "reference_preflight": {
         "gate": preflight["gate"], "schema_version": preflight["schema_version"],
         "preflight_version": preflight["preflight_version"],
         "enforced": enforce, "rows_sampled": preflight["rows_sampled"],
@@ -352,9 +418,22 @@ async def _import_csv(
                             file_sha256=sha)
     cid = _cid()
 
+    contract, basis = contract_registry.contract_for_validation(registry, source_system, binding)
+    validation = intake.FullFileValidation(
+        header=header, contract=contract, basis=basis,
+        lifted_limits={c: model.__table__.c[c].type.length
+                       for c in ("npi", "ccn") if c in model.__table__.c},
+        lifted_sources=_LIFTED_SOURCE_COLUMNS.get(source_system, {}))
+
     buffer: List[Dict[str, Any]] = []
-    for line_no, row in iter_reference_rows(path):
+    for record_no, cells in _iter_reference_records(path, validation):
+        line_no = record_no + 1               # what enumerate(DictReader, start=2) called the line
         summary.rows_read += 1
+        if len(cells) == validation.width:
+            validation.measure(record_no, cells)
+        else:
+            validation.width_differs(record_no, cells)
+        row = intake.legacy_row(validation.header, cells)
         built = build_payload_and_keys(row)
         # `built is None` is the one universal rejection signal every
         # extract's builder uses -- the field that actually carries the
@@ -369,6 +448,7 @@ async def _import_csv(
             if len(summary.rejected_sample_lines) < _MAX_SAMPLE_REJECTED_LINES:
                 summary.rejected_sample_lines.append(line_no)
             continue
+        validation.lifted(record_no, built)
         buffer.append({
             "id": uuid.uuid4(), "source_snapshot_id": snapshot.id,
             "record_sha256": _row_sha256(row), "observed_at": datetime.now(timezone.utc),
@@ -398,7 +478,14 @@ async def _import_csv(
     # partway look indistinguishable from a complete one, since both would
     # read `staged <= record_count` as true).
     snapshot.record_count = summary.rows_read
-    snapshot.metadata_ = {**(snapshot.metadata_ or {}), "rows_rejected": summary.rows_rejected}
+    # The full-file validation summary is written ONCE, here, when the file has
+    # been read to its end - under its own key, bounded in size, and holding
+    # column names, counts and record numbers only.
+    snapshot.metadata_ = {**(snapshot.metadata_ or {}), "rows_rejected": summary.rows_rejected,
+                          META_IMPORT_VALIDATION: validation.as_metadata(rows={
+                              "read": summary.rows_read, "inserted": summary.rows_staged,
+                              "already_present": summary.rows_already_staged,
+                              "rejected": summary.rows_rejected})}
     await db.commit()
 
     summary.completed = True
