@@ -109,7 +109,11 @@ async def test_an_approved_b4_to_b1_is_not_applied_without_established_b1_eviden
     one = rows[1]
     assert (_c(one, "Bucket"), _c(one, AUTO)) == ("B4", "B4") and _c(one, "Submitted NPI (original, verbatim)") != ""
     for col in SOURCES:
-        assert _c(one, col).startswith("PASS"), col
+        # 2026-11-25: the seeded NPPES / CMS rows store no NPI, so they are quoted as stored (PASS) and labelled as
+        # the entity's, not the record's. The stored result stays visible; the bucket outcome below is unchanged.
+        cell = _c(one, col)
+        assert cell.startswith("PASS") or (col in ("NPPES", "PECOS/CMS Enrollment") and cell.startswith(
+            "Not attributed to this record") and cell.endswith("PASS | retrieved 2026-11-08")), col
     # 2: blank submitted NPI, no evidence for any source
     two = rows[2]
     assert _c(two, "Submitted NPI (original, verbatim)") == ""
