@@ -103,7 +103,7 @@ from sqlalchemy import and_, exists, func, or_, select, text
 from app.reports.data import reviewed_disposition as rd
 from app.reports.data.october_review_dataset import STORED_COMMENT_KEY
 
-LOADER_VERSION = "1.1.0"
+LOADER_VERSION = "1.4.0"
 BATCH_SIZE = 2000
 BUCKETS = ("B1", "B2", "B3", "B4")
 
@@ -385,6 +385,23 @@ async def load_record_facts(
         if extra:
             raise LoaderRefused(f"annotation for {agt} has unknown key(s) {sorted(extra)}")
 
+    # B1 evidence gate (owner authorization 2026-11-17): read once. Policy rows are the CURRENTLY active ones
+    # (`load_active_policies` has no as-of); rule rows are loaded per recorded rule version, on demand.
+    from app.tefca_registry.rce import shadow_reassessment as _sh
+    from app.tefca_registry.rce import source_policy as _rce_source_policy
+    policy_active = bool(await _rce_source_policy.load_active_policies(db))
+    rules_by_version: Dict[Any, Any] = {}
+
+    async def _rules_at(version):
+        if version is None:
+            return None
+        if version not in rules_by_version:
+            try:
+                rules_by_version[version] = await _sh.rules_for_version(db, version)
+            except _sh.ShadowRefused:
+                rules_by_version[version] = None
+        return rules_by_version[version]
+
     facts: List[Dict[str, Any]] = []
     # AGT_Record_ID -> {kind: comment id}: which comment texts came from the store.
     stored_registry: Dict[str, Dict[str, str]] = {}
@@ -525,6 +542,7 @@ async def load_record_facts(
 
             cells: Dict[str, str] = {}
             own_rows: Dict[str, Any] = {}      # source -> the evidence row attributed to THIS record
+            withheld_sources: List[str] = []   # sources whose row at the cutoff was NOT attributed to this record
             ev_refs: List[str] = []
             nppes_row = None
             for key, (source, _dim) in EVIDENCE_SOURCES.items():
@@ -544,6 +562,7 @@ async def load_record_facts(
                                                   submitted_npi=submitted, delivered_name=_s(parsed.get("name")))
                     if row is None:
                         stats["evidence_rows_not_attributed"] += 1
+                        withheld_sources.append(source)
                         cells[key] = NOT_ATTRIBUTED.format(why=foreign)
                         continue
                     stats["evidence_rows_reselected_for_record"] += 1
@@ -569,6 +588,26 @@ async def load_record_facts(
             supplemental = _s(ann.get("supplemental_npi")) or _s(stored_research.get("researched_npi"))
             if supplemental:
                 stats["with_supplemental_npi"] += 1
+
+            approved = (rd.final_bucket_decision(decisions.get(rev.review_id, []), automated_bucket=bucket)
+                        if rev is not None else {"bucket": "", "note": ""})
+            b1 = {"established": False, "reason": ""}
+            if approved["bucket"] == "B1" and bucket == "B4":
+                b1 = rd.b1_evidence_verdict(
+                    rev, rules=await _rules_at(rev.classification_rule_version), policy_active=policy_active,
+                    # Only rows ATTRIBUTED to this record are evaluated. A source whose row at the cutoff was
+                    # another identifier's is named as not evaluated - never read as "no candidate".
+                    cutoff_rows={"SAM_GOV": own_rows.get("SAM_GOV"), "OIG_LEIE": own_rows.get("OIG_LEIE"),
+                                 "SAM extract": own_rows.get("SAM_EXTRACT_SUPPLEMENTARY")} if ent else None,
+                    not_attributed=[s for s in withheld_sources
+                                    if s in ("SAM_GOV", "OIG_LEIE", "SAM_EXTRACT_SUPPLEMENTARY")])
+
+            # Part (a), owner authorization 2026-11-17: an approved B4 -> B2 is checked against the governing
+            # review's STORED snapshot for a pending SAM / LEIE candidate (nothing saved later is read), and the
+            # governing determination's actors and texts are carried verbatim to their own columns.
+            b2 = (rd.stored_pending_candidates(rev) if approved["bucket"] == "B2" and bucket == "B4"
+                  else {"evaluated": None, "pending": [], "undetermined": []})
+            details = rd.decision_details(decisions.get(rev.review_id, []) if rev is not None else [])
 
             fact: Dict[str, Any] = {
                 "agt_record_id": agt,
@@ -596,6 +635,15 @@ async def load_record_facts(
                     rd.summarize(decisions.get(rev.review_id, []), automated_bucket=bucket).items()
                     if rev is not None else
                     {"disposition": "", "date": "", "qa_status": rd.NOT_REVIEWED, "basis": ""}.items())},
+                # Owner authorization 2026-11-16: an independently QA-approved RECLASSIFY visible at the cutoff is
+                # offered to the dataset as the reporting bucket. `bucket` above stays the persisted automated one.
+                **{"approved_" + k: v for k, v in approved.items()},
+                # A B1 target is reported only when saved evidence establishes it; today it never does (see
+                # reviewed_disposition.b1_evidence_verdict) and the reason is carried to the Bucket Basis.
+                "approved_b1_established": b1["established"], "approved_b1_reason": b1["reason"],
+                "approved_b2_candidate_evaluated": b2["evaluated"], "approved_b2_pending": list(b2["pending"]),
+                "approved_b2_undetermined": list(b2["undetermined"]),
+                **{"decision_" + k: v for k, v in details.items()},
                 "provisional": bool(ann.get("provisional")),
                 "bucket_annotation": _s(ann.get("bucket_annotation")),
                 "nppes": cells["nppes"], "pecos": cells["pecos"],
@@ -693,8 +741,20 @@ async def load_record_facts(
             "Reviews created before that anchor existed, and entity-only reviews, "
             "carry none: they are not attached, not inferred from a shared entity "
             "and not rewritten - the record stays unclassified and says so.",
-            "Bucket is the persisted classification_bucket only; no analyst "
-            "reclassification and no spreadsheet analysis is substituted.",
+            "Bucket is the reporting bucket: the persisted classification_bucket, replaced only by an "
+            "analyst RECLASSIFY of a B4 record to B2/B3 that a different recorded user approved in the "
+            "QA gate at or before the cutoff (never for a HELD, rejected, not-curated or unclassified "
+            "record). An approved move to B1 is NOT applied unless saved evidence establishes B1; the "
+            "report has no as-of evaluator for evidence saved after the review, so such a record stays "
+            "B4 with the reason in Bucket Basis and the analyst decision and QA approval in their own "
+            "columns. The persisted bucket is kept in its own column; no spreadsheet analysis is "
+            "substituted.",
+            "An approved B4 -> B2 stays B4 when the governing review's STORED snapshot holds a pending SAM or "
+            "LEIE candidate; that check does not see a candidate added after the review was saved. Every "
+            "applied B2 move is marked PROVISIONAL. Analyst and QA reviewer identifiers, the analyst rationale "
+            "and the QA reason are shown verbatim as stored. No finding type, evidence reference or manual "
+            "check date is captured for a determination: the manual check date reads 'not recorded' and an "
+            "applied move is flagged 'finding details not recorded'.",
             "Stored comments (rce_record_comments) are read verbatim by kind when the "
             "store exists; caller-supplied annotations/comments are inputs from retained "
             "files. Comments are commentary only and decide nothing.",

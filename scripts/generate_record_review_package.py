@@ -153,13 +153,38 @@ def compare_baseline(saved: Dict[str, Any], summary: Dict[str, Any], baseline: D
         if got != want:
             diffs.append({"item": key, "baseline": want, "saved": got, "difference": got - want})
     if diffs:
-        why = []
+        unexplained = "no recorded explanation - investigate before relying on the package"
+        common = []
         if summary["unclassified_non_held_count"]:
-            why.append(f"{summary['unclassified_non_held_count']} non-HELD record(s) have NO usable persisted "
-                       f"classification and are shown as NOT CLASSIFIED (listed on the Unclassified sheet); "
-                       f"no bucket was assigned to match the baseline")
+            common.append(f"{summary['unclassified_non_held_count']} non-HELD record(s) have NO usable persisted "
+                          f"classification and are shown as NOT CLASSIFIED (listed on the Unclassified sheet); "
+                          f"no bucket was assigned to match the baseline")
+        # A reclassification moves a record between two buckets and keeps the record count. It can therefore
+        # explain a difference in the buckets it touches, by its net effect there, and nothing else: never TOTAL,
+        # never HELD, never a bucket no move touches (review finding, 2026-11-17).
+        moved_in, moved_out, touching = {}, {}, {}
+        for key, n in (summary.get("reclassification_transitions") or {}).items():
+            before, _arrow, after = key.partition(" -> ")
+            moved_out[before] = moved_out.get(before, 0) + n
+            moved_in[after] = moved_in.get(after, 0) + n
+            for b in (before, after):
+                touching.setdefault(b, []).append(f"{key}: {n}")
+        # The unclassified count is CONTEXT, not an account of any number: it does not say which bucket a record
+        # would have been in. So whatever the recorded moves do not account for keeps its warning, with or
+        # without that context. The warning is left out only when the moves account for the whole difference.
         for d in diffs:
-            d["explanation"] = "; ".join(why) or "no recorded explanation - investigate before relying on the package"
+            why = list(common)
+            item = d["item"]
+            net = 0
+            if item in touching:
+                net = moved_in.get(item, 0) - moved_out.get(item, 0)
+                why.append(f"QA-approved reclassification changes {item} by {net:+d} ({', '.join(touching[item])}); "
+                           f"a baseline of automated buckets does not include those moves")
+            rest = d["difference"] - net
+            if rest:
+                why.append(f"the remaining difference of {rest:+d} has no recorded explanation - "
+                           f"investigate before relying on the package" if why else unexplained)
+            d["explanation"] = "; ".join(why)
     return diffs
 
 

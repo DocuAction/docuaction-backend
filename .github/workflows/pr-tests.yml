@@ -15,7 +15,7 @@ name: Backend Tests
 
 on:
   pull_request:
-    branches: [main, 'feat/mandatory-source-parity-assessment-date-2026-11-11', 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06', 'feat/proposed-rules-v4-inactive-2026-11-07', 'test/iqvia-settings-shadowing-fix-2026-11-08']
+    branches: [main, 'feat/mandatory-source-parity-assessment-date-2026-11-11', 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06', 'feat/proposed-rules-v4-inactive-2026-11-07', 'test/iqvia-settings-shadowing-fix-2026-11-08', 'feat/supplemental-npi-research-2026-11-15']
   push:
     branches: [main]
 
@@ -217,6 +217,10 @@ jobs:
             tests/test_record_review_package_script_2026_11_12.py \
             tests/test_record_review_download_path_db_2026_11_13.py \
             tests/test_reviewed_disposition_report_2026_11_15.py \
+            tests/test_qa_approved_reporting_bucket_2026_11_16.py \
+            tests/test_qa_approved_reporting_bucket_validation_2026_11_16.py \
+            tests/test_b1_evidence_gate_2026_11_17.py \
+            tests/test_b2_b3_report_controls_2026_11_17.py \
             tests/test_treatment_b4_journey_2026_11_15.py \
             tests/test_comment_migration_downgrade_lock_2026_11_15.py \
             tests/test_review_single_npi_read_2026_11_15.py \
