@@ -462,4 +462,6 @@ def test_a_report_with_held_or_rejected_records_states_that_curated_status_is_re
     assert ds["summary"]["curated_status_basis"] == "generation_time"
     assert ds["summary"]["limitations"] == []                      # provenance limitations are a different list
     plain = d.build_dataset([_f(1, "B1"), _f(2, "B2")], report_id="R", findings_count=0)
-    assert "CURATED STATUS" not in plain["banner"] and plain["summary"]["curated_status_basis"] == "not_applicable"
+    # No HELD or REJECTED record now: no banner sentence, but the basis is still stated. A hold released after the
+    # cutoff leaves no HELD record at generation, and the status shown is still the generation-time one.
+    assert "CURATED STATUS" not in plain["banner"] and plain["summary"]["curated_status_basis"] == "generation_time"
