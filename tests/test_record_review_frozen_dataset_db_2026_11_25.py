@@ -85,7 +85,7 @@ async def _seed(db, arc, n=4):
 async def _release_hold(db, rec):
     """What happens in the application between two export requests: the hold on one record is released."""
     held = (await db.execute(select(m.RceCuratedRecord).where(
-        m.RceCuratedRecord.source_record_id == rec.id))).scalar_one()
+        m.RceCuratedRecord.source_record_id == (rec if isinstance(rec, uuid.UUID) else rec.id)))).scalar_one()
     ent = await seed_entity(db, oid=f"{SYN}-FRZ-{uuid.uuid4().hex[:10]}", name=f"{SYN} released")
     held.record_status, held.status_reason, held.canonical_entity_id = "CLEAN", None, ent
     await db.flush()
@@ -101,9 +101,10 @@ async def _request(db, intake_id, fmt, **kw):
 
 
 async def _run(db, out):
-    job = await db.get(ReportExportJob, uuid.UUID(out["job_id"]))
+    job_id = uuid.UUID(out["job_id"])                # the runner may roll back, which expires `job`
+    job = await db.get(ReportExportJob, job_id)
     state = await run_record_review_export_job(db, job)
-    return await db.get(ReportExportJob, job.id), state
+    return await db.get(ReportExportJob, job_id), state
 
 
 async def _export(db, intake_id, fmt, **kw):
@@ -325,6 +326,7 @@ async def _assert_failed_safely_and_the_next_request_opens_a_new_freeze(db, inta
     unverified bytes; nothing was rebuilt under the freeze id; the next default request opens a NEW freeze with a
     new id and a new hash; and the failed job stays visible as failed."""
     first_sha = first_job.request_parameters["dataset_sha256"]
+    first_id = str(first_job.id)                     # read before any rollback expires `first_job`
     failed, state = await _run(db, out_failed)
     assert state == ReportExportJob.STATE_FAILED and failed.state == ReportExportJob.STATE_FAILED
     assert failed.error_reason.startswith(freeze.UNAVAILABLE_MARK) and why in failed.error_reason
@@ -338,25 +340,25 @@ async def _assert_failed_safely_and_the_next_request_opens_a_new_freeze(db, inta
     # never rebuilt under the same freeze id: still the one registration, with the original hash
     datasets = await _datasets(db, intake_id)
     assert [(d.report_id, d.rendered_sha256) for d in datasets] == [
-        (freeze.dataset_report_id(first_job.id), first_sha)]
+        (freeze.dataset_report_id(first_id), first_sha)]
     # the next DEFAULT request opens a new freeze: new id, new hash, and it renders
     out_next, next_job, next_csv, next_art = await _export(db, intake_id, "csv")
     assert out_next["dataset_reused"] is False and out_next["dataset_state"] == "pending"
-    assert out_next["dataset_job_id"] == str(next_job.id) != str(first_job.id)
+    assert out_next["dataset_job_id"] == str(next_job.id) != first_id
     next_sha = next_job.request_parameters["dataset_sha256"]
     assert next_sha != first_sha and next_art["report_data_hash"] == next_sha
     assert f"SHA-256 {next_sha}" in _csv(next_csv)[0] and first_sha not in _csv(next_csv)[0]
     assert sorted(d.report_id for d in await _datasets(db, intake_id)) == sorted(
-        [freeze.dataset_report_id(first_job.id), freeze.dataset_report_id(next_job.id)])
+        [freeze.dataset_report_id(first_id), freeze.dataset_report_id(next_job.id)])
     # the dead freeze cannot be named either
     with pytest.raises(HTTPException) as exc:
-        await _request(db, intake_id, "xlsx", dataset_job_id=str(first_job.id))
+        await _request(db, intake_id, "xlsx", dataset_job_id=first_id)
     assert exc.value.status_code == 409 and "no usable frozen dataset" in exc.value.detail
     # the failed job stays visible as failed, with its reason and no download link
     status = await report_routes.export_job_status(str(failed.id), db=db, user=QA)
     assert status["state"] == ReportExportJob.STATE_FAILED and "download" not in status
     assert status["error_reason"].startswith(freeze.UNAVAILABLE_MARK)
-    assert status["dataset_job_id"] == str(first_job.id) and status["dataset_sha256"] is None
+    assert status["dataset_job_id"] == first_id and status["dataset_sha256"] is None
     assert status["dataset_download"] is None
     return next_csv
 
@@ -391,28 +393,194 @@ async def test_a_frozen_dataset_whose_bytes_were_altered_fails_the_integrity_che
     assert _totals(_csv(next_csv)[1])[1] == 1                         # read from the database, not the altered file
 
 
-async def test_a_registered_dataset_whose_storage_cannot_be_read_fails_the_job_and_is_never_rebuilt(
+async def test_a_registered_dataset_whose_storage_cannot_be_read_fails_the_job_but_does_not_retire_the_freeze(
         rolled_back_db, store, monkeypatch):
-    """The registry row exists and the store still answers a metadata check, but reading the bytes fails (I/O,
-    permission, backend client). The job fails closed - never "could not read, so load again under that id"."""
+    """The registry row exists but reading the bytes fails (I/O, permission, backend client). That is not
+    evidence the dataset is bad. The job fails closed - never "could not read, so load again under that id",
+    never unverified bytes - and the freeze stays on offer, so a retry renders from the SAME dataset."""
     from app.core.storage import artifact_store
 
     db = rolled_back_db
-    intake_id, _ = await _seed(db, "9.99.779.21")
+    intake_id, recs = await _seed(db, "9.99.779.21")
     _, first_job, _, _ = await _export(db, intake_id, "csv")
+    first_sha = first_job.request_parameters["dataset_sha256"]
     out_xl = await _request(db, intake_id, "xlsx")
     assert out_xl["dataset_state"] == "frozen"
     real_get = artifact_store._store.get
     dead = freeze.dataset_report_id(first_job.id)
+    broken = {"on": True}
 
     def unreadable(locator):
-        if dead in locator:
+        if broken["on"] and dead in locator:
             raise PermissionError(13, "synthetic: storage refused the read")
         return real_get(locator)
 
     monkeypatch.setattr(artifact_store._store, "get", unreadable)
-    await _assert_failed_safely_and_the_next_request_opens_a_new_freeze(
-        db, intake_id, first_job, out_xl, "the artifact store could not return its bytes (PermissionError)")
+    await _release_hold(db, recs[2])                                  # a rebuild would now show no HELD record
+    failed, state = await _run(db, out_xl)
+    assert state == ReportExportJob.STATE_FAILED and failed.artifact_id is None and failed.report_id is None
+    assert failed.error_reason.startswith(freeze.READ_FAILED_MARK)
+    assert not failed.error_reason.startswith(freeze.UNAVAILABLE_MARK)
+    assert "could not return its bytes (PermissionError)" in failed.error_reason
+    assert "Nothing was rendered from unverified bytes" in failed.error_reason
+    assert "nothing was rebuilt under that id" in failed.error_reason
+    assert (await db.execute(select(ReportArtifact).where(
+        ReportArtifact.report_id == f"RECORD-REVIEW-{str(failed.id).upper()}"))).scalars().all() == []
+    assert [(d.report_id, d.rendered_sha256) for d in await _datasets(db, intake_id)] == [(dead, first_sha)]
+    # the freeze is NOT retired: while storage is still failing, a default request still names it
+    out_while_down = await _request(db, intake_id, "xlsx")
+    assert out_while_down["dataset_reused"] is True and out_while_down["dataset_job_id"] == str(first_job.id)
+    assert out_while_down["dataset_state"] == "frozen" and out_while_down["dataset_sha256"] == first_sha
+    # storage restored: the retry renders from the SAME dataset, same hash, the original hold status
+    broken["on"] = False
+    retried, state = await _run(db, out_while_down)
+    assert state == ReportExportJob.STATE_SUCCEEDED and retried.request_parameters["dataset_sha256"] == first_sha
+    got = await artifact_registry.retrieve_artifact(
+        db, retried.report_id, content_type=RECORD_REVIEW_CONTENT_TYPES["xlsx"])
+    note, rows, _summary = _xlsx(got["content"])
+    assert f"SHA-256 {first_sha}" in note and _totals(rows)[1] == 1  # still HELD: nothing was re-read
+    assert len(await _datasets(db, intake_id)) == 1
+    # the failed job stays visible as failed
+    status = await report_routes.export_job_status(str(failed.id), db=db, user=QA)
+    assert status["state"] == ReportExportJob.STATE_FAILED and "download" not in status
+    assert status["error_reason"].startswith(freeze.READ_FAILED_MARK)
+
+
+async def test_a_store_that_does_not_answer_the_request_time_check_does_not_retire_the_freeze(
+        rolled_back_db, monkeypatch):
+    from app.core.storage import artifact_store
+
+    db = rolled_back_db
+    intake_id, _ = await _seed(db, "9.99.779.24")
+    _, first_job, _, _ = await _export(db, intake_id, "csv")
+
+    def no_answer(_locator):
+        raise TimeoutError("synthetic: the store did not answer")
+
+    monkeypatch.setattr(artifact_store._store, "head", no_answer)
+    out = await _request(db, intake_id, "xlsx")
+    assert out["dataset_reused"] is True and out["dataset_job_id"] == str(first_job.id)
+    job, state = await _run(db, out)                                  # the runner reads and verifies the bytes
+    assert state == ReportExportJob.STATE_SUCCEEDED
+    assert job.request_parameters["dataset_sha256"] == first_job.request_parameters["dataset_sha256"]
+
+
+# ── a default request uses the NEWEST freeze only; it never falls back to an older one ─────────────────────────
+
+async def test_when_the_newest_freeze_is_dead_a_default_request_opens_a_new_one_and_never_an_older_one(
+        rolled_back_db, store):
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, "9.99.779.25")
+    _, f1_job, _, _ = await _export(db, intake_id, "csv")                               # F1: usable throughout
+    f1_sha = f1_job.request_parameters["dataset_sha256"]
+    await _release_hold(db, recs[2])
+    out_f2, f2_job, _, _ = await _export(db, intake_id, "csv", new_freeze=True)         # F2: the operator's choice
+    f2_sha = f2_job.request_parameters["dataset_sha256"]
+    assert out_f2["dataset_job_id"] == str(f2_job.id) and f2_sha != f1_sha
+    # F2's bytes are lost; F1's are still there
+    for path in store.rglob("artifact.bin"):
+        if freeze.dataset_report_id(f2_job.id) in str(path):
+            path.unlink()
+    out_f2_xl = await _request(db, intake_id, "xlsx")                 # still names F2, the newest freeze
+    assert out_f2_xl["dataset_job_id"] == str(f2_job.id)
+    f2_failed, state = await _run(db, out_f2_xl)                      # ... and F2 fails: its bytes are gone
+    assert state == ReportExportJob.STATE_FAILED and f2_failed.error_reason.startswith(freeze.UNAVAILABLE_MARK)
+    out_xl = await _request(db, intake_id, "xlsx")                    # the next DEFAULT request
+    assert out_xl["dataset_reused"] is False                          # a NEW freeze ...
+    assert out_xl["dataset_job_id"] == out_xl["job_id"]
+    assert out_xl["dataset_job_id"] not in (str(f1_job.id), str(f2_job.id))             # ... never F1
+    f3_job, state = await _run(db, out_xl)
+    assert state == ReportExportJob.STATE_SUCCEEDED
+    assert f3_job.request_parameters["dataset_sha256"] not in (f1_sha, f2_sha)
+    got = await artifact_registry.retrieve_artifact(
+        db, f3_job.report_id, content_type=RECORD_REVIEW_CONTENT_TYPES["xlsx"])
+    assert _totals(_xlsx(got["content"])[1])[1] == 0                  # current status, not F1's older HELD
+    # F1 is untouched and may still be rendered - but only when it is NAMED
+    out_named, named_job, named_xl, _ = await _export(db, intake_id, "xlsx", dataset_job_id=str(f1_job.id))
+    assert out_named["dataset_reused"] is True and named_job.request_parameters["dataset_sha256"] == f1_sha
+    assert _totals(_xlsx(named_xl)[1])[1] == 1
+    # and naming F1 did not make it the default again: the default is still the newest-opened freeze (F3)
+    out_default = await _request(db, intake_id, "csv")
+    assert out_default["dataset_job_id"] == str(f3_job.id)
+    assert (await db.get(ReportExportJob, f2_failed.id)).state == ReportExportJob.STATE_FAILED   # F2 stays failed
+
+
+async def test_when_the_newest_freeze_failed_before_freezing_a_default_request_does_not_fall_back(
+        rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, "9.99.779.26")
+    held_id = recs[2].id                              # read before a rollback expires the seeded rows
+    _, f1_job, _, _ = await _export(db, intake_id, "csv")             # F1: usable
+    f1_id = str(f1_job.id)
+    out_f2 = await _request(db, intake_id, "csv", new_freeze=True)    # F2 opened by the operator ...
+    real_load = ld.load_record_facts
+
+    async def refused(_db, **_kw):
+        raise ld.LoaderRefused("synthetic refusal while loading the new freeze")
+
+    monkeypatch.setattr(ld, "load_record_facts", refused)
+    f2_job, state = await _run(db, out_f2)                            # ... and it failed before anything was frozen
+    assert state == ReportExportJob.STATE_FAILED and "synthetic refusal" in f2_job.error_reason
+    monkeypatch.setattr(ld, "load_record_facts", real_load)
+    await _release_hold(db, held_id)
+    out_next, f3_job, f3_csv, _ = await _export(db, intake_id, "csv")
+    assert out_next["dataset_reused"] is False
+    assert out_next["dataset_job_id"] == str(f3_job.id) not in (f1_id, str(f2_job.id))
+    assert _totals(_csv(f3_csv)[1])[1] == 0                           # F1 (HELD) was not silently used
+    assert (await db.get(ReportExportJob, f2_job.id)).state == ReportExportJob.STATE_FAILED
+
+
+# ── a database error while reading the dataset back is an ordinary job failure, and the job always ends ────────
+
+async def test_a_database_error_during_the_dataset_read_back_fails_the_job_without_retiring_the_freeze(
+        rolled_back_db, monkeypatch):
+    from sqlalchemy import text
+
+    db = rolled_back_db
+    intake_id, _ = await _seed(db, "9.99.779.27")
+    _, first_job, _, _ = await _export(db, intake_id, "csv")
+    out_xl = await _request(db, intake_id, "xlsx")
+    real_rows = freeze._registered_rows
+
+    async def database_error(session, report_id):
+        await session.execute(text("select 1/0"))                     # a failed statement: the transaction is aborted
+
+    monkeypatch.setattr(freeze, "_registered_rows", database_error)
+    job, state = await _run(db, out_xl)
+    assert state == ReportExportJob.STATE_FAILED and job.state == ReportExportJob.STATE_FAILED
+    assert job.active_marker is None and job.failed_at is not None    # terminal now, not left RUNNING for the reaper
+    assert "could not be produced" in job.error_reason
+    assert freeze.UNAVAILABLE_MARK not in job.error_reason and freeze.READ_FAILED_MARK not in job.error_reason
+    monkeypatch.setattr(freeze, "_registered_rows", real_rows)
+    out_retry = await _request(db, intake_id, "xlsx")                 # the freeze was not retired by a database error
+    assert out_retry["dataset_reused"] is True and out_retry["dataset_job_id"] == str(first_job.id)
+    retried, state = await _run(db, out_retry)
+    assert state == ReportExportJob.STATE_SUCCEEDED
+    assert retried.request_parameters["dataset_sha256"] == first_job.request_parameters["dataset_sha256"]
+
+
+async def test_a_refusal_raised_on_an_aborted_transaction_still_ends_the_job_failed_with_its_reason(
+        rolled_back_db, monkeypatch):
+    """The refusal branch used to call finish_failed with no rollback: on an aborted transaction that write raised,
+    the poller swallowed it and the job stayed RUNNING until the reaper."""
+    from sqlalchemy import text
+
+    db = rolled_back_db
+    intake_id, _ = await _seed(db, "9.99.779.28")
+    out = await _request(db, intake_id, "csv")
+
+    async def refuses_after_a_failed_statement(session, job, params):
+        try:
+            await session.execute(text("select 1/0"))
+        except Exception:  # noqa: BLE001 - the transaction is now aborted
+            pass
+        raise ld.LoaderRefused("synthetic refusal on an aborted transaction")
+
+    monkeypatch.setattr(freeze, "obtain", refuses_after_a_failed_statement)
+    job, state = await _run(db, out)
+    assert state == ReportExportJob.STATE_FAILED and job.state == ReportExportJob.STATE_FAILED
+    assert job.error_reason == "synthetic refusal on an aborted transaction"
+    assert job.active_marker is None and job.failed_at is not None
 
 
 async def test_two_datasets_registered_under_one_freeze_id_are_refused_not_chosen_between(rolled_back_db):
@@ -432,15 +600,26 @@ async def test_two_datasets_registered_under_one_freeze_id_are_refused_not_chose
 
 # ── row count is enforced ──────────────────────────────────────────────────────────────────────────────────────
 
-async def test_a_row_count_mismatch_fails_the_job_with_the_two_numbers_and_registers_nothing(rolled_back_db):
+async def test_a_row_count_mismatch_is_refused_before_queuing_and_fails_a_queued_job_with_the_two_numbers(
+        rolled_back_db):
     db = rolled_back_db
     intake_id, _ = await _seed(db, "9.99.779.19")
+    out = await _request(db, intake_id, "csv")                        # queued while the delivery still reconciles
     intake = await db.get(m.RceSourceIntake, intake_id)
     intake.record_count = 5                                           # the delivery says 5; 4 records were stored
     await db.flush()
     with pytest.raises(ld.LoaderRefused, match="row count mismatch"):
         await ld.load_record_facts(db, intake_id=intake_id, evidence_cutoff=CUTOFF_ISO)
-    out = await _request(db, intake_id, "csv")
+    # the route refuses a request that can never succeed, before anything is queued
+    jobs_before = len((await db.execute(select(ReportExportJob.id).where(
+        ReportExportJob.source_intake_id == intake_id))).all())
+    with pytest.raises(HTTPException) as exc:
+        await _request(db, intake_id, "xlsx")
+    assert exc.value.status_code == 409 and "row count mismatch" in exc.value.detail
+    assert "records 5 record(s)" in exc.value.detail and "4 source record(s) are stored" in exc.value.detail
+    assert len((await db.execute(select(ReportExportJob.id).where(
+        ReportExportJob.source_intake_id == intake_id))).all()) == jobs_before
+    # the loader is the authority: the job queued earlier fails with both numbers and registers nothing
     job, state = await _run(db, out)
     assert state == ReportExportJob.STATE_FAILED and job.artifact_id is None
     assert "row count mismatch" in job.error_reason and "records 5 record(s)" in job.error_reason

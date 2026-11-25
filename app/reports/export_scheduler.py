@@ -79,8 +79,11 @@ async def _poll_tick():
                 runner = run_record_review_export_job
             else:
                 runner = run_export_job
+            # Taken before the run: a runner rolls its session back on a failure or a refusal, which expires
+            # `job`, and reading an attribute of an expired instance here would raise instead of logging.
+            job_id = job.id
             state = await runner(db, job)
-            logger.info("export job %s finished: %s", job.id, state)
+            logger.info("export job %s finished: %s", job_id, state)
     except Exception as exc:  # noqa: BLE001
         # A tick that raises must not stop the scheduler. The job it was working
         # on keeps its heartbeat; if the process really is broken the reaper

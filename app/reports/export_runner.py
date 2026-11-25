@@ -169,14 +169,15 @@ async def run_export_job(db, job) -> str:
             f"application log against job {job_id}.")
         return ReportExportJob.STATE_FAILED
 
-    await export_jobs.finish_succeeded(
+    recorded = await export_jobs.finish_succeeded(
         db, job_id,
         report_id=dataset["report_id"],
         artifact_id=str(artifact["artifact_id"]),
         artifact_version=int(artifact["artifact_version"]),
         rendered_sha256=artifact["rendered_sha256"],
         size_bytes=int(artifact["size_bytes"] or 0))
-    return ReportExportJob.STATE_SUCCEEDED
+    # False: the job was already terminal (reaped while still working). The row stays FAILED; report that.
+    return ReportExportJob.STATE_SUCCEEDED if recorded is not False else ReportExportJob.STATE_FAILED
 
 
 async def run_report_generation_job(db, job) -> str:
@@ -242,14 +243,15 @@ async def run_report_generation_job(db, job) -> str:
             f"report may still be readable at /api/reports/{result.get('report_id')}.")
         return ReportExportJob.STATE_FAILED
 
-    await export_jobs.finish_succeeded(
+    recorded = await export_jobs.finish_succeeded(
         db, job_id,
         report_id=result["report_id"],
         artifact_id=str(chosen["id"]),
         artifact_version=int(chosen.get("artifact_version") or 1),
         rendered_sha256=chosen.get("rendered_sha256") or "",
         size_bytes=int(chosen.get("size_bytes") or 0))
-    return ReportExportJob.STATE_SUCCEEDED
+    # False: the job was already terminal (reaped while still working). The row stays FAILED; report that.
+    return ReportExportJob.STATE_SUCCEEDED if recorded is not False else ReportExportJob.STATE_FAILED
 
 
 def record_review_report_id(job_id) -> str:
@@ -306,8 +308,10 @@ async def run_record_review_export_job(db, job) -> str:
         # job's freeze, or - when this is the first job of the freeze to run - one loaded now and registered.
         # Every format is built from those stored bytes by the pure `build_dataset`, so totals and hold status
         # cannot differ between formats. The database is not re-read for a later format.
-        obtained = await freeze.obtain(
-            db, job, params, heartbeat=_Heartbeat(job_id, export_jobs.HEARTBEAT_INTERVAL_SECONDS))
+        # The heartbeat runs for the whole load / serialise / store read (minutes at the delivered population);
+        # it writes on its own session, so it cannot release the advisory lock `obtain` takes on this one.
+        async with _Heartbeat(job_id, export_jobs.HEARTBEAT_INTERVAL_SECONDS):
+            obtained = await freeze.obtain(db, job, params)
         frozen = obtained["frozen"]
         await export_jobs.note_request_parameters(db, job_id, {
             "dataset_job_id": obtained["dataset_job_id"], "dataset_id": obtained["dataset_id"],
@@ -341,7 +345,12 @@ async def run_record_review_export_job(db, job) -> str:
             contains_reportable_findings=False)
         await db.commit()
     except (loader.LoaderRefused, ds.DatasetRefused) as exc:
-        await export_jobs.finish_failed(db, job_id, str(exc))
+        # A refusal can be raised with statements already run in this transaction (the loader's reads, the
+        # advisory lock). Roll back first, exactly as the branch below does: the terminal write must never
+        # depend on what state the refused work left the session in. `job_id` and the message are plain values.
+        reason = str(exc)
+        await db.rollback()
+        await export_jobs.finish_failed(db, job_id, reason)
         return ReportExportJob.STATE_FAILED
     except Exception as exc:  # noqa: BLE001
         logger.exception("record-review export job %s failed", job_id)

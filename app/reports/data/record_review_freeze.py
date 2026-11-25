@@ -27,14 +27,25 @@ A NEW FREEZE, DELIBERATELY
     A different cutoff or assessment run is a different freeze. For the same ones, `new_freeze=true` opens a new
     freeze, which then becomes the one later default requests use.
 
-WHEN THE STORED BYTES ARE GONE
-    The local artifact backend is not durable on App Service. A registered dataset whose bytes are missing or no
-    longer hash to the registered value is NEVER rebuilt under the same id (that would be a second dataset with
-    the first one's name): the job fails with `UNAVAILABLE_MARK` and the reason, and the route stops offering
-    that freeze, so the next default request opens a new one and says so.
+    A default request uses ONLY the newest-opened freeze of its delivery, run and cutoff. If that one cannot be
+    used it opens a new freeze; it never falls back to an older freeze (older hold status than the operator last
+    asked for). An older freeze is rendered only when it is named with `dataset_job_id`.
+
+WHEN THE STORED BYTES ARE GONE, ALTERED, OR CANNOT BE READ RIGHT NOW
+    A registered dataset is NEVER rebuilt under the same id (that would be a second dataset with the first
+    one's name), and bytes that were not re-hashed against the registry are never rendered. Two outcomes:
+      * EVIDENCE THAT THE DATASET IS BAD - the store says the bytes do not exist, the bytes do not hash to the
+        registered value, or more than one dataset is registered under the id: the job fails with
+        `UNAVAILABLE_MARK`, and the freeze is retired (the route stops offering it; the next default request
+        opens a new one). The local artifact backend is not durable on App Service, so this is expected there.
+      * ANY OTHER READ FAILURE (I/O, permission, network, backend client): the job fails with
+        `READ_FAILED_MARK` and the freeze is NOT retired - nothing shows the dataset is bad, so a retry renders
+        from the same dataset once the store answers. A database error is not a storage finding at all: it
+        propagates and fails the job as any other error does.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -52,8 +63,12 @@ logger = logging.getLogger(__name__)
 DATASET_CONTENT_TYPE = "application/vnd.docuaction.record-review-dataset+json"
 DATASET_REPORT_TYPE = "record_review:dataset"
 FROZEN_SCHEMA = "record-review-frozen-dataset/1"
-#: First token of the failure reason of a job whose frozen dataset could not be read back.
+#: First token of the failure reason of a job that found EVIDENCE its frozen dataset is bad (bytes absent from
+#: the store, hash mismatch, more than one registration). A freeze with such a job is retired.
 UNAVAILABLE_MARK = "FROZEN_DATASET_UNAVAILABLE"
+#: First token of the failure reason of a job whose dataset could not be read for any other reason. The freeze
+#: is NOT retired: nothing shows the dataset is bad.
+READ_FAILED_MARK = "FROZEN_DATASET_READ_FAILED"
 #: What the hold / curated status in a frozen dataset is: the status when it was frozen, not at the cutoff.
 STATUS_BASIS = "freeze_time"
 
@@ -85,8 +100,18 @@ def _refused(text: str):
     return LoaderRefused(text)
 
 
+def read_failed(report_id: str, error_class: str):
+    """The controlled failure for a registered dataset the store could not return THIS time. Not evidence that
+    the dataset is bad: the freeze stays on offer and a retry renders from the same dataset."""
+    return _refused(
+        f"{READ_FAILED_MARK}: the frozen dataset {report_id} is registered but the artifact store could not "
+        f"return its bytes ({error_class}). Nothing was rendered from unverified bytes and nothing was rebuilt "
+        f"under that id. The frozen dataset is unchanged: request the format again to render from the same "
+        f"dataset once storage is readable (send new_freeze=true only if a new freeze is wanted).")
+
+
 def unavailable(report_id: str, why: str):
-    """The controlled failure for a registered dataset that cannot be read back."""
+    """The controlled failure for a registered dataset shown to be bad (absent, altered, or duplicated)."""
     return _refused(
         f"{UNAVAILABLE_MARK}: the frozen dataset {report_id} is registered but {why}, so no format can be "
         f"rendered from it. Nothing was produced and nothing was rebuilt under that id. Request the export again "
@@ -104,46 +129,50 @@ async def _registered_rows(db, report_id: str) -> List[Any]:
 
 async def read_registered(db, report_id: str) -> Optional[Tuple[bytes, Dict[str, Any]]]:
     """(stored bytes, registry row) of the ONE dataset registered under `report_id`, re-hashed against the
-    registry; None when none is registered. Missing bytes, a hash mismatch or more than one registration is a
-    controlled refusal - never a rebuild."""
-    from app.core.storage.artifact_store import ArtifactNotFound, ArtifactStoreError
-    from app.reports.data import artifact_registry
+    registry; None when none is registered. Never a rebuild, never unverified bytes.
+
+    The registry SELECT is outside the `try`: a database error is not a finding about storage and propagates to
+    the runner as an ordinary failure (which rolls the session back). Only the store read is classified - see
+    the module docstring for which outcomes retire the freeze. The read and the re-hash run in a worker thread:
+    a full-population dataset is large, and on the event loop they would stall every other request."""
+    from app.core.storage.artifact_store import ArtifactNotFound, content_sha256, get_artifact_store
 
     rows = await _registered_rows(db, report_id)
     if not rows:
         return None
     if len(rows) > 1:
         raise unavailable(report_id, f"{len(rows)} datasets are registered under it where exactly one is allowed")
+    row = rows[0]
+    registered_sha, locator, artifact = row.rendered_sha256, row.storage_locator, row.to_dict()
+
+    def _read() -> Tuple[bytes, str]:
+        content = get_artifact_store().get(locator)
+        return content, content_sha256(content)
+
     try:
-        got = await artifact_registry.retrieve_artifact(
-            db, report_id, content_type=DATASET_CONTENT_TYPE, version=rows[0].artifact_version)
-    except ArtifactNotFound as exc:
-        logger.warning("frozen dataset %s unreadable: %s", report_id, type(exc).__name__)
+        content, actual = await asyncio.to_thread(_read)
+    except ArtifactNotFound:
+        logger.warning("frozen dataset %s: bytes absent from the artifact store", report_id)
         raise unavailable(report_id, "its stored bytes are missing from the artifact store")
-    except RuntimeError as exc:
-        if isinstance(exc, ArtifactStoreError) or "INTEGRITY FAILURE" not in str(exc):
-            logger.warning("frozen dataset %s unreadable: %s", report_id, type(exc).__name__)
-            raise unavailable(report_id, f"the artifact store could not return its bytes ({type(exc).__name__})")
-        logger.error("frozen dataset %s failed its integrity check", report_id)     # artifact_registry._verified
+    except Exception as exc:  # noqa: BLE001 - I/O, permission, network, backend client: not evidence it is bad
+        logger.warning("frozen dataset %s could not be read: %s", report_id, type(exc).__name__)
+        raise read_failed(report_id, type(exc).__name__)
+    if actual != registered_sha:
+        logger.error("frozen dataset %s failed its integrity check", report_id)
         raise unavailable(report_id, "its stored bytes no longer hash to the registered SHA-256")
-    except Exception as exc:  # noqa: BLE001 - any storage failure (I/O, permission, backend client): never rebuild
-        logger.warning("frozen dataset %s unreadable: %s", report_id, type(exc).__name__)
-        raise unavailable(report_id, f"the artifact store could not return its bytes ({type(exc).__name__})")
-    # Defence in depth: the registry re-hashed the bytes; they are rendered only if they also hash to the ONE
-    # registered row this function selected.
-    if hashlib.sha256(got["content"]).hexdigest() != rows[0].rendered_sha256:
-        raise unavailable(report_id, "its stored bytes no longer hash to the registered SHA-256")
-    return got["content"], got["artifact"]
+    return content, artifact
 
 
 async def freeze_status(db, freeze_id: Any) -> Dict[str, Any]:
     """Whether a dataset is registered for this freeze and its bytes are still in the store. A cheap check for
     the request route (store metadata only; the runner re-hashes the bytes before rendering).
 
-    state: "frozen" | "absent" | "unavailable"."""
+    state: "frozen" | "absent" | "unavailable". "unavailable" needs evidence - the store says the object does
+    not exist, or more than one dataset is registered. A store that merely fails to answer leaves the freeze
+    "frozen" (`dataset_store_checked` False): the runner will read and verify it, or fail without retiring it."""
     from starlette.concurrency import run_in_threadpool
 
-    from app.core.storage.artifact_store import get_artifact_store
+    from app.core.storage.artifact_store import ArtifactNotFound, get_artifact_store
     from app.reports.data.artifact_registry import storage_durability
 
     report_id = dataset_report_id(freeze_id)
@@ -159,12 +188,15 @@ async def freeze_status(db, freeze_id: Any) -> Dict[str, Any]:
     if len(rows) > 1:
         out["state"] = "unavailable"
         return out
+    out["state"], out["dataset_store_checked"] = "frozen", True
     try:
         await run_in_threadpool(get_artifact_store().head, row.storage_locator)
-        out["state"] = "frozen"
-    except Exception as exc:  # noqa: BLE001 - any store failure means the bytes cannot be offered
-        logger.warning("frozen dataset %s not readable at request time: %s", report_id, type(exc).__name__)
+    except ArtifactNotFound:
+        logger.warning("frozen dataset %s: bytes absent from the artifact store at request time", report_id)
         out["state"] = "unavailable"
+    except Exception as exc:  # noqa: BLE001 - the store did not answer; that is not evidence the dataset is bad
+        logger.warning("frozen dataset %s: store check failed at request time: %s", report_id, type(exc).__name__)
+        out["dataset_store_checked"] = False
     return out
 
 
@@ -205,7 +237,7 @@ def _usable(jobs: List[Any], status: Dict[str, Any]) -> Optional[str]:
     from app.reports.data.export_job_model import ReportExportJob as J
 
     if any((j.error_reason or "").startswith(UNAVAILABLE_MARK) for j in jobs):
-        return None                                   # a job already found its bytes unreadable
+        return None                                   # a job found evidence the dataset is bad: retired
     if status["state"] == "frozen":
         return "frozen"
     if status["state"] == "absent" and any(j.state in J.ACTIVE_STATES for j in jobs):
@@ -215,20 +247,26 @@ def _usable(jobs: List[Any], status: Dict[str, Any]) -> Optional[str]:
 
 async def current_freeze(db, *, intake_uuid, run_id: str, cutoff_iso: str,
                          classification: str) -> Optional[Dict[str, Any]]:
-    """The newest-opened usable freeze for this delivery, run, cutoff, classification and generator version,
-    or None. Call with `lock(db, selection_key(...))` held."""
+    """The NEWEST-OPENED freeze for this delivery, run, cutoff, classification and generator version when it
+    is usable, else None (the caller then opens a new freeze). Call with `lock(db, selection_key(...))` held.
+
+    Only the newest is ever considered. Falling back to an older freeze when the newest is dead would hand a
+    default request older hold status than the operator last asked for (`new_freeze`) without saying so. An
+    older freeze is still reachable, deliberately, through `named_freeze`."""
     jobs = await jobs_naming(db, intake_uuid=intake_uuid, run_id=run_id, cutoff_iso=cutoff_iso,
                              classification=classification)
     by_freeze: Dict[str, List[Any]] = {}
     for job in jobs:
         by_freeze.setdefault(str(job.request_parameters["dataset_job_id"]), []).append(job)
-    newest_first = sorted(by_freeze.items(), key=lambda kv: min(j.created_at for j in kv[1]), reverse=True)
-    for freeze_id, named in newest_first:
-        status = await freeze_status(db, freeze_id)
-        usable = _usable(named, status)
-        if usable:
-            return {**status, "state": usable, "dataset_frozen_at": _noted(named, "dataset_frozen_at")}
-    return None
+    if not by_freeze:
+        return None
+    # "Opened" = when the first job naming the freeze was created (the opener; later formats only join it).
+    freeze_id, named = max(by_freeze.items(), key=lambda kv: (min(j.created_at for j in kv[1]), kv[0]))
+    status = await freeze_status(db, freeze_id)
+    usable = _usable(named, status)
+    if not usable:
+        return None
+    return {**status, "state": usable, "dataset_frozen_at": _noted(named, "dataset_frozen_at")}
 
 
 async def named_freeze(db, *, intake_uuid, freeze_id: str) -> Tuple[Optional[Dict[str, Any]], List[Any]]:
@@ -272,12 +310,19 @@ def _check_matches_job(frozen: Dict[str, Any], *, job, params: Dict[str, Any], r
                 f"nothing was rendered. Request the export with new_freeze=true to take a new freeze.")
 
 
-async def obtain(db, job, params: Dict[str, Any], *, heartbeat=None) -> Dict[str, Any]:
+async def obtain(db, job, params: Dict[str, Any]) -> Dict[str, Any]:
     """The frozen dataset this job renders: the registered one, or - when none is registered yet for its freeze -
     a new one loaded from the database and registered under the first-writer-wins lock.
 
-    Returns {"frozen": parsed JSON of the STORED bytes, "sha256", "dataset_id", "dataset_job_id", "created"}.
-    Raises LoaderRefused for every controlled refusal (bad request, row-count mismatch, unreadable dataset)."""
+    Returns {"frozen", "sha256", "dataset_id", "dataset_job_id", "created"}. `frozen` is parsed from the
+    canonical bytes whose SHA-256 is returned: for a job that reads a registered dataset those are the bytes
+    read back from the store and re-hashed; for the job that WRITES the dataset they are the very bytes it
+    handed to the store (not read back - the store hashes what it is given and the registry records that hash).
+    Raises LoaderRefused for every controlled refusal (bad request, row-count mismatch, unreadable dataset).
+
+    The caller keeps the job's heartbeat running around this call (`export_runner._Heartbeat`, which writes on
+    its own session and therefore cannot release this session's advisory lock). Serialising and parsing a
+    full-population dataset is CPU-bound and runs in a worker thread so the event loop stays free."""
     from app.reports.data import artifact_registry
     from app.reports.data import october_review_dataset as ds
     from app.reports.data import october_review_loader as loader
@@ -289,17 +334,11 @@ async def obtain(db, job, params: Dict[str, Any], *, heartbeat=None) -> Dict[str
     existing = await read_registered(db, report_id)
     if existing is None:
         capture_started = _utc_now()
-        if heartbeat is not None:
-            async with heartbeat:
-                loaded = await loader.load_record_facts(
-                    db, intake_id=job.source_intake_id, evidence_cutoff=params.get("evidence_cutoff"),
-                    run_id=params.get("run_id"))
-        else:
-            loaded = await loader.load_record_facts(
-                db, intake_id=job.source_intake_id, evidence_cutoff=params.get("evidence_cutoff"),
-                run_id=params.get("run_id"))
+        loaded = await loader.load_record_facts(
+            db, intake_id=job.source_intake_id, evidence_cutoff=params.get("evidence_cutoff"),
+            run_id=params.get("run_id"))
         meta = loaded["meta"]
-        content = canonical_bytes({
+        content = await asyncio.to_thread(canonical_bytes, {
             "schema": FROZEN_SCHEMA, "dataset_id": report_id, "dataset_job_id": freeze_id,
             "intake_id": meta["intake_id"], "evidence_cutoff": meta["evidence_cutoff"],
             "assessment_run_id": str(meta["assessment_run_id"]), "assessment_date": loaded["assessment_date"],
@@ -310,7 +349,8 @@ async def obtain(db, job, params: Dict[str, Any], *, heartbeat=None) -> Dict[str
             "facts": loaded["facts"], "load_meta": meta, "stored_comments": loaded["stored_comments"]})
         intake_sha = meta.get("intake_sha256")
         del loaded, meta
-        # First writer wins. No heartbeat between here and the commit: a heartbeat commits and would drop the lock.
+        # First writer wins. Nothing may commit THIS session between here and the commit below (that would drop
+        # the lock); the job heartbeat is safe because it writes on its own session.
         await lock(db, report_id)
         existing = await read_registered(db, report_id)
         if existing is None:
@@ -326,9 +366,16 @@ async def obtain(db, job, params: Dict[str, Any], *, heartbeat=None) -> Dict[str
         await db.commit()
     if existing is not None:
         content = existing[0]                       # another job's registered dataset: this job's load is discarded
-    frozen = json.loads(content.decode("utf-8"))    # every job renders from the STORED bytes, the writer included
+    # One code path for every job: parse the canonical bytes. For a reader they were read back from the store and
+    # re-hashed against the registry; for the writer they are the bytes it just handed to the store (same hash,
+    # not read back). No job renders from the loader's in-memory objects.
+
+    def _parse() -> Tuple[Dict[str, Any], str]:
+        return json.loads(content.decode("utf-8")), hashlib.sha256(content).hexdigest()
+
+    frozen, sha = await asyncio.to_thread(_parse)
     _check_matches_job(frozen, job=job, params=params, report_id=report_id)
-    return {"frozen": frozen, "sha256": hashlib.sha256(content).hexdigest(), "dataset_id": report_id,
+    return {"frozen": frozen, "sha256": sha, "dataset_id": report_id,
             "dataset_job_id": freeze_id, "created": created}
 
 

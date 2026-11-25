@@ -2182,6 +2182,20 @@ async def export_record_review(
                     f"frozen dataset {named_id} was frozen for assessment run {opened.get('run_id')}, not {run_id}")
             run_id = opened.get("run_id")
         assessment = await resolve_assessment_date(db, intake_uuid, run_id=run_id)
+        # A cheap pre-check of what the loader ENFORCES (the loader stays the authority: it runs again when the
+        # dataset is frozen): a delivery whose recorded record count is not the number of stored source records
+        # can never export, so it is refused here instead of becoming a failed job.
+        from sqlalchemy import func as _func
+        from app.tefca_registry.rce import models as _rce
+        stored_records = int((await db.execute(
+            select(_func.count()).select_from(_rce.RceSourceRecord)
+            .where(_rce.RceSourceRecord.source_intake_id == intake_uuid))).scalar() or 0)
+        if intake.record_count is not None and int(intake.record_count) != stored_records:
+            raise loader.LoaderRefused(
+                f"row count mismatch: the delivery records {int(intake.record_count)} record(s) "
+                f"(rce_source_intake.record_count) but {stored_records} source record(s) are stored for it. "
+                f"No export is queued for a delivery that does not reconcile; resolve the difference (or "
+                f"correct the recorded count) and request the export again")
         if not assessment.from_run:
             raise loader.LoaderRefused(
                 "the delivery has no completed assessment run, so there is no "
