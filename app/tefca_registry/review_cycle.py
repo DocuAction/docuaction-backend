@@ -199,27 +199,251 @@ async def _identity_precheck(db, intake_uuid, member_entity_id, ref, *, assessme
         refuses it (the writer gathers evidence first and then refuses the same record, every call).
     Anything it cannot establish - a reference that does not resolve here, a resolver that supplies no registry
     identity (the fixture resolver) - is left to the writer, exactly as before."""
+    return (await _identity_precheck_detail(db, intake_uuid, member_entity_id, ref,
+                                            assessment_date=assessment_date))["reason"]
+
+
+async def _identity_precheck_detail(db, intake_uuid, member_entity_id, ref, *,
+                                    assessment_date=None) -> Dict[str, Any]:
+    """`_identity_precheck` with the facts it decided on (it IS the pre-check: the function above returns this
+    function's `reason`). Local reads only; writes nothing. No delivered value is returned - only what was
+    established:
+
+      reason                None, or why the member cannot be reviewed for identity reasons
+      resolved              the reference resolved to a registry entity with a registry identity
+      lineage               how the delivery anchors the reference (`arc_pipeline.LINEAGE_*`), when resolved to
+                            the member's own entity
+      submitted_npi_blank   for a refused ANCHORED record: whether the record delivered no NPI at all
+      classified_on_submitted_values
+                            the record submitted no NPI, the registry holds one for the entity, and the blank-NPI
+                            rule applies to this delivery: it is reviewable and will be classified on its own
+                            delivered values (`arc_pipeline.record_identity`)
+
+    `assessment_date` is the delivery's own assessment date; resolved here when not given.
+    """
     from app.Tefca.entity_resolution import resolve_entity
     from app.tefca_registry.rce import arc_pipeline as ap
 
+    detail: Dict[str, Any] = {"reason": None, "resolved": False, "lineage": None, "submitted_npi_blank": None,
+                              "classified_on_submitted_values": False}
     entity = await resolve_entity(db, ref)
     if entity is None:
-        return None
+        return detail
     resolved_id = entity.get("_registry_entity_id")
     if resolved_id is None:
-        return None
+        return detail
+    detail["resolved"] = True
     if str(resolved_id) != str(member_entity_id):
-        return NOT_REVIEWABLE_OTHER_ENTITY
+        detail["reason"] = NOT_REVIEWABLE_OTHER_ENTITY
+        return detail
     anchors = await ap._source_anchors(db, intake_uuid, [ref])
-    source_record_id, _lineage = ap._source_anchor(anchors, ref, resolved_id)
+    source_record_id, lineage = ap._source_anchor(anchors, ref, resolved_id)
+    detail["lineage"] = lineage
     selected = await db.get(m.RceSourceRecord, source_record_id) if source_record_id else None
-    # The writer's own decision (`record_identity`), with the delivery's assessment date: a record that submitted
-    # no NPI is not refused for the registry's NPI when the blank-NPI rule applies to this delivery.
+    # The writer's own decision (`arc_pipeline.record_identity`), with the delivery's assessment date: a record
+    # that submitted no NPI is not refused for an NPI the registry holds when the blank-NPI rule applies to this
+    # delivery - it will be classified on its submitted values.
     if assessment_date is None:
         from app.tefca_registry.rce.assessment_context import resolve_assessment_date
         assessment_date = (await resolve_assessment_date(db, intake_uuid)).value
-    refusal, _entity_to_use, _withheld = ap.record_identity(entity, selected, assessment_date=assessment_date)
-    return refusal
+    refusal, _entity_to_use, withheld = ap.record_identity(entity, selected, assessment_date=assessment_date)
+    detail["reason"] = refusal
+    detail["classified_on_submitted_values"] = bool(withheld and not refusal)
+    if refusal and selected is not None:
+        delivered = selected.parsed or {}
+        detail["submitted_npi_blank"] = not str(delivered.get("NPI", selected.npi) or "").strip()
+    return detail
+
+
+class IdentityPrecheckUnavailable(RuntimeError):
+    """The identity pre-check cannot predict anything in this configuration. Routes turn it into a 409."""
+
+
+#: Not-reviewable members listed per page of the preview; the counts are always exact.
+PRECHECK_LIST_CAP = 500
+PRECHECK_DEFAULT_LIMIT = 2000
+PRECHECK_MAX_LIMIT = 5000
+
+OUTCOME_REVIEWABLE = "reviewable"
+OUTCOME_NOT_REVIEWABLE = "not_reviewable"
+OUTCOME_REFERENCE_NOT_RESOLVED = "reference_not_resolved"
+
+PRECHECK_NOTE = (
+    "A PREDICTION, not a result: what the review cycle's identity pre-check would decide for each member from "
+    "the local registry and this delivery's stored records at the time of this call. No source was asked and "
+    "nothing was written. Promotion, corrections or analyst decisions made after this call can change it. A "
+    "member listed as reviewable may still be set aside by verification itself; a reference that does not "
+    "resolve here is reported as such (kind transient) and is not counted as refused.")
+
+
+async def preview_identity_precheck(db, intake_id, *, after_entity_id=None,
+                                    limit: int = PRECHECK_DEFAULT_LIMIT) -> Dict[str, Any]:
+    """Count, BEFORE any review cycle exists, the members the cycle would not be able to review for identity
+    reasons. READ-ONLY: selects only, no flush, no commit, no audit row, no source call.
+
+    Members are the sampling frame `finalize_plan` uses for this delivery
+    (`qhin_sampling.resolve_qhin_strata(include_held=False)`: one member per distinct promoted entity of an
+    eligible unit) - with `full_population` that frame IS the sample. Each member's delivered reference is read
+    as the cycle reads it (`_refs_for`) and given to the cycle's own `_identity_precheck_detail`. One page of
+    members per call, ordered by entity id; `next_after_entity_id` continues.
+
+    Never returns an NPI or any other delivered value: entity ids, delivered references (the identifier the
+    cycle itself reports) and reasons only."""
+    from app.Tefca.entity_resolution import SOURCE_DB, resolver_source
+    from app.tefca_registry.qhin_sampling import resolve_qhin_strata
+    from app.tefca_registry.rce import arc_pipeline as ap
+
+    source = resolver_source()
+    if source != SOURCE_DB:
+        # With the fixture resolver no reference carries a registry identity, the pre-check can establish
+        # nothing, and every member would be reported "reviewable". That would be a false all-clear.
+        raise IdentityPrecheckUnavailable(
+            f"the identity pre-check needs the registry resolver (ENTITY_RESOLVER_SOURCE=db); it is "
+            f"{source!r} here, so no member's identity can be predicted and nothing is reported")
+
+    intake_uuid = intake_id if isinstance(intake_id, uuid.UUID) else uuid.UUID(str(intake_id))
+    limit = max(1, min(int(limit or PRECHECK_DEFAULT_LIMIT), PRECHECK_MAX_LIMIT))
+    after = uuid.UUID(str(after_entity_id)) if after_entity_id else None
+
+    # The delivery's own assessment date, read once with the resolver the cycle and the writer use: it decides
+    # whether the blank-NPI rule applies to this delivery at all.
+    from app.tefca_registry.rce.assessment_context import resolve_assessment_date
+    assessment = await resolve_assessment_date(db, intake_uuid)
+    rule_applies = assessment.value >= ap.BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE
+
+    eligible, unresolved = await resolve_qhin_strata(db, intake_uuid, include_held=False)
+    member_ids = sorted({unit["entity_id"] for unit in eligible})
+    not_in_frame: Dict[str, int] = {}
+    for unit in unresolved:
+        not_in_frame[unit["reason"]] = not_in_frame.get(unit["reason"], 0) + 1
+    held_out = sum(1 for unit in unresolved if unit.get("record_status") == "HELD"
+                   and str(unit.get("reason", "")).startswith("HELD"))
+    # Members with ANOTHER curated record of this delivery currently HELD: the D-15 skip set
+    # (`_held_entity_ids`), verified today and skipped when RCE_PROPOSED_VERIFY_SKIP_HELD is on.
+    held_members = await _held_entity_ids(db, intake_uuid, member_ids)
+
+    page_ids = [e for e in member_ids if after is None or e > after][:limit]
+    remaining_after_page = sum(1 for e in member_ids if after is None or e > after) - len(page_ids)
+
+    counts = {OUTCOME_REVIEWABLE: 0, OUTCOME_NOT_REVIEWABLE: 0, OUTCOME_REFERENCE_NOT_RESOLVED: 0}
+    by_reason: Dict[Any, int] = {}
+    gate_one = {"submitted_npi_blank": 0, "submitted_npi_present_and_different": 0}
+    listed: List[Dict[str, Any]] = []
+    listed_total = 0
+    held_in_page = held_not_reviewable = held_reviewable = 0
+    on_submitted_values: List[Dict[str, Any]] = []
+    on_submitted_values_total = 0
+
+    def _count(entity_id, ref, reason, kind, outcome):
+        nonlocal listed_total, held_not_reviewable
+        counts[outcome] += 1
+        if entity_id in held_members:
+            held_not_reviewable += 1
+        by_reason[(reason, kind)] = by_reason.get((reason, kind), 0) + 1
+        listed_total += 1
+        if len(listed) < PRECHECK_LIST_CAP:
+            listed.append({"entity_id": str(entity_id), "entity_ref": ref, "reason": reason, "kind": kind,
+                           "currently_held": entity_id in held_members})
+
+    for start in range(0, len(page_ids), _REF_CHUNK):
+        chunk = page_ids[start:start + _REF_CHUNK]
+        refs = await _refs_for(db, intake_uuid, chunk)
+        for entity_id in chunk:
+            if entity_id in held_members:
+                held_in_page += 1
+            ref = refs.get(entity_id)
+            if not ref:
+                _count(entity_id, None, NOT_REVIEWABLE_NO_REFERENCE, KIND_IDENTITY, OUTCOME_NOT_REVIEWABLE)
+                continue
+            detail = await _identity_precheck_detail(db, intake_uuid, entity_id, ref,
+                                                     assessment_date=assessment.value)
+            if detail["reason"]:
+                _count(entity_id, ref, detail["reason"], KIND_IDENTITY, OUTCOME_NOT_REVIEWABLE)
+                if detail["reason"] == ap.REFUSAL_SUBMITTED_NPI_DIFFERS:
+                    gate_one["submitted_npi_blank" if detail["submitted_npi_blank"]
+                             else "submitted_npi_present_and_different"] += 1
+            elif not detail["resolved"]:
+                _count(entity_id, ref, NOT_REVIEWABLE_UNRESOLVED, KIND_TRANSIENT, OUTCOME_REFERENCE_NOT_RESOLVED)
+            else:
+                counts[OUTCOME_REVIEWABLE] += 1
+                if entity_id in held_members:
+                    held_reviewable += 1
+                if detail["classified_on_submitted_values"]:
+                    on_submitted_values_total += 1
+                    if len(on_submitted_values) < PRECHECK_LIST_CAP:
+                        on_submitted_values.append({"entity_id": str(entity_id), "entity_ref": ref,
+                                                    "currently_held": entity_id in held_members})
+
+    return {
+        "intake_id": str(intake_uuid),
+        "read_only": True,
+        "note": PRECHECK_NOTE,
+        "resolver_source": source,
+        # Whether records that submitted NO NPI, on an entity the registry holds an NPI for, will be CLASSIFIED on
+        # their submitted values (rule applies) or REFUSED as before (it does not) - decided by this delivery's own
+        # assessment date against the effective date.
+        "blank_npi_rule": {
+            "effective_date": ap.BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE.isoformat(),
+            "delivery_assessment_date": assessment.value.isoformat(),
+            "delivery_assessment_date_source": assessment.source,
+            "applies_to_this_delivery": rule_applies,
+            "effect": ("blank-NPI records on an entity with a registry NPI are reviewable and will be classified "
+                       "on their submitted values (counted under counts.classified_on_submitted_values)"
+                       if rule_applies else
+                       "blank-NPI records on an entity with a registry NPI are refused as before (counted under "
+                       "counts.submitted_npi_gate.submitted_npi_blank)"),
+        },
+        # The whole delivery, the same on every page.
+        "frame": {
+            "members_total": len(member_ids),
+            # One eligible unit per member is what the cycle assumes. False means some entity has more than one
+            # eligible record in this delivery: DO NOT START THE CYCLE until that is understood.
+            "frame_consistent": len(eligible) == len(member_ids),
+            "eligible_units": len(eligible),
+            "not_in_frame_total": len(unresolved),
+            "not_in_frame_by_reason": [{"reason": reason, "count": n}
+                                       for reason, n in sorted(not_in_frame.items())],
+            # HELD records are outside the frame by default (include_held=False): never members.
+            "held_records_excluded_from_frame": held_out,
+            # Members that also have a curated record of this delivery currently HELD.
+            "members_currently_held": len(held_members),
+            "verify_skip_held_flag_on": _proposed_verify_skip_held(),
+        },
+        "page": {
+            "after_entity_id": str(after) if after else None,
+            "limit": limit,
+            "examined": len(page_ids),
+            "next_after_entity_id": (str(page_ids[-1]) if page_ids and remaining_after_page > 0 else None),
+            "members_after_this_page": remaining_after_page,
+            "complete": remaining_after_page == 0,
+        },
+        # This page only. Add the pages up for the delivery.
+        "counts": {
+            **counts,
+            "by_reason": [{"reason": reason, "kind": kind, "count": n}
+                          for (reason, kind), n in sorted(by_reason.items())],
+            # Of the members refused because the registered NPI is not the submitted one: how many records
+            # delivered NO NPI (they are refused before a missing-NPI rule could see them) and how many
+            # delivered a different one.
+            "submitted_npi_gate": gate_one,
+            # Of this page's members: currently HELD (still pre-checked above; verification skips them only
+            # when RCE_PROPOSED_VERIFY_SKIP_HELD is on).
+            "members_currently_held": held_in_page,
+            "held_and_reviewable": held_reviewable,
+            "held_and_not_reviewable": held_not_reviewable,
+            # Of `reviewable`: members whose record submitted no NPI while the registry holds one for the entity.
+            # They WILL BE CLASSIFIED ON THEIR SUBMITTED VALUES (the registry NPI withheld, NPI-keyed sources not
+            # asked). Always 0 when blank_npi_rule.applies_to_this_delivery is false.
+            "classified_on_submitted_values": on_submitted_values_total,
+        },
+        # The members counted under counts.classified_on_submitted_values (bounded like the list below).
+        "classified_on_submitted_values": on_submitted_values,
+        "classified_on_submitted_values_truncated": on_submitted_values_total > len(on_submitted_values),
+        "not_reviewable": listed,
+        "not_reviewable_listed": len(listed),
+        "not_reviewable_total": listed_total,
+        "not_reviewable_truncated": listed_total > len(listed),
+    }
 
 
 def _merge_verification(total: Dict[str, Any], part: Dict[str, Any]) -> Dict[str, Any]:

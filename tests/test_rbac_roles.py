@@ -507,6 +507,12 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # /exceptions and the per-(source,outcome) lists. Not a new access
         # decision.
         "/api/tefca/rce/deliveries/{intake_id}/sam-extract/candidates",
+        # ── Review-cycle identity pre-check (2026-11-25) ── A read-only PREVIEW
+        # of the program_manager-only POST beside it (which members that cycle
+        # could not review for identity reasons). It carries the role of the
+        # act it previews: deciding whether and how to run the cycle is the
+        # Program Manager's, and the list names delivered references.
+        "/api/tefca/workflow/deliveries/{intake_id}/review-cycle/identity-precheck",
         # ── Record comments (2026-11-12) ── Same floor, same principle, as the
         # per-record reads above: the list returns reviewer-authored QA
         # commentary about named records, with the second reviewer's attribution
