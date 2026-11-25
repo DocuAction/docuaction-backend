@@ -773,6 +773,10 @@ async def _import_csv(
                               "already_present": summary.rows_already_staged,
                               "rejected": summary.rows_rejected},
                               extra=({"intake_gates_applied": True,
+                                      # `rejected` = rows with no usable key + quarantined records.
+                                      "rejected_breakdown": {
+                                          "no_usable_key": summary.rows_rejected - validation.quarantined,
+                                          "quarantined_record_width": validation.quarantined},
                                       "key_conflicts": conflicts.as_metadata()}
                                      if conflicts is not None else
                                      {"intake_gates_applied": False}))}
@@ -956,7 +960,15 @@ def contract_validation_view(source_system: str, metadata: Optional[Dict[str, An
                   f"{diff['missing']['count']} missing, "
                   f"{diff['reordered']['columns_out_of_position']} out of position.")
         reasons.append(binding["operator_message"] + detail)
+    stop = metadata.get(META_INTAKE_STOP)
+    if stop:
+        reasons.append("the file was stopped before any row was staged: "
+                       + str(stop.get("operator_message") or stop.get("code")))
     validation = metadata.get(META_IMPORT_VALIDATION) or {}
+    complete = validation.get("completed") is True and validation.get("intake_gates_applied") is True
+    if not complete and not stop:
+        reasons.append("the full-file intake validation has not completed for this snapshot (the import "
+                       "is still running, failed, or was interrupted); nothing is claimed about the file")
     width = validation.get("record_width") or {}
     quarantined = int(width.get("quarantined_records") or 0)
     if quarantined:
@@ -982,8 +994,9 @@ def contract_validation_view(source_system: str, metadata: Optional[Dict[str, An
     if int(conflicts.get("unresolved_conflicts") or 0):
         reasons.append(f"{conflicts['unresolved_conflicts']} key conflict(s) could not be classified")
     return {
-        "status": binding["outcome"], "validated": binding["outcome"] in (
+        "status": binding["outcome"], "validated": complete and binding["outcome"] in (
             contract_registry.OUTCOME_EXACT, contract_registry.OUTCOME_REORDERED) and not reasons,
+        "full_file_validation_completed": complete,
         "label": {contract_registry.OUTCOME_EXACT: "bound to a registered contract",
                   contract_registry.OUTCOME_REORDERED: "bound to a registered contract (columns reordered)",
                   contract_registry.OUTCOME_UNREGISTERED: "unregistered contract",

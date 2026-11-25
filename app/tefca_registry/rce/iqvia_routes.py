@@ -1005,6 +1005,19 @@ async def approve(
             "error": "the exact staged-row reconciliation has not passed for the snapshot "
                      "as it stands now -- refusing to approve",
             "code": gate_code, "reconciliation": reconciliation})
+    # The intake-contract refusals are re-read at approval time (2026-11-25): the stored
+    # reconciliation result does not know that a contract was withdrawn, or the contracts
+    # directory broken, after it passed. Pure read; a snapshot imported before contract
+    # validation has no refusal here and is approved exactly as before.
+    contract_view = ii.contract_validation_view(snapshot.source_system, snapshot.metadata_)
+    if contract_view["refusal_reasons"]:
+        await _audit(db, user, action="IQVIA_SNAPSHOT_APPROVAL", outcome="rejected",
+                     resource_type="iqvia_snapshot", resource_id=snapshot_id,
+                     details={"code": "CONTRACT_VALIDATION_REFUSED", "status": contract_view["status"]})
+        raise HTTPException(409, detail={
+            "error": "intake-contract validation refuses this snapshot as it stands now",
+            "code": "CONTRACT_VALIDATION_REFUSED", "reasons": contract_view["refusal_reasons"],
+            "contract_validation_label": contract_view["label"]})
     try:
         approved = await sx.approve_snapshot(db, snapshot_id, user=user,
                                              approval_ref=body.approval_ref)
@@ -1292,10 +1305,10 @@ async def run_import_job(job_id: str) -> None:
 
         async def progress(summary: ii.ImportSummary) -> None:
             await jobs.heartbeat(
-                db, job.id,
+                db, job_pk,
                 phase=f"rows_read={summary.rows_read} staged={summary.rows_staged} "
                      f"rejected={summary.rows_rejected}")
-            snapshot = await db.get(sm.SourceSnapshot, job.snapshot_id)
+            snapshot = await db.get(sm.SourceSnapshot, snapshot_pk)
             if snapshot is not None:
                 snapshot.metadata_ = {**(snapshot.metadata_ or {}), "progress": {
                     "rows_read": summary.rows_read, "rows_staged": summary.rows_staged,
@@ -1307,7 +1320,7 @@ async def run_import_job(job_id: str) -> None:
             # While the importer hashes or preflights the file in a worker thread: its OWN session, as the
             # durable-original upload does, so a beat never shares the import session.
             async with async_session_maker() as hb:
-                await jobs.heartbeat(hb, job.id, phase=phase)
+                await jobs.heartbeat(hb, job_pk, phase=phase)
 
         try:
             # Durable original FIRST: when a durable backend is configured, nothing is staged from a file that

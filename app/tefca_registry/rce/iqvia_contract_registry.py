@@ -120,8 +120,13 @@ def _verify_contract(name: str, doc: Dict[str, Any]) -> None:
     def bad(why: str) -> ContractRegistryError:
         return ContractRegistryError(f"{name}: {why}")
 
+    if not isinstance(doc, dict):
+        raise bad("not a JSON object")
     if doc.get("contract_schema") != CONTRACT_SCHEMA:
         raise bad("unknown contract schema")
+    for key in ("contract_id", "source_system"):
+        if not isinstance(doc.get(key), str) or not doc[key]:
+            raise bad(f"no {key}")
     fields = doc.get("fields")
     if not isinstance(fields, list) or not fields:
         raise bad("no field list")
@@ -132,6 +137,8 @@ def _verify_contract(name: str, doc: Dict[str, Any]) -> None:
         raise bad("layout_sha256 is not a full lower-case sha256")
     names = []
     for position, f in enumerate(fields, start=1):
+        if not isinstance(f, dict):
+            raise bad(f"field {position} is not an object")
         if f.get("ordinal") != position:
             raise bad(f"ordinals are not 1..N in order (position {position})")
         fname = f.get("name")
@@ -207,6 +214,8 @@ def load_registry(directory: Path) -> Registry:
     identity, a field list that no longer matches its own recorded digest."""
     directory = Path(directory)
     manifest = _read_json(directory / MANIFEST_NAME)
+    if not isinstance(manifest, dict):
+        raise ContractRegistryError("manifest.json: not a JSON object")
     if manifest.get("manifest_schema") != MANIFEST_SCHEMA:
         raise ContractRegistryError("manifest.json: unknown manifest schema")
     entries = manifest.get("contracts")
@@ -283,6 +292,10 @@ def get_registry() -> Registry:
     except OSError as exc:
         return Registry(state=STATE_ERROR,
                         error=f"the configured directory cannot be read ({type(exc).__name__})")
+    except Exception as exc:  # noqa: BLE001 - "never raises" must hold for ANY malformed content:
+        # a status page, a resume of an older snapshot and a reconciliation all call this.
+        return Registry(state=STATE_ERROR,
+                        error=f"the contracts could not be verified ({type(exc).__name__})")
 
 
 def operator_message(registry: Registry, source_system: str) -> str:

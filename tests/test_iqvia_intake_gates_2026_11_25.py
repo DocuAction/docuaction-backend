@@ -388,6 +388,111 @@ class TestKeyConflicts:
         assert called == []
 
 
+class TestReviewFindings:
+    """From the independent review of this change (2026-11-25)."""
+
+    @pytest.mark.parametrize("damage", ["manifest_is_a_list", "contract_without_id", "field_is_a_string"])
+    async def test_a_malformed_contracts_directory_never_raises_anywhere(
+            self, rolled_back_db, contracts, tmp_path, monkeypatch, damage):
+        import json
+        db = rolled_back_db
+        contract, rows = hco_rows(2)
+        done = await run_import(db, HCO, support.write_contract_file(tmp_path / f"m-{damage}.csv", contract, rows))
+        target = contracts / f"{HCO.lower()}_{EDITION_2}_v1.json"
+        doc = json.loads(target.read_text(encoding="utf-8"))
+        if damage == "manifest_is_a_list":
+            (contracts / "manifest.json").write_text("[]", encoding="utf-8")
+        elif damage == "contract_without_id":
+            doc.pop("contract_id")
+            target.write_text(json.dumps(doc), encoding="utf-8")
+        else:
+            doc["fields"][0] = "not an object"
+            target.write_text(json.dumps(doc), encoding="utf-8")
+        registry = cr.get_registry()
+        assert registry.state == cr.STATE_ERROR and registry.contracts() == ()
+        verdict = await ii.verify_snapshot_staged_completely(db, done.snapshot_id)     # does not raise
+        assert verdict["reconciles"] is False and "could not be verified" in verdict["refusal_reasons"][0]
+        # A snapshot staged before the gates still resumes: the registry state is not its business.
+        f = support.write_cells(tmp_path / f"leg-{damage}.csv", ["HCO_HCE_ID", "ORG_NPI", "ORG_CCN_ID", "BUS_NM"],
+                                [[f"{SYN}-RF-{damage}-{n}", "", "", "N"] for n in range(3)])
+        before = await support.snapshot_staged_before_the_gates(db, HCO, f)
+        resumed = await ii.import_hco_csv(db, file_path=f, label="unused", created_by=SYN, snapshot_id=before.id)
+        assert (resumed.rows_staged, resumed.rows_already_staged) == (2, 1)
+
+    async def test_nothing_is_called_validated_until_the_whole_file_has_been_read(
+            self, rolled_back_db, contracts, tmp_path, monkeypatch):
+        db = rolled_back_db
+        contract, rows = hco_rows(3)
+        f = support.write_contract_file(tmp_path / "midflight.csv", contract, rows)
+
+        async def interrupted(db_, *, snapshot_id, model, rows):
+            raise RuntimeError("interrupted by the test")
+
+        monkeypatch.setattr(ii, "_stage_rows", interrupted)
+        with pytest.raises(RuntimeError):
+            await run_import(db, HCO, f)
+        await db.rollback()
+        snapshot = await snapshot_by_label(db, f"{SYN}-midflight")
+        view = ii.contract_validation_view(HCO, snapshot.metadata_)
+        assert view["status"] == "exact" and view["validated"] is False
+        assert view["full_file_validation_completed"] is False
+        assert any("has not completed" in r for r in view["refusal_reasons"])
+
+    async def test_a_recorded_stop_is_itself_a_refusal(self, rolled_back_db, contracts, tmp_path):
+        db = rolled_back_db
+        contract, rows = hco_rows(1)
+        header = list(contract.names) + ["BUS_NM"]
+        f = support.write_cells(tmp_path / "stopview.csv", header, [[rows[0][n] for n in header]])
+        with pytest.raises(ii.IntakeStructuralStop):
+            await run_import(db, HCO, f)
+        snapshot = await snapshot_by_label(db, f"{SYN}-stopview")
+        view = ii.contract_validation_view(HCO, snapshot.metadata_)
+        assert any(r.startswith("the file was stopped before any row was staged") for r in view["refusal_reasons"])
+
+    async def test_approval_reads_the_contract_again_after_a_passed_reconciliation(
+            self, committed_db, contracts, tmp_path, monkeypatch):
+        """A reconciliation passed while the layout was registered. The contract
+        is then withdrawn. The stored PASSED result cannot know; approval does."""
+        from fastapi import HTTPException
+
+        from app.tefca_registry.rce import iqvia_reconciliation as rec
+        db = committed_db
+        contract, rows = hco_rows(2)
+        path = support.write_contract_file(tmp_path / f"appr-{uuid.uuid4().hex[:6]}.csv", contract, rows)
+        staged = await routes.stage_source(
+            "hco", routes.StageRequest(file_path=str(path), label=f"{SYN}-{path.stem}"),
+            db, user=support.StageUser())
+        snapshot_id = uuid.UUID(staged["snapshot_id"])
+        support.created_snapshot_ids.append(snapshot_id)
+        job = await jobs.get_import_job(db, uuid.UUID(staged["job_id"]))
+        job.state, job.attempt_count = um.IqviaImportJob.STATE_RUNNING, 1
+        await db.commit()
+        await routes.run_import_job(str(job.id))
+        await db.refresh(job)                                           # finished in its own session
+        await db.refresh(await db.get(sm.SourceSnapshot, snapshot_id))
+        row, outcome = await rec.request_reconciliation(db, snapshot_id, requested_by="checker")
+        assert outcome == "started"
+        row.state = rec.IqviaSnapshotReconciliation.STATE_CHECKING      # as claim_next does
+        await db.commit()
+        await rec.run_reconciliation(str(row.id))
+        await db.refresh(row)                                           # finished in its own session
+        snapshot = await db.get(sm.SourceSnapshot, snapshot_id)
+        await db.refresh(snapshot)
+        ok, _code, view = await rec.approval_gate(db, snapshot)
+        assert ok and view["status"] == "passed", (_code, row.error_reason, row.refusal_reasons)
+
+        support.use_contracts(monkeypatch, None)                         # the contract is withdrawn
+        with pytest.raises(HTTPException) as refused:
+            await routes.approve(snapshot_id, routes.ApproveRequest(approval_ref="SYN-REF"), db,
+                                 user=support.StageUser("qalead"))
+        assert refused.value.status_code == 409
+        assert refused.value.detail["code"] == "CONTRACT_VALIDATION_REFUSED"
+        assert "IQVIA_CONTRACTS_DIR is not set" in refused.value.detail["reasons"][0]
+        await db.rollback()
+        await db.refresh(snapshot)
+        assert snapshot.status == sm.SNAPSHOT_PENDING
+
+
 # ── a snapshot imported before the gates ─────────────────────────────────────
 
 async def legacy_snapshot(db, path, *, staged_rows):

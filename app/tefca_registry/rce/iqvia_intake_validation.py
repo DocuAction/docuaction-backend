@@ -129,6 +129,10 @@ class FullFileValidation:
         """A record of another width that was NOT staged."""
         self._quarantined.add(record_number)
 
+    @property
+    def quarantined(self) -> int:
+        return self._quarantined.count
+
     def measure(self, record_number: int, cells: Sequence[str]) -> None:
         """Per-column checks for a record whose width equals the header's (in a
         record of another width a cell cannot be attributed to a column)."""
