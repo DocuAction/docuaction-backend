@@ -1287,6 +1287,12 @@ async def run_import_job(job_id: str) -> None:
                     "rows_rejected": summary.rows_rejected}}
                 await db.commit()
 
+        async def beat(phase: str) -> None:
+            # While the importer hashes or preflights the file in a worker thread: its OWN session, as the
+            # durable-original upload does, so a beat never shares the import session.
+            async with async_session_maker() as hb:
+                await jobs.heartbeat(hb, job.id, phase=phase)
+
         try:
             # Durable original FIRST: when a durable backend is configured, nothing is staged from a file that
             # could not be preserved (a failure here fails/requeues the job like any other attempt failure).
@@ -1294,7 +1300,7 @@ async def run_import_job(job_id: str) -> None:
             summary = await importer(
                 db, file_path=Path(job.file_path), label=job.label,
                 created_by=job.created_by, snapshot_id=job.snapshot_id,
-                progress_cb=progress)
+                progress_cb=progress, heartbeat_cb=beat)
             snapshot = await db.get(sm.SourceSnapshot, job.snapshot_id)
             snapshot.metadata_ = {**(snapshot.metadata_ or {}),
                                   "import_status": "completed",

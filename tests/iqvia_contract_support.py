@@ -196,3 +196,52 @@ def all_strings(value) -> List[str]:
         for v in value:
             found.extend(all_strings(v))
     return found
+
+
+# ── a committed session for tests that drive the durable job runner ──────────
+
+import uuid as _uuid
+
+import pytest as _pytest
+
+created_snapshot_ids: List = []
+
+
+@_pytest.fixture
+async def committed_db(db_required, tmp_path, monkeypatch):
+    """A real, committed session (`run_import_job` opens its own sessions, so a
+    rolled-back fixture would be invisible to it), the stage route confined to
+    tmp_path, the IQVIA programme flag on, and every synthetic row this test
+    registered in `created_snapshot_ids` removed afterwards."""
+    from sqlalchemy import delete, text
+
+    from app.core.config import settings
+    from app.core.database import async_session_maker
+    from app.tefca_registry.rce import iqvia_reconciliation as rec
+    from app.tefca_registry.rce import iqvia_upload_models as um
+
+    monkeypatch.setattr(settings, "IQVIA_IMPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "ENABLE_IQVIA_SOURCES", True, raising=False)
+    created_snapshot_ids.clear()
+    async with async_session_maker() as session:
+        yield session
+    ids = list(created_snapshot_ids) or [_uuid.uuid4()]
+    async with async_session_maker() as cleanup:
+        await cleanup.execute(delete(rec.IqviaSnapshotReconciliation).where(
+            rec.IqviaSnapshotReconciliation.snapshot_id.in_(ids)))
+        await cleanup.execute(delete(um.IqviaImportJob).where(um.IqviaImportJob.snapshot_id.in_(ids)))
+        for model in MODELS.values():
+            await cleanup.execute(delete(model).where(model.source_snapshot_id.in_(ids)))
+        # Synthetic teardown only; see tests/test_iqvia_import_durability.py for why `replica`.
+        await cleanup.execute(text("SET LOCAL session_replication_role = replica"))
+        await cleanup.execute(delete(sm.SourceSnapshot).where(
+            (sm.SourceSnapshot.id.in_(ids)) | (sm.SourceSnapshot.supersedes_snapshot_id.in_(ids))))
+        await cleanup.commit()
+    created_snapshot_ids.clear()
+
+
+class StageUser:
+    def __init__(self, role="reviewer"):
+        self.role = role
+        self.email = f"iqvia-intake-{role}@synthetic-test.docuaction.invalid"
+        self.id = None

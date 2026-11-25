@@ -42,6 +42,7 @@ field values.
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import hashlib
 import inspect
@@ -268,6 +269,49 @@ def _iter_reference_records(path, validation):
         yield record_no, cells
 
 
+#: How often the job is told the worker is alive while a whole-file pass runs
+#: in a worker thread. Far below iqvia_upload_jobs.STALE_HEARTBEAT_SECONDS.
+OFF_LOOP_HEARTBEAT_SECONDS = 30
+
+
+async def _off_loop(fn, *args, heartbeat_cb=None, phase: str = ""):
+    """Run a blocking whole-file pass (the sha256, the reference preflight) in
+    a worker thread, so the event loop keeps serving requests, and keep the
+    job heartbeat alive meanwhile so the reaper cannot take a long hash for a
+    dead worker and requeue it. `heartbeat_cb(phase)` is awaited now and every
+    OFF_LOOP_HEARTBEAT_SECONDS until `fn` returns; a failed beat is logged and
+    never stops the work. Without a callback the work still leaves the loop."""
+    if heartbeat_cb is None:
+        return await asyncio.to_thread(fn, *args)
+    stop = asyncio.Event()
+
+    async def _beat() -> None:
+        while not stop.is_set():
+            try:
+                await heartbeat_cb(phase)
+            except Exception as exc:  # noqa: BLE001 - a missed beat must not kill the import
+                logger.warning("IQVIA import heartbeat during %s failed: %s", phase, type(exc).__name__)
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=OFF_LOOP_HEARTBEAT_SECONDS)
+            except asyncio.TimeoutError:
+                pass
+
+    beat = asyncio.create_task(_beat())
+    try:
+        return await asyncio.to_thread(fn, *args)
+    finally:
+        stop.set()
+        await beat
+
+
+def _preflight_and_header(path, source_system: str):
+    """The two reads of the file that precede staging, as one blocking call."""
+    from app.tefca_registry.rce import reference_preflight as _rp
+    preflight = _rp.preflight_reference_file(path, source_system)
+    header, header_error = intake.read_reference_header(path)
+    return preflight, header, header_error
+
+
 def _row_sha256(row: Dict[str, str]) -> str:
     """Of the row's own fields, canonically ordered -- reproducible from the
     stored `payload` alone, independent of the source CSV's column order."""
@@ -333,6 +377,7 @@ async def _import_csv(
     label: str, created_by: str, chunk_size: int = DEFAULT_CHUNK_SIZE,
     snapshot_id: Optional[uuid.UUID] = None,
     progress_cb: Optional[Callable[[ImportSummary], None]] = None,
+    heartbeat_cb: Optional[Callable[[str], Any]] = None,
 ) -> ImportSummary:
     """Shared engine behind the three public `import_*_csv` functions below.
 
@@ -342,7 +387,9 @@ async def _import_csv(
     never means editing this function.
     """
     path = Path(file_path)
-    sha = file_sha256(path)
+    # Off the event loop, with a heartbeat (2026-11-25): hashing a multi-GB file
+    # here used to block every request for minutes and write no heartbeat.
+    sha = await _off_loop(file_sha256, path, heartbeat_cb=heartbeat_cb, phase="hashing the file")
 
     if snapshot_id is not None:
         snapshot = await db.get(sm.SourceSnapshot, snapshot_id)
@@ -382,14 +429,15 @@ async def _import_csv(
     from app.core.config import settings as _settings
     from app.tefca_registry.rce import reference_preflight as _rp
 
-    preflight = _rp.preflight_reference_file(path, source_system)
+    preflight, header, header_error = await _off_loop(
+        _preflight_and_header, path, source_system,
+        heartbeat_cb=heartbeat_cb, phase="reference preflight (whole-file read)")
     enforce = bool(getattr(_settings, "ENABLE_PREFLIGHT_ENFORCEMENT", False))
     # INTAKE CONTRACT (2026-11-25), RECORD ONLY. The header is read with
     # csv.reader BEFORE any row is keyed by name, bound by NAME to the registered
     # contracts of this source, and stored with the preflight in ONE commit.
     # Nothing here refuses, and no row's stored content depends on it.
     registry = contract_registry.get_registry()
-    header, header_error = intake.read_reference_header(path)
     source_header = contract_registry.describe_header(registry, source_system, header)
     if header_error:
         source_header["unreadable"] = header_error
@@ -582,19 +630,22 @@ async def import_hco_csv(db, *, file_path, label: str, created_by: str,
                          chunk_size: int = DEFAULT_CHUNK_SIZE,
                          snapshot_id: Optional[uuid.UUID] = None,
                          progress_cb: Optional[Callable[[ImportSummary], None]] = None,
+                         heartbeat_cb: Optional[Callable[[str], Any]] = None,
                          ) -> ImportSummary:
     """DEMOGRAPHIC extract -> `iqvia_hco_observation`. Organisation-level."""
     return await _import_csv(
         db, file_path=file_path, source_system=sm.SOURCE_IQVIA_HCO,
         model=sm.IqviaHcoObservation, key_field=HCO_KEY_FIELD,
         build_payload_and_keys=_hco_payload_and_keys, label=label, created_by=created_by,
-        chunk_size=chunk_size, snapshot_id=snapshot_id, progress_cb=progress_cb)
+        chunk_size=chunk_size, snapshot_id=snapshot_id, progress_cb=progress_cb,
+        heartbeat_cb=heartbeat_cb)
 
 
 async def import_hcp_csv(db, *, file_path, label: str, created_by: str,
                          chunk_size: int = DEFAULT_CHUNK_SIZE,
                          snapshot_id: Optional[uuid.UUID] = None,
                          progress_cb: Optional[Callable[[ImportSummary], None]] = None,
+                         heartbeat_cb: Optional[Callable[[str], Any]] = None,
                          ) -> ImportSummary:
     """HCP_ADDR extract -> `iqvia_hcp_observation`. Individual-practitioner,
     one row per address. NOTE (confirmed by local profiling): the delivered
@@ -604,13 +655,15 @@ async def import_hcp_csv(db, *, file_path, label: str, created_by: str,
         db, file_path=file_path, source_system=sm.SOURCE_IQVIA_HCP,
         model=sm.IqviaHcpObservation, key_field=HCP_HCE_FIELD,
         build_payload_and_keys=_hcp_payload_and_keys, label=label, created_by=created_by,
-        chunk_size=chunk_size, snapshot_id=snapshot_id, progress_cb=progress_cb)
+        chunk_size=chunk_size, snapshot_id=snapshot_id, progress_cb=progress_cb,
+        heartbeat_cb=heartbeat_cb)
 
 
 async def import_affiliation_csv(db, *, file_path, label: str, created_by: str,
                                  chunk_size: int = DEFAULT_CHUNK_SIZE,
                                  snapshot_id: Optional[uuid.UUID] = None,
                                  progress_cb: Optional[Callable[[ImportSummary], None]] = None,
+                                 heartbeat_cb: Optional[Callable[[str], Any]] = None,
                                  ) -> ImportSummary:
     """HCP_AFFIL extract -> `iqvia_affiliation_observation`. No data has been
     delivered for this extract as of 2026-10-02 (layout only) -- this
@@ -622,7 +675,7 @@ async def import_affiliation_csv(db, *, file_path, label: str, created_by: str,
         model=sm.IqviaAffiliationObservation, key_field=HCP_HCE_FIELD,
         build_payload_and_keys=_affiliation_payload_and_keys, label=label,
         created_by=created_by, chunk_size=chunk_size, snapshot_id=snapshot_id,
-        progress_cb=progress_cb)
+        progress_cb=progress_cb, heartbeat_cb=heartbeat_cb)
 
 
 async def verify_snapshot_staged_completely(db, snapshot_id) -> Dict[str, Any]:
