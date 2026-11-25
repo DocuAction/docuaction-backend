@@ -36,7 +36,7 @@ from rce_traceability_support import SYN  # noqa: F401
 from test_iqvia_routes import (HCO_HEADER, _created_snapshot_ids,  # noqa: F401
                                _created_upload_ids, _FakeRequest,
                                _iqvia_drop_dir_is_tmp_path, _iqvia_sources,
-                               _run_one_queued_job, _User, db, write_csv)  # noqa: F401
+                               _reconcile, _run_one_queued_job, _User, db, write_csv)  # noqa: F401
 
 pytestmark = pytest.mark.regression
 
@@ -139,8 +139,20 @@ class TestTheReferenceLegEndToEnd:
         pre = staged.get("reference_preflight")
         assert pre is not None and pre.get("gate") == "CLEAR", pre
 
-        # 6. Who may NOT approve: the uploader's role, and the registrant even as QA Lead.
+        # 5b. Staged is not yet approvable: the exact reconciliation has not been run, and the
+        # approval gate says so before it looks at who is asking (main, #242).
         body = routes.ApproveRequest(approval_ref=f"{SYN}-hub-approval")
+        assert staged["reconciliation"]["status"] == "not_checked"
+        with pytest.raises(HTTPException) as exc:
+            await routes.approve(snapshot_id, body, db, user=approver)
+        assert exc.value.status_code == 409 and exc.value.detail["code"] == "RECONCILIATION_REQUIRED"
+        await _reconcile(db, snapshot_id, user=uploader)
+        db.expire_all()                      # the check committed through its own session
+        checked = await routes.snapshot_status(snapshot_id, db, user=uploader)
+        assert checked["reconciliation"]["status"] == "passed"
+        assert checked["status"] == sm.SNAPSHOT_PENDING
+
+        # 6. Who may NOT approve: the uploader's role, and the registrant even as QA Lead.
         with pytest.raises(HTTPException) as exc:
             await routes.approve(snapshot_id, body, db, user=_User("qalead", UPLOADER))
         assert exc.value.detail["code"] == "MAKER_CHECKER_VIOLATION"
