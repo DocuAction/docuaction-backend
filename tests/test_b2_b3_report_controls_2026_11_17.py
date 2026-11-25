@@ -386,7 +386,11 @@ async def test_a_failed_export_never_writes_the_analyst_or_qa_text_to_the_log(ro
 
     assert (state1, state2) == (ReportExportJob.STATE_FAILED, ReportExportJob.STATE_FAILED)
     assert "OSError" in reason1 and "RuntimeError" in reason2
-    assert state3 == ReportExportJob.STATE_SUCCEEDED and reason3 == "" and len(registered) == 1
+    # 2026-11-25: each export first registers the frozen dataset it renders from (here through the same fake, so
+    # nothing is stored and every export freezes again); exactly ONE rendered artifact was registered.
+    from app.reports.data.record_review_freeze import DATASET_CONTENT_TYPE
+    rendered = [kw for kw in registered if kw["content_type"] != DATASET_CONTENT_TYPE]
+    assert state3 == ReportExportJob.STATE_SUCCEEDED and reason3 == "" and len(rendered) == 1
     logged = caplog.text
     assert "record-review export job" in logged and "synthetic registration failure" in logged, "failures were logged"
     assert logged.count("Traceback") >= 2

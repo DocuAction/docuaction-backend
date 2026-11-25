@@ -434,7 +434,11 @@ async def test_a_failed_job_offers_no_download_link(rolled_back_db, store, monke
         assert await _run_next_like_the_scheduler(db) == ReportExportJob.STATE_FAILED
         status = (await client.get(r.json()["status_url"], headers=headers)).json()
     assert status["state"] == ReportExportJob.STATE_FAILED and "download" not in status
-    assert not [p for p in store.rglob("*") if p.is_file()], "a failed job left bytes in the store"
+    # 2026-11-25: the frozen dataset is stored BEFORE any format is rendered and stays for the next format of the
+    # same delivery and cutoff. What a failed job must not leave is a RENDERED file.
+    assert not [p for p in store.rglob("*") if p.is_file() and "RECORD-REVIEW-DATASET-" not in str(p)], \
+        "a failed job left rendered bytes in the store"
+    assert status["dataset_sha256"] and status["dataset_job_id"] == r.json()["job_id"]
 
 def test_the_registered_template_version_fits_the_registry_column():
     """The label that broke registration: 41 characters into varchar(32)."""

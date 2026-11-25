@@ -76,11 +76,33 @@ def _req(intake_id, fmt="csv", **kw):
         format=fmt, **kw)
 
 
+@pytest.fixture(autouse=True)
+def _dataset_store(tmp_path, monkeypatch):
+    """2026-11-25: the frozen dataset every format renders from is REALLY registered (a local store in tmp_path),
+    so a second format of the same delivery finds it. The rendered formats still go to the recorder below."""
+    from app.core.storage import artifact_store
+    monkeypatch.setattr(artifact_store, "_store",
+                        artifact_store.LocalFilesystemArtifactStore(str(tmp_path / "artifacts")))
+
+
+from app.reports.data import artifact_registry as _registry          # noqa: E402
+from app.reports.data import record_review_freeze as _freeze          # noqa: E402
+
+_REAL_FINALIZE = _registry.finalize_artifact
+
+
 class _Recorder:
+    """Records the RENDERED artifact registrations. The frozen dataset's own registration is passed through to
+    the real registry and kept apart in `dataset_calls`."""
+
     def __init__(self):
         self.calls = []
+        self.dataset_calls = []
 
     async def __call__(self, db, **kw):
+        if kw["content_type"] == _freeze.DATASET_CONTENT_TYPE:
+            self.dataset_calls.append(kw)
+            return await _REAL_FINALIZE(db, **kw)
         self.calls.append(kw)
         return {"artifact_id": uuid.uuid4(), "artifact_version": 1,
                 "rendered_sha256": "f" * 64, "size_bytes": len(kw["content"])}
@@ -161,8 +183,10 @@ async def test_route_queues_one_job_per_delivery_run_cutoff_format_and_reuses_it
     assert first["assessment_date"] == "2026-11-08" and first["assessment_run_id"] == str(run.id)
     assert "DRAFT / NOT FINAL / INDEPENDENT QA PENDING" == first["status"]
     job = await db.get(ReportExportJob, uuid.UUID(first["job_id"]))
+    # 2026-11-25: every job names the frozen dataset it renders; the first job of a freeze names itself
     assert job.request_parameters == {"format": "csv", "evidence_cutoff": CUTOFF_ISO,
-                                      "run_id": str(run.id)}
+                                      "run_id": str(run.id), "dataset_job_id": first["job_id"]}
+    assert other_fmt["dataset_job_id"] == first["job_id"] and other_fmt["dataset_state"] == "pending"
     assert str(job.source_intake_id) == str(intake_id)
     # a different cutoff is a different request
     moved = await report_routes.export_record_review(
@@ -244,7 +268,7 @@ async def test_runner_refusal_is_a_controlled_failure_that_registers_nothing(rol
     job.request_parameters = {"format": "csv", "evidence_cutoff": None, "run_id": None}
     await db.flush()
     state = await run_record_review_export_job(db, job)
-    assert state == ReportExportJob.STATE_FAILED and rec.calls == []
+    assert state == ReportExportJob.STATE_FAILED and rec.calls == [] and rec.dataset_calls == []
     done = await db.get(ReportExportJob, job.id)
     assert "evidence_cutoff is required" in done.error_reason
     assert done.artifact_id is None and done.active_marker is None

@@ -126,7 +126,8 @@ async def request_job(db, *, identity: str, export_type: str, intake_id,
                       classification: str, generator_version: str,
                       requested_by: str,
                       report_type: Optional[str] = None,
-                      request_parameters: Optional[Dict[str, Any]] = None) -> Any:
+                      request_parameters: Optional[Dict[str, Any]] = None,
+                      job_id: Any = None) -> Any:
     """Return the job for this identity, creating one only if none is active.
 
     THE THREE OUTCOMES, AND WHY EACH IS RIGHT
@@ -153,6 +154,9 @@ async def request_job(db, *, identity: str, export_type: str, intake_id,
         return existing
 
     job = ReportExportJob(
+        # `job_id` lets a caller name the row before it exists (a record-review job that opens a dataset freeze
+        # records its own id in `request_parameters`). Omitted: the column default assigns one, as before.
+        **({"id": job_id} if job_id is not None else {}),
         identity=identity, export_type=export_type,
         source_intake_id=intake_id, classification=classification,
         generator_version=generator_version,
@@ -235,20 +239,50 @@ async def heartbeat(db, job_id, phase: Optional[str] = None) -> None:
     await db.commit()
 
 
-async def finish_succeeded(db, job_id, *, report_id: str, artifact_id: str,
-                           artifact_version: int, rendered_sha256: str,
-                           size_bytes: int) -> None:
-    """Terminal success. The artifact is named, so the job is a receipt for it.
-
-    `active_marker` is cleared LAST and in the same commit: while it is set the
-    partial unique index refuses another job for this identity, and clearing it
-    is exactly what makes a re-export possible.
-    """
+async def note_request_parameters(db, job_id, extra: Dict[str, Any]) -> None:
+    """Add facts the run established to the job's own `request_parameters` (e.g. which frozen dataset a
+    record-review job rendered, and its hash). Keys already present are never overwritten: what was requested
+    stays what was requested."""
     from app.reports.data.export_job_model import ReportExportJob
 
     job = await db.get(ReportExportJob, job_id)
     if job is None:
         return
+    merged = dict(job.request_parameters or {})
+    for key, value in extra.items():
+        merged.setdefault(key, value)
+    job.request_parameters = merged
+    await db.commit()
+
+
+async def finish_succeeded(db, job_id, *, report_id: str, artifact_id: str,
+                           artifact_version: int, rendered_sha256: str,
+                           size_bytes: int) -> bool:
+    """Terminal success. The artifact is named, so the job is a receipt for it.
+
+    `active_marker` is cleared LAST and in the same commit: while it is set the
+    partial unique index refuses another job for this identity, and clearing it
+    is exactly what makes a re-export possible.
+
+    STATE GUARD (2026-11-25). Only a job that is still QUEUED or RUNNING can
+    succeed. A job the reaper already failed (its worker went quiet for longer
+    than the threshold and then came back) stays FAILED: its export slot was
+    released and a replacement may already be running, so flipping it to
+    SUCCEEDED would put a second "successful" job on one identity and overwrite
+    the recorded reason. The row is re-read from the database under a row lock
+    - never from this session's possibly stale copy - and False is returned.
+    """
+    from app.reports.data.export_job_model import ReportExportJob
+
+    job = (await db.execute(
+        select(ReportExportJob).where(ReportExportJob.id == job_id)
+        .with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
+    if job is None:
+        return False
+    if job.state not in ReportExportJob.ACTIVE_STATES:
+        logger.warning("export job %s finished after it was already %s; left as it is", job_id, job.state)
+        await db.commit()                                  # releases the row lock; nothing was changed
+        return False
     job.state = ReportExportJob.STATE_SUCCEEDED
     job.phase = "Ready"
     job.completed_at = datetime.utcnow()
@@ -260,6 +294,7 @@ async def finish_succeeded(db, job_id, *, report_id: str, artifact_id: str,
     job.size_bytes = size_bytes
     job.active_marker = None
     await db.commit()
+    return True
 
 
 async def finish_failed(db, job_id, reason: str) -> None:

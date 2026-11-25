@@ -208,7 +208,7 @@ async def test_annotation_or_comment_for_another_deliverys_record_is_rejected_no
 
 async def test_multiple_reviews_and_evidence_generations_yield_one_row_per_record(rolled_back_db):
     db = rolled_back_db
-    intake_id, _ = await seed_intake(db, make_rows(2, arc="9.99.777.24"), with_job=False)
+    intake_id, _ = await seed_intake(db, make_rows(2, arc="9.99.777.24", NPI="1234567893"), with_job=False)
     await _run(db, intake_id)
     recs = await _records(db, intake_id)
     ent = await _entity(db, "dup")
@@ -218,7 +218,7 @@ async def test_multiple_reviews_and_evidence_generations_yield_one_row_per_recor
     await _review(db, recs[1], ent, "REV-9924-000002", "B1", T_NEW)     # newest at/before cutoff
     await _review(db, recs[1], ent, "REV-9924-000003", "B4", T_AFTER_CUTOFF)  # after cutoff
     for when, disp in ((T_OLD, "FAIL"), (T_NEW, "PASS"), (T_AFTER_CUTOFF, "UNAVAILABLE")):
-        await _evidence(db, ent, "NPPES", "IDENTITY", disp, when)
+        await _evidence(db, ent, "NPPES", "IDENTITY", disp, when, original_values={"npi": "1234567893"})
         await _evidence(db, ent, "OIG_LEIE", "EXCLUSION_REVOCATION", "NOT_FOUND", when)
     out = await _load(db, intake_id)
     assert len(out["facts"]) == 2
@@ -335,7 +335,9 @@ async def test_actual_source_statuses_and_cause_specific_limitations_are_preserv
     out = await _load(db, intake_id, annotations={
         str(rec.id): {"pecos_limitation": "confirmed missing key (no submitted NPI)"}})
     f = out["facts"][0]
-    assert f["pecos"].startswith("UNAVAILABLE")
+    # 2026-11-25: an UNAVAILABLE CMS row stores no NPI, so it is quoted as stored and labelled as the entity's
+    assert f["pecos"].startswith("Not attributed to this record [N3]") and "entity-level, as recorded" in f["pecos"]
+    assert "UNAVAILABLE | retrieved 2026-11-08" in f["pecos"]
     assert "recorded note: key missing" in f["pecos"]
     assert "Limitation: confirmed missing key" in f["pecos"]
     assert "lost-identifier/outage family" not in f["pecos"].lower()
@@ -959,7 +961,7 @@ async def test_a_name_screen_of_another_organisation_is_not_attributed_and_the_d
     assert (await _load(db, intake_id))["facts"][0]["leie"].startswith("PASS")
 
 
-async def test_rows_without_a_recorded_identifier_or_keyed_by_uei_are_shown_as_before(rolled_back_db):
+async def test_a_uei_keyed_row_is_shown_as_before_and_an_nppes_row_with_no_stored_npi_is_labelled(rolled_back_db):
     db = rolled_back_db
     rows = make_rows(1, arc="9.99.777.64")
     rows[0]["NPI"] = "1234567893"
@@ -972,8 +974,11 @@ async def test_rows_without_a_recorded_identifier_or_keyed_by_uei_are_shown_as_b
     await _keyed(db, ent, "SAM_GOV", "EXCLUSION_REVOCATION", "PASS", T_OLD, "uei=SYNTHETICUEI1")
     out = await _load(db, intake_id)
     f = out["facts"][0]
-    assert f["nppes"].startswith("PASS") and f["sam"].startswith("PASS")
+    assert f["sam"].startswith("PASS")
+    # 2026-11-25: the NPPES row stores no NPI. It is not dropped and not shown as the record's result.
+    assert f["nppes"].startswith("Not attributed to this record") and f["nppes"].endswith("PASS | retrieved 2026-11-08")
     assert out["meta"]["stats"]["evidence_rows_not_attributed"] == 0
+    assert out["meta"]["stats"]["evidence_rows_identifier_not_recorded"] == 1
 
 
 # ── 2026-11-24: one FROZEN dataset. Curated status (HELD) has no history, so a re-read of the database after a hold

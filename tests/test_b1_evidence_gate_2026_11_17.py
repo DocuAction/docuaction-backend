@@ -128,7 +128,11 @@ async def test_an_approved_b1_stays_b4_unless_saved_evidence_establishes_b1(roll
     # 1: every source cell reads PASS from LATER evidence, yet the stored review-time input reproduces B4
     one = _c(rows[1], "Bucket Basis")
     for col in ("NPPES", "PECOS/CMS Enrollment", "OIG LEIE", "SAM.gov Exclusions"):
-        assert _c(rows[1], col).startswith("PASS"), col
+        # 2026-11-25: the seeded NPPES / CMS rows store no NPI, so they are quoted as stored (PASS) and labelled as
+        # the entity's, not the record's. The stored result stays visible; the bucket outcome below is unchanged.
+        cell = _c(rows[1], col)
+        assert cell.startswith("PASS") or (col in ("NPPES", "PECOS/CMS Enrollment") and cell.startswith(
+            "Not attributed to this record") and cell.endswith("PASS | retrieved 2026-11-08")), col
     assert "classifies B4 under RULE-005 v3 (sam_gov is not_found)" in one
     assert "sam_gov (stored input)" in one
 

@@ -163,6 +163,8 @@ ARTIFACT_SUFFIXES = {
     "text/csv": "csv",
     ("application/vnd.openxmlformats-officedocument"
      ".spreadsheetml.sheet"): "xlsx",
+    # The frozen record-review dataset (record_review_freeze.DATASET_CONTENT_TYPE): canonical JSON.
+    "application/vnd.docuaction.record-review-dataset+json": "json",
 }
 
 
