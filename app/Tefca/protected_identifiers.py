@@ -53,7 +53,7 @@ from typing import Any, Iterable, List
 
 from app.Tefca.identifier_boundary import GOVERNMENT_RESTRICTED
 
-PROTECTED_IDENTIFIERS_VERSION = "1.6.0"
+PROTECTED_IDENTIFIERS_VERSION = "1.6.1"
 
 #: What replaces a protected value. Deliberately not a mask of the value: a
 #: partial tax identifier is still part of a tax identifier.
@@ -212,7 +212,8 @@ _VALUE_HERE = re.compile(_VALUE)
 #: for a shorter name the 16-mark limit of `_GAP` applies (`tax_id` + 17 colons is a stated, pinned limit).
 _LONG_NAME = 8
 #: What follows a QUOTED serialized key (JSON/YAML-style): `"EIN PRIMARY": "000000001"`.
-_KEY_TAIL = re.compile(rf"""\s*[:=]\s*["']?(?P<val>{_VALUE})""")
+#: Backslashes may stand before the value's quote: JSON carried inside a JSON string writes `\"EIN PRIMARY\": \"000000001\"`.
+_KEY_TAIL = re.compile(rf"""\s*[:=]\s*\\*["']?(?P<val>{_VALUE})""")
 _KEY_MAX = 80
 #: The written EIN shape with no label.
 _EIN_SHAPE = re.compile(r"(?<![\d\-])\d{2}-\d{7}(?![\d\-])")
@@ -220,7 +221,8 @@ _EIN_SHAPE = re.compile(r"(?<![\d\-])\d{2}-\d{7}(?![\d\-])")
 
 def _quoted_key_value_spans(text: str):
     """Value spans after a quoted key the field rule protects. The key starts at a quote and may close at EITHER quote
-    character (the nearest unescaped one of each kind is tried), at most 80 characters, on one line. So the other quote
+    character (of each kind: every quote that follows a backslash, up to and including the nearest one that does not, is
+    tried as the closer), at most 80 characters, on one line. So the other quote
     character may appear inside the key (`{"EIN owner's copy": "000000001"}`) and mismatched quotes around a key of several
     words are still a key (`"EIN PRIMARY': 000000001`). The key is judged by `is_protected_field`: the one parser."""
     for opening in re.finditer(r"[\"']", text):
@@ -228,18 +230,22 @@ def _quoted_key_value_spans(text: str):
         stop = i + _KEY_MAX + 2
         for quote in ("\"", "'"):
             j = text.find(quote, i + 1, stop)
-            while j != -1 and text[j - 1] == "\\":
+            while j != -1:
+                # A quote after a backslash is AMBIGUOUS, not escaped: the text may be JSON (`\"` continues the key), JSON
+                # whose key ends in a backslash (`\\"` closes it), JSON carried inside a JSON string (every quote is
+                # `\"`), or a serialization where a backslash is literal. It is tried as the closer AND the scan goes on;
+                # the first quote with no backslash before it is the last candidate. (1.6.1; before, such a quote was
+                # only ever skipped, so `{"EIN PRIMARY\\": "000000001"}` hid its value.)
+                ambiguous = text[j - 1] == "\\"
+                hit = _KEY_TAIL.match(text, j + 1)    # cheap and usually fails: asked before the key is cut out and judged
+                if hit:
+                    key = text[i + 1:j]
+                    if ("\n" not in key and "\r" not in key and key.strip()
+                            and is_protected_field(key.replace("\\\"", "\"").replace("\\'", "'"))):
+                        yield hit.span("val")
+                if not ambiguous:
+                    break
                 j = text.find(quote, j + 1, stop)
-            if j == -1:
-                continue
-            hit = _KEY_TAIL.match(text, j + 1)        # cheap and usually fails: asked before the key is cut out and judged
-            if not hit:
-                continue
-            key = text[i + 1:j]
-            if "\n" in key or "\r" in key or not key.strip():
-                continue
-            if is_protected_field(key.replace("\\\"", "\"").replace("\\'", "'")):
-                yield hit.span("val")
 
 
 def _value_spans(text: str):
