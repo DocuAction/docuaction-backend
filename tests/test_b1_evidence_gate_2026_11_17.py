@@ -53,6 +53,24 @@ PENDING_SAM_INPUT = {"sources": {
     "sam_extract": _src("clear", "PASS", EXCL)}, "fields": {}}
 
 
+async def _v3_rules_exist_in_this_transaction(db):
+    """Records 1 and 3 are re-classified from the rule rows stored at version 3. The test used to rely on some
+    earlier suite having committed them (it passed in the CI isolation job and failed alone on a freshly migrated
+    database with "no rules are stored at rule version 3"). Add them here when absent - flushed, never committed,
+    so the fixture's rollback removes them. `ensure_rules_v3` is not used because it commits."""
+    from datetime import date
+    from sqlalchemy import func
+    if (await db.execute(select(func.count()).select_from(reg.ReviewRule)
+                         .where(reg.ReviewRule.version == 3))).scalar():
+        return
+    for spec in SEED_RULES_V3:
+        db.add(reg.ReviewRule(rule_code=spec["rule_code"], name=spec["name"], bucket=spec["bucket"],
+                              priority=spec["priority"], conditions=spec["conditions"],
+                              description=spec["description"], version=3,
+                              effective_date=date(2026, 1, 1), is_active=True))
+    await db.flush()
+
+
 async def _seed(db, arc):
     """Four synthetic records, every one automated B4 with an approved B4 -> B1 by a different user.
 
@@ -61,6 +79,7 @@ async def _seed(db, arc):
     3  stored input: pending SAM candidate. Cutoff rows: SAM_GOV REVIEW, extract PASS (pending-SAM protection)
     4  stored input present, rule version 99 (no rules stored at that version)
     """
+    await _v3_rules_exist_in_this_transaction(db)
     rows = make_rows(4, arc=arc, purposesofuse="T-TRTMNT,T-PH")
     rows[0]["NPI"] = rows[2]["NPI"] = rows[3]["NPI"] = "1234567893"
     rows[1]["NPI"] = ""
