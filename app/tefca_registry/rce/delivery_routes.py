@@ -1857,6 +1857,7 @@ async def sam_extract_backfill_route(
             "candidates": result["candidates"],
             "written": result["written"],
             "already_on_worklist": result["already_on_worklist"],
+            "identity_refused": result.get("identity_refused", 0),
             "correlation_id": request_context.correlation_id(),
         })
     result["correlation"] = {"request_id": request_context.get("request_id")}
@@ -1914,12 +1915,17 @@ async def _analyst_sample_summary(db, intake_id) -> Dict[str, Any]:
              summary="Run one batch of automated verification coverage over eligible entities")
 async def run_verification_coverage(
     intake_id: str,
+    request: Request,
     batch_size: int = Query(100, ge=1, le=500),
     scope: str = Query("full", pattern="^(full|sam_extract)$", description=(
         "full: all-source first lookup for entities with no evidence at all. "
         "sam_extract: append ONLY the SAM public-extract supplementary row to "
         "entities that have evidence but no SAM_EXTRACT_SUPPLEMENTARY row — "
         "no other source is re-asked, no quota re-spent.")),
+    after_entity_id: Optional[uuid.UUID] = Query(None, description=(
+        "Continue after this entity id: the `next_after_entity_id` of a "
+        "response whose `identity_refusal_scan_limit_reached` is true. Omit "
+        "otherwise.")),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("program_manager")),
 ):
@@ -1928,17 +1934,55 @@ async def run_verification_coverage(
     is on. Never creates a ReviewRecord or a review cycle; see
     `automated_verification.py` for why that separation is deliberate. Call
     again (or let the scheduler, if enabled) until the response's `remaining`
-    is 0. Batches for one delivery are serialized; a concurrent call returns
-    `skipped_lock: true` and processes nothing."""
+    is 0 or `no_further_lookups_possible` is true. Batches for one delivery
+    are serialized; a concurrent call returns `skipped_lock: true` and
+    processes nothing.
+
+    A record refused at identity validation is not looked up and nothing is
+    persisted for it; it is reported in `outcomes` (`IDENTITY_REFUSED`, with
+    the reason) and counted in `identity_refused`, and stays in `remaining`.
+    A call that refused anything writes one audit row (the act and the
+    refused entity ids with their reasons, never delivered data), so the
+    refusals outlive the response."""
     from app.tefca_registry.rce import automated_verification as av
 
     intake = await _intake_or_404(db, intake_id)
     try:
-        return await av.run_coverage_batch(
+        result = await av.run_coverage_batch(
             db, intake.id, batch_size=batch_size, scope=scope,
-            actor=getattr(user, "email", None) or "SYSTEM")
+            actor=getattr(user, "email", None) or "SYSTEM",
+            after_entity_id=after_entity_id)
     except av.SamExtractScreeningDisabled as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    if result.get("identity_refused"):
+        await _audit(db, "verification_coverage_identity_refused", user, request,
+                     coverage_refusal_audit_metadata(intake.id, result))
+    return result
+
+
+#: Refused entities named in one coverage audit row; the count is always exact.
+COVERAGE_REFUSAL_AUDIT_CAP = 200
+
+
+def coverage_refusal_audit_metadata(intake_id, result: Dict[str, Any]) -> Dict[str, Any]:
+    """What a coverage call that refused records leaves in the audit trail:
+    the counts, and the refused entity ids with the reason each was refused
+    (capped). No delivered value is included."""
+    from app.tefca_registry.rce import automated_verification as av
+
+    refused = [o for o in result.get("outcomes") or []
+               if o.get("outcome") == av.OUTCOME_IDENTITY_REFUSED]
+    return {
+        "intake_id": str(intake_id), "scope": result.get("scope"),
+        "identity_refused": result.get("identity_refused"),
+        "looked_up": result.get("processed_this_call"),
+        "remaining": result.get("remaining"),
+        "refused_entities": [{"entity_id": o.get("entity_id"), "reason": o.get("reason")}
+                             for o in refused[:COVERAGE_REFUSAL_AUDIT_CAP]],
+        "refused_entities_truncated": len(refused) > COVERAGE_REFUSAL_AUDIT_CAP,
+        "persisted_for_refused": False,
+        "correlation_id": request_context.correlation_id(),
+    }
 
 
 # ═══ audit ═══════════════════════════════════════════════════════════════════

@@ -230,6 +230,28 @@ def delivered_npi_of(record) -> str:
     return str((getattr(record, "parsed", None) or {}).get("NPI", getattr(record, "npi", None)) or "").strip()
 
 
+def resolved_probe_npi(entity):
+    """(probe_npi, conflict_reason) for a resolved entity. The source probes read the NPI from two places: the RCE
+    block (`rce_npi`, read first by the CMS enrollment / revocation probes and the SAM-extract screen) and the FHIR
+    NPI identifiers (NPPES / LEIE / SAM). `validated_delivery_context` compares ONE probe NPI with the delivered one,
+    so a caller must first know the two representations agree - otherwise one family of probes would be asked about
+    an NPI that was never compared. Disagreement (or more than one FHIR NPI) is returned as a refusal reason; neither
+    value is chosen, substituted or rewritten here. This is the SAME rule `rechecks._recheck_one` applies before its
+    own validation, with the same comparison: stripped strings, exactly equal - a formatting-only disagreement is
+    refused too, because accepting one would be a new identity rule (and each probe family would still be sent its
+    own spelling)."""
+    from app.Tefca import rce_fields
+    rce_npi = str(rce_fields.rce_npi(entity or {}) or "").strip()
+    identifier_npis = {str(identifier.get("value") or "").strip()
+                       for identifier in (entity or {}).get("identifier", []) or []
+                       if identifier.get("system") == rce_fields.NPI_SYSTEM}
+    identifier_npis.discard("")
+    if len(identifier_npis) > 1 or (rce_npi and identifier_npis and rce_npi not in identifier_npis):
+        return "", ("the entity carries conflicting NPI values (RCE NPI / FHIR NPI identifiers); no source was "
+                    "asked")
+    return rce_npi or next(iter(identifier_npis), ""), None
+
+
 async def validated_delivery_context(db, *, intake_id, ref, queued_entity_id, entity, probe_npi):
     """ONE identity validation for a verification of `ref` in a delivery, run BEFORE anything is persisted.
     Shared by the recheck and automated-coverage callers. Returns (context, None) or (None, reason).

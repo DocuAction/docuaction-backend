@@ -283,6 +283,60 @@ async def list_candidates(db, intake_id, *, limit: int = DEFAULT_PAGE_SIZE,
             "note": _TRUTH_NOTE}
 
 
+async def _candidate_identity_refusal(db, intake_id, item: Dict[str, Any]) -> Optional[str]:
+    """Why a candidate's finding may NOT be written on this delivery's
+    ledger, or None when it may (2026-11-25). Reads only.
+
+    Extract evidence is stored per ENTITY, and one entity can be linked by
+    records of several deliveries, so "this entity's latest extract row is a
+    candidate" does not by itself say the screen was about THIS delivery's
+    record. Before a finding is written on the representative record, the
+    same identity validation the screening paths apply must hold for it now
+    (`validated_delivery_context`: its reference resolves to this entity, it
+    is the one record of the delivery carrying that reference, and the NPI
+    the screen uses is the NPI it delivered) — and, where the evidence row
+    recorded the NPI it was screened on, that NPI must be the delivered one.
+    Rows written before the subject identifier was recorded carry none; for
+    those only the first check is possible."""
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from app.Tefca.entity_resolution import resolve_entity
+    from app.Tefca.models import TEFCADimensionEvidence
+    from app.tefca_registry.rce import models as m
+    from app.tefca_registry.rce import verification_findings as vf
+
+    entity_id = _uuid.UUID(str(item["entity_id"]))
+    curated = (await db.execute(
+        select(m.RceCuratedRecord).where(
+            m.RceCuratedRecord.source_intake_id == _uuid.UUID(str(intake_id)),
+            m.RceCuratedRecord.source_record_id == _uuid.UUID(str(item["source_record_id"])),
+            m.RceCuratedRecord.canonical_entity_id == entity_id)
+        .limit(1))).scalar_one_or_none()
+    ref = (getattr(curated, "rce_org_oid", None) or "").strip()
+    if not ref:
+        return "the representative record carries no delivered reference to validate"
+    entity = await resolve_entity(db, ref)
+    if entity is None:
+        return "the delivered reference does not resolve to a registry entity now"
+    probe_npi, conflict = vf.resolved_probe_npi(entity)
+    if conflict:
+        return conflict
+    context, refusal = await vf.validated_delivery_context(
+        db, intake_id=_uuid.UUID(str(intake_id)), ref=ref, queued_entity_id=entity_id,
+        entity=entity, probe_npi=probe_npi)
+    if context is None:
+        return refusal
+    row = await db.get(TEFCADimensionEvidence, _uuid.UUID(str(item["evidence_row_id"])))
+    subject = str(getattr(row, "query_identifier", None) or "").strip()
+    if subject.lower().startswith("npi=") and (
+            vf.npi_key(subject[4:]) != vf.npi_key(context["delivered_npi"])):
+        return ("the extract row was screened on an NPI this delivery's record did not submit; the "
+                "candidate is not this record's")
+    return None
+
+
 async def backfill_candidate_issues(db, intake_id, *, dry_run: bool = True,
                                     actor: str = "SYSTEM") -> Dict[str, Any]:
     """Place pre-EXC-001 candidate rows on the analyst worklist, idempotently.
@@ -297,6 +351,12 @@ async def backfill_candidate_issues(db, intake_id, *, dry_run: bool = True,
     Never commits on dry-run; commits once at the end of a real run. Never
     touches evidence rows, dispositions, buckets or entity status — the ONE
     write is the EXC-001 ledger finding per not-yet-listed candidate.
+
+    IDENTITY FIRST (2026-11-25): a candidate whose representative record
+    fails `_candidate_identity_refusal` gets NO finding. It is listed with
+    `identity_refused` (the reason) and counted in the result's
+    `identity_refused`, on a dry run exactly as on a real one, so the plan an
+    approver reads is the write that will happen.
     """
     from app.tefca_registry.rce import verification_findings as vf
 
@@ -314,7 +374,8 @@ async def backfill_candidate_issues(db, intake_id, *, dry_run: bool = True,
             return {
                 "intake_id": str(intake_id), "dry_run": False,
                 "skipped_lock": True, "candidates": 0,
-                "already_on_worklist": 0, "written": 0, "would_write": None,
+                "already_on_worklist": 0, "identity_refused": 0,
+                "written": 0, "would_write": None,
                 "items": [],
                 "write_scope": "nothing — another writer holds this "
                                "delivery's batch lock; retry shortly",
@@ -324,7 +385,7 @@ async def backfill_candidate_issues(db, intake_id, *, dry_run: bool = True,
     # Page through ALL candidates (the enumeration is bounded by the
     # delivery's own candidate count, small by construction; the October
     # delivery's is two digits).
-    offset, planned, written, already = 0, [], 0, 0
+    offset, planned, written, already, refused = 0, [], 0, 0, 0
     while True:
         page = await list_candidates(db, intake_id, limit=MAX_PAGE_SIZE, offset=offset)
         for item in page["items"]:
@@ -339,6 +400,11 @@ async def backfill_candidate_issues(db, intake_id, *, dry_run: bool = True,
             })
             if has_issue:
                 already += 1
+                continue
+            refusal = await _candidate_identity_refusal(db, intake_id, item)
+            if refusal:
+                planned[-1]["identity_refused"] = refusal
+                refused += 1
                 continue
             if not dry_run:
                 import uuid as _uuid
@@ -358,14 +424,21 @@ async def backfill_candidate_issues(db, intake_id, *, dry_run: bool = True,
         await db.commit()
         logger.info("SAM-extract candidate backfill wrote %s finding(s) for "
                     "intake %s (actor %s)", written, intake_id, actor)
+    if refused:
+        logger.warning("SAM-extract candidate backfill (%s) for intake %s: %s candidate(s) refused "
+                       "at identity validation; no finding written for them",
+                       "dry run" if dry_run else "write", intake_id, refused)
     return {
         "intake_id": str(intake_id),
         "dry_run": bool(dry_run),
         "skipped_lock": False,
         "candidates": len(planned),
         "already_on_worklist": already,
+        # Candidates whose representative record failed identity validation:
+        # no finding is (or would be) written; each item carries the reason.
+        "identity_refused": refused,
         "written": written if not dry_run else 0,
-        "would_write": (len(planned) - already) if dry_run else None,
+        "would_write": (len(planned) - already - refused) if dry_run else None,
         "items": planned,
         "write_scope": ("One rce_issues row (EXC-001 / SAM_EXTRACT_CANDIDATE, "
                         "HIGH, HUMAN_REQUIRED, resolution OPEN) per candidate "
