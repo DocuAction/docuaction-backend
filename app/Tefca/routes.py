@@ -4331,19 +4331,52 @@ async def _persist_dimension_evidence(db: AsyncSession, entity_id: str,
         return 0
 
 
+#: The role that may ask an evidence-dimensions READ to also STORE the
+#: generation it assembled. Same authority as the supplementary bulk verify
+#: (`POST /api/tefca/rce/deliveries/{id}/verify`): both write evidence under
+#: an entity with no delivered record named.
+EVIDENCE_PERSIST_ROLE = "program_manager"
+
+
+def _evidence_persist_allowed(user, persist: bool) -> bool:
+    """Whether this evidence-dimensions call stores what it assembled.
+
+    A READ DOES NOT WRITE (2026-11-25). `persist` used to default to true on
+    two viewer-level GET routes, so opening the Entity Reviews workspace - an
+    ordinary page view - appended a full evidence generation under whichever
+    registry entity the reference resolved to. The reference is resolved
+    globally (the workspace passes an NPI) and no delivered record is named,
+    so nothing validated that the entity is the record a delivery is about;
+    and because automated coverage treats an entity with any evidence row as
+    already covered, a page view could mark a delivery's entity covered.
+
+    The default is now false. Storing is an explicit act (`persist=true`) by
+    a role allowed to write evidence; anyone else asking for it is refused
+    rather than silently served an unstored read."""
+    if not persist:
+        return False
+    from app.core.security import role_at_least
+    if not role_at_least(user, EVIDENCE_PERSIST_ROLE):
+        raise HTTPException(
+            403, f"persist=true stores evidence and requires the {EVIDENCE_PERSIST_ROLE} role; "
+                 f"omit it to read the evidence without storing it")
+    return True
+
+
 @tefca_dashboard_router.get(
     "/entities/{entity_ref}/evidence-dimensions",
     summary="Six-dimension evidence for one entity",
 )
 async def entity_evidence_dimensions(
     entity_ref: str,
-    persist: bool = True,
+    persist: bool = False,
     include_website: bool = False,
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("viewer")),
 ):
     from app.Tefca.evidence_service import EvidenceService
 
+    persist = _evidence_persist_allowed(user, persist)    # refuses before any source is asked
     entity = await _resolve_entity(db, entity_ref)
     if not entity:
         # 200 with entity_resolved=false, NOT 404.
@@ -4403,13 +4436,14 @@ async def entity_evidence_dimensions(
 )
 async def review_evidence_dimensions(
     review_id: str,
-    persist: bool = True,
+    persist: bool = False,
     include_website: bool = False,
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("viewer")),
 ):
     from app.Tefca.evidence_service import EvidenceService
 
+    persist = _evidence_persist_allowed(user, persist)    # refuses before any source is asked
     rid = _parse_uuid(review_id)
     review = (await db.execute(
         select(TEFCAReview).where(TEFCAReview.id == rid)
