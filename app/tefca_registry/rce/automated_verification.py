@@ -43,6 +43,23 @@ repeated batch call for the same delivery therefore only ever processes the
 entities that do not have one yet, converges to zero remaining work, and never
 re-spends quota on an entity already looked up.
 
+IDENTITY FIRST (2026-11-25)
+───────────────────────────
+Evidence is stored per ENTITY, and `resolve_entity` resolves a delivered
+reference globally. Before either scope asks a source or adds anything to the
+session, the record must pass `verification_findings.validated_delivery_context`
+(the reference resolves to the queued entity; exactly one delivered record of
+this delivery carries it and links that entity; the probes would use the NPI
+that record delivered). A refused record gets NOTHING: no evidence row, no
+ledger finding, no identifier or entity status change. It is reported
+(`IDENTITY_REFUSED` in the batch `outcomes`, counted in `identity_refused`)
+and stays not-covered. Because a refusal leaves no row behind, the batch walks
+past refused entities instead of being stopped by them, and the scheduler
+puts a delivery whose only remaining entities are refusals on a process-local
+hold instead of ticking it forever — see `run_coverage_batch` and
+`_identity_holds`. No attempt marker is stored; a durable one would need
+schema and is not introduced here.
+
 BATCHING AND RESUMABILITY
 ──────────────────────────
 `run_coverage_batch` processes at most `batch_size` not-yet-covered entities
@@ -108,6 +125,26 @@ TERMINAL_OUTCOMES = frozenset({
 #: not "done". Kept out of TERMINAL_OUTCOMES so a caller can tell the two
 #: apart without inspecting the string.
 
+#: The attempt was REFUSED at identity validation, before any source was asked
+#: (2026-11-25). Nothing is gathered and nothing is persisted for it: no
+#: evidence row, no ledger finding, no identifier or entity status change. It
+#: is not a statement about the entity and not a terminal classification, so
+#: it is kept out of TERMINAL_OUTCOMES; the entity stays not-covered and the
+#: refusal is counted in the batch result (`identity_refused`).
+OUTCOME_IDENTITY_REFUSED = "IDENTITY_REFUSED"
+
+#: How many identity refusals one `run_coverage_batch` call may step over
+#: while looking for entities it is allowed to look up. A refusal persists
+#: nothing, so a refused entity stays in the not-covered set and is seen again
+#: by every call; without stepping over them, `batch_size` refused entities at
+#: the front of the list would stop the delivery's coverage for good. The cap
+#: bounds the per-call cost (each refusal is a few local reads, no source
+#: call); a call that reaches it says so and returns the cursor to continue.
+MAX_IDENTITY_REFUSALS_PER_CALL = 1000
+
+#: Minimum rows fetched per candidate query inside one batch call.
+CANDIDATE_PAGE_SIZE = 100
+
 #: Dimension-level disposition -> this module's per-source outcome. Mirrors
 #: `verification_coverage.py`'s own `_DIMENSION_DISPOSITION`, which this
 #: module's evidence rows are read back through — the mapping here decides
@@ -134,6 +171,7 @@ _ELIGIBLE_NOT_COVERED_SQL = """
     WHERE r.source_intake_id = CAST(:intake_id AS uuid)
       AND r.canonical_entity_id IS NOT NULL
       AND r.rce_org_oid IS NOT NULL
+      AND (CAST(:after AS uuid) IS NULL OR r.canonical_entity_id > CAST(:after AS uuid))
       AND NOT EXISTS (
           SELECT 1 FROM tefca_dimension_evidence d
           WHERE d.entity_id = CAST(r.canonical_entity_id AS TEXT)
@@ -186,6 +224,7 @@ _SAM_EXTRACT_NOT_COVERED_SQL = """
     WHERE r.source_intake_id = CAST(:intake_id AS uuid)
       AND r.canonical_entity_id IS NOT NULL
       AND r.rce_org_oid IS NOT NULL
+      AND (CAST(:after AS uuid) IS NULL OR r.canonical_entity_id > CAST(:after AS uuid))
       AND NOT EXISTS (
           SELECT 1 FROM tefca_dimension_evidence d
           WHERE d.entity_id = CAST(r.canonical_entity_id AS TEXT)
@@ -289,6 +328,52 @@ async def _entity_row_shape(db, entity_uuid) -> Optional[Any]:
     return await db.get(reg.TefcaRegEntity, entity_uuid)
 
 
+def _identity_refused(ref: str, canonical_entity_id, reason: Optional[str]) -> Dict[str, Any]:
+    """The result of an attempt refused at identity validation. `entity_id`
+    is the QUEUED entity (the one the delivery's curated record links), never
+    the entity the reference happens to resolve to now."""
+    return {"ref": ref,
+            "entity_id": str(canonical_entity_id) if canonical_entity_id else None,
+            "outcome": OUTCOME_IDENTITY_REFUSED,
+            "reason": reason or "identity validation refused this record",
+            "persisted": False, "dimensions_recorded": 0}
+
+
+def _not_resolved(ref: str, canonical_entity_id) -> Dict[str, Any]:
+    """The result for a reference that does not resolve to a registry entity. Outcome and reason are what they
+    always were (NOT_ELIGIBLE); `not_resolved` / `persisted` say that no source was asked and nothing was stored,
+    so the batch can step over it like a refusal instead of counting it as a lookup that never happened."""
+    return {"ref": ref, "entity_id": str(canonical_entity_id) if canonical_entity_id else None,
+            "outcome": OUTCOME_NOT_ELIGIBLE, "reason": "entity did not resolve for this reference",
+            "not_resolved": True, "persisted": False, "dimensions_recorded": 0}
+
+
+async def _validate_attempt_identity(db, *, ref: str, canonical_entity_id, intake_id, entity):
+    """IDENTITY FIRST, for both coverage scopes: (context, probe_npi, None)
+    when the attempt may proceed, (None, None, refusal result) when it may
+    not. Runs before any source is asked and before anything is added to the
+    session, so a refusal leaves nothing behind.
+
+    `resolve_entity` resolves a reference GLOBALLY and evidence is stored
+    under the resolved entity, so all of `validated_delivery_context` must
+    hold first: the reference resolves to the QUEUED entity, exactly one
+    delivered record of THIS delivery carries it and links that entity, and
+    the NPI the probes will be asked about is the NPI that record delivered.
+    `resolved_probe_npi` makes the last comparison cover every probe family
+    (the RCE NPI and the FHIR NPI identifiers must be the same NPI)."""
+    from app.tefca_registry.rce import verification_findings as vf
+
+    probe_npi, conflict = vf.resolved_probe_npi(entity)
+    if conflict:
+        return None, None, _identity_refused(ref, canonical_entity_id, conflict)
+    context, refusal = await vf.validated_delivery_context(
+        db, intake_id=intake_id, ref=ref, queued_entity_id=canonical_entity_id,
+        entity=entity, probe_npi=probe_npi)
+    if context is None:
+        return None, None, _identity_refused(ref, canonical_entity_id, refusal)
+    return context, probe_npi, None
+
+
 async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
                                   intake_id, actor: str = "SYSTEM",
                                   local_store=None) -> Dict[str, Any]:
@@ -298,7 +383,14 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
     exception that would stop the rest of the batch (see `run_coverage_batch`,
     which still wraps this in try/except as a second line of defence for a
     genuinely unexpected error, e.g. a programming bug in this function
-    itself)."""
+    itself).
+
+    IDENTITY FIRST (2026-11-25): when the shared identity validation refuses
+    the record, no source is asked and NOTHING is persisted — no evidence
+    row, no ledger finding, no identifier or entity status change. The result
+    is `IDENTITY_REFUSED` with the reason, and `run_coverage_batch` counts
+    it. The entity stays not-covered; the batch steps over it rather than
+    writing evidence to make it look attempted (see `run_coverage_batch`)."""
     from app.Tefca.entity_resolution import resolve_entity
     from app.Tefca.evidence_service import EvidenceService, evidence_rows_for_persistence
     from app.Tefca.models import TEFCADimensionEvidence
@@ -307,19 +399,14 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
 
     entity = await resolve_entity(db, ref)
     if entity is None:
-        return {"ref": ref, "outcome": OUTCOME_NOT_ELIGIBLE,
-                "reason": "entity did not resolve for this reference"}
+        return _not_resolved(ref, canonical_entity_id)
 
-    # The shared identity validation decides whether an NPI outcome may be written for this delivery. It does NOT
-    # refuse the attempt here: coverage has no attempt marker other than the entity's evidence rows (the candidate
-    # query reselects an entity until it has one), so refusing without persisting anything would reselect the same
-    # entity every batch and never complete. Evidence persistence is therefore unchanged; only the ledger write and
-    # the identifier-status change it carries require a validated delivered-record context.
-    from app.Tefca import rce_fields
-    from app.Tefca.connectors import _extract_npi
-    probe_npi = (rce_fields.rce_npi(entity) or _extract_npi(entity) or "").strip()
-    context, identity_refusal = await vf.validated_delivery_context(
-        db, intake_id=intake_id, ref=ref, queued_entity_id=canonical_entity_id, entity=entity, probe_npi=probe_npi)
+    context, probe_npi, refused = await _validate_attempt_identity(
+        db, ref=ref, canonical_entity_id=canonical_entity_id, intake_id=intake_id, entity=entity)
+    if refused is not None:
+        return refused
+    # Validated: the reference resolves to the queued entity, so the two ids
+    # are the same registry entity.
     entity_uuid = entity.get("_registry_entity_id") or canonical_entity_id
     service = EvidenceService(local_store=local_store or make_local_store(db))
 
@@ -342,11 +429,10 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
     if entity_uuid is not None:
         try:
             from app.services.npi_validator import is_valid_npi  # noqa: F401 - availability check only
-            # Only on the delivered record the shared validation established (the writer owns the savepoint around
-            # its identifier change and insert). No validated context -> no NPI outcome for this delivery.
-            if context is not None:
-                await vf.record_from_evidence(db, entity_id=entity_uuid, npi=probe_npi or None, evidence=evidence,
-                                              source_record_id=context["source_record_id"], intake_id=intake_id)
+            # On the delivered record the shared validation established (the writer owns the savepoint around
+            # its identifier change and insert).
+            await vf.record_from_evidence(db, entity_id=entity_uuid, npi=probe_npi or None, evidence=evidence,
+                                          source_record_id=context["source_record_id"], intake_id=intake_id)
         except Exception as exc:  # noqa: BLE001 - the issue ledger must not fail coverage
             ledger_failure = type(exc).__name__
             logger.error("automated coverage: NPI outcome not recorded for %s: %s",
@@ -364,7 +450,10 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
                         db, entity_id=entity_uuid, npi=rce_fields.rce_npi(entity),
                         org_name=(rce_fields.rce_value(entity, "name")
                                   or entity.get("name") or "").strip() or None,
-                        extract=extract_values, intake_id=intake_id)
+                        extract=extract_values, intake_id=intake_id,
+                        # The delivered record identity was validated for, not
+                        # "the entity's latest record in this delivery".
+                        source_record_id=context["source_record_id"])
         except Exception as exc:  # noqa: BLE001 - the issue ledger must not fail coverage
             logger.error("automated coverage: SAM-extract candidate not recorded for %s: %s",
                          entity_uuid, type(exc).__name__, exc_info=True)
@@ -378,8 +467,6 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
     await db.flush()
     result = {"ref": ref, "entity_id": str(entity_uuid) if entity_uuid else None,
               "outcome": outcome, "dimensions_recorded": len(rows)}
-    if context is None:
-        result["npi_outcome_not_anchored"] = identity_refusal      # no ledger row / identifier change was attempted
     if ledger_failure:
         result["ledger_recorded"] = False                          # class name only, never message text
         result["ledger_error_class"] = ledger_failure
@@ -388,7 +475,7 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
 
 async def record_sam_extract_attempt(db, *, ref: str,
                                      canonical_entity_id,
-                                     intake_id=None) -> Dict[str, Any]:
+                                     intake_id) -> Dict[str, Any]:
     """Run ONLY the SAM public-extract supplementary screen for one entity and
     append ONLY that source's evidence row. Never calls `build_evidence`, so
     no other source is re-asked and no quota is re-spent. The row is built by
@@ -396,7 +483,13 @@ async def record_sam_extract_attempt(db, *, ref: str,
     persisted item cannot drift from what a full generation would have written.
 
     Like `record_coverage_attempt`, a connector-level failure is recorded as
-    an outcome (RETRY_PENDING), never raised out of the batch."""
+    an outcome (RETRY_PENDING), never raised out of the batch.
+
+    IDENTITY FIRST (2026-11-25), exactly as in `record_coverage_attempt`: a
+    record the shared identity validation refuses is not screened, gets no
+    `SAM_EXTRACT_SUPPLEMENTARY` row, no candidate finding and no status
+    change; the result is `IDENTITY_REFUSED`. A candidate finding is written
+    on the delivered record the validation established."""
     from app.Tefca import rce_fields
     from app.Tefca.connectors import _extract_npi
     from app.Tefca.entity_resolution import resolve_entity
@@ -408,8 +501,12 @@ async def record_sam_extract_attempt(db, *, ref: str,
 
     entity = await resolve_entity(db, ref)
     if entity is None:
-        return {"ref": ref, "outcome": OUTCOME_NOT_ELIGIBLE,
-                "reason": "entity did not resolve for this reference"}
+        return _not_resolved(ref, canonical_entity_id)
+
+    context, _probe_npi, refused = await _validate_attempt_identity(
+        db, ref=ref, canonical_entity_id=canonical_entity_id, intake_id=intake_id, entity=entity)
+    if refused is not None:
+        return refused
     entity_uuid = entity.get("_registry_entity_id") or canonical_entity_id
 
     npi = rce_fields.rce_npi(entity) or _extract_npi(entity)
@@ -459,7 +556,8 @@ async def record_sam_extract_attempt(db, *, ref: str,
             async with db.begin_nested():
                 await vf.record_sam_extract_candidate(
                     db, entity_id=entity_uuid, npi=npi, org_name=org_name or None,
-                    extract=dict(screen.data or {}), intake_id=intake_id)
+                    extract=dict(screen.data or {}), intake_id=intake_id,
+                    source_record_id=context["source_record_id"])
         except Exception as exc:  # noqa: BLE001 - the issue ledger must not fail coverage
             logger.error("sam-extract coverage: candidate finding not recorded for %s: %s",
                          entity_uuid, type(exc).__name__, exc_info=True)
@@ -492,9 +590,48 @@ async def _try_advisory_batch_lock(db, intake_id) -> bool:
         {"k": BATCH_LOCK_CLASS_KEY, "i": str(intake_id)})).scalar())
 
 
+def _batch_identity_fields(*, refused: int, exhausted: bool, limit_reached: bool,
+                           started_after, last_scanned, remaining: int,
+                           looked_up: int = 0, not_resolved: int = 0) -> Dict[str, Any]:
+    """The identity-refusal part of a batch result (see `run_coverage_batch`)."""
+    return {
+        # Entities refused at identity validation in THIS call: nothing was
+        # gathered or persisted for them, and they are still in `remaining`.
+        "identity_refused": refused,
+        # Entities whose delivered reference does not resolve to a registry
+        # entity: no source was asked, nothing persisted, still in
+        # `remaining`. Stepped over like a refusal; not a lookup.
+        "not_resolved": not_resolved,
+        # True when this call walked the not-covered list to its end.
+        "candidates_exhausted": exhausted,
+        # True when the call stopped stepping over refusals at the per-call
+        # cap; `next_after_entity_id` then continues the walk.
+        "identity_refusal_scan_limit_reached": limit_reached,
+        "next_after_entity_id": (str(last_scanned)
+                                 if limit_reached and last_scanned is not None else None),
+        # The stop signal for a "call again until remaining is 0" caller:
+        # the whole not-covered list was walked from its start and every
+        # entity left in it was refused. `remaining` stays above 0 on
+        # purpose — those entities are NOT covered — but calling again cannot
+        # change that until the record's identity is corrected.
+        "remaining_are_all_identity_refused": bool(
+            refused and exhausted and started_after is None and remaining == refused),
+        # THE STOP SIGNAL for a "call again" loop: the walk reached the end of
+        # the not-covered list and this call asked no source about anything.
+        # True whatever is left that cannot be asked about (identity refusals,
+        # references that do not resolve, records with no delivered
+        # reference); `remaining` says how many, and `outcomes` /
+        # `identity_refused` / `not_resolved` say why. Calling again cannot
+        # make progress until the data changes. NOT set while a source was
+        # asked and failed (RETRY_PENDING): that entity is worth another call.
+        "no_further_lookups_possible": bool(exhausted and looked_up == 0),
+    }
+
+
 async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_SIZE,
                              actor: str = "SYSTEM",
-                             scope: str = SCOPE_FULL) -> Dict[str, Any]:
+                             scope: str = SCOPE_FULL,
+                             after_entity_id=None) -> Dict[str, Any]:
     """Process up to `batch_size` not-yet-covered eligible entities of one
     delivery. Commits once at the end of the call (the batch is the unit of
     atomicity, matching `review_cycle.create_review_cycle`'s own batching) and
@@ -511,7 +648,20 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
     lock (held until this call's own commit): a second concurrent call is
     refused with `skipped_lock: true` and processes nothing, because two
     batches reading the committed not-covered set at once overlap and write
-    duplicate generations (observed 2026-10-30)."""
+    duplicate generations (observed 2026-10-30).
+
+    IDENTITY REFUSALS (2026-11-25). An entity whose record the identity
+    validation refuses gets nothing persisted, so it stays in the
+    not-covered set. `batch_size` bounds the entities LOOKED UP per call
+    (`processed_this_call`); refusals do not use that budget — the call walks
+    on past them (keyset on the entity id, at most
+    `MAX_IDENTITY_REFUSALS_PER_CALL` of them) so refused entities at the
+    front of the list cannot stop the entities behind them from being
+    covered. Refusals are reported, not hidden: each is in `outcomes` with
+    its reason, `by_outcome` counts `IDENTITY_REFUSED`, and
+    `identity_refused` / `no_further_lookups_possible` /
+    `next_after_entity_id` say what is left and why (`_batch_identity_fields`).
+    `after_entity_id` continues a walk a previous call stopped at the cap."""
     from app.Tefca.ppef_store import make_local_store
 
     if scope not in SCOPES:
@@ -522,6 +672,7 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
             "would record UNAVAILABLE for every entity and cover nothing")
 
     batch_size = max(1, min(int(batch_size or DEFAULT_BATCH_SIZE), MAX_BATCH_SIZE))
+    started_after = uuid.UUID(str(after_entity_id)) if after_entity_id else None
 
     if not await _try_advisory_batch_lock(db, intake_id):
         # No rollback: the failed try-lock was a plain read, and the caller's
@@ -534,6 +685,9 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
             "note": ("another coverage batch for this delivery is already "
                      "running; retry when it finishes"),
             "processed_this_call": 0, "by_outcome": {}, "outcomes": [],
+            **_batch_identity_fields(refused=0, exhausted=False, limit_reached=False,
+                                     started_after=started_after, last_scanned=None,
+                                     remaining=progress["remaining"]),
             **progress,
             "complete": progress["remaining"] == 0,
             "batch_size": batch_size,
@@ -541,30 +695,67 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
 
     candidate_sql = (_SAM_EXTRACT_NOT_COVERED_SQL if scope == SCOPE_SAM_EXTRACT
                      else _ELIGIBLE_NOT_COVERED_SQL)
-    rows = (await db.execute(
-        text(candidate_sql),
-        {"intake_id": str(intake_id), "limit": batch_size})).all()
 
     local_store = make_local_store(db)
     outcomes: List[Dict[str, Any]] = []
-    for ref, canonical_entity_id in rows:
-        try:
-            if scope == SCOPE_SAM_EXTRACT:
-                result = await record_sam_extract_attempt(
-                    db, ref=ref, canonical_entity_id=canonical_entity_id,
-                    intake_id=intake_id)
+    looked_up = refused = unresolved = 0
+    cursor = started_after
+    exhausted = limit_reached = False
+    # Pages have a fixed minimum size, so a run of refusals costs one
+    # candidate query per page and not one per refused entity. Rows are
+    # consumed one at a time and the walk stops BEFORE a row once the lookup
+    # budget or the refusal cap is used up, so neither is ever exceeded and
+    # the cursor is always the last row actually consumed.
+    stop = False
+    while not stop:
+        page_limit = max(batch_size - looked_up, CANDIDATE_PAGE_SIZE)
+        rows = (await db.execute(
+            text(candidate_sql),
+            {"intake_id": str(intake_id), "limit": page_limit,
+             "after": str(cursor) if cursor is not None else None})).all()
+        for ref, canonical_entity_id in rows:
+            if looked_up >= batch_size:
+                stop = True
+                break
+            if refused + unresolved >= MAX_IDENTITY_REFUSALS_PER_CALL:
+                stop = limit_reached = True
+                break
+            cursor = canonical_entity_id
+            try:
+                if scope == SCOPE_SAM_EXTRACT:
+                    result = await record_sam_extract_attempt(
+                        db, ref=ref, canonical_entity_id=canonical_entity_id,
+                        intake_id=intake_id)
+                else:
+                    result = await record_coverage_attempt(
+                        db, ref=ref, canonical_entity_id=canonical_entity_id,
+                        intake_id=intake_id, actor=actor, local_store=local_store)
+            except Exception as exc:  # noqa: BLE001 - one entity's bug must not lose the batch
+                logger.error("automated coverage: unhandled error for %s: %s",
+                            ref, type(exc).__name__, exc_info=True)
+                result = {"ref": ref, "outcome": OUTCOME_RETRY_PENDING,
+                          "reason": f"unhandled {type(exc).__name__}"}
+            outcomes.append(result)
+            if result["outcome"] == OUTCOME_IDENTITY_REFUSED:
+                refused += 1
+            elif result.get("not_resolved"):
+                unresolved += 1            # no source was asked: stepped over, not a lookup
             else:
-                result = await record_coverage_attempt(
-                    db, ref=ref, canonical_entity_id=canonical_entity_id,
-                    intake_id=intake_id, actor=actor, local_store=local_store)
-        except Exception as exc:  # noqa: BLE001 - one entity's bug must not lose the batch
-            logger.error("automated coverage: unhandled error for %s: %s",
-                        ref, type(exc).__name__, exc_info=True)
-            result = {"ref": ref, "outcome": OUTCOME_RETRY_PENDING,
-                      "reason": f"unhandled {type(exc).__name__}"}
-        outcomes.append(result)
+                looked_up += 1
+        else:
+            # Every fetched row was consumed; a short page is the end of the list.
+            if len(rows) < page_limit:
+                exhausted = True
+                stop = True
 
     await db.commit()  # also releases the advisory xact lock
+
+    if refused:
+        # Visible, never silent: counts only (the per-entity reasons are in
+        # the returned `outcomes`).
+        logger.warning("automated coverage: %d record(s) of delivery %s (scope %s) were refused at "
+                       "identity validation; nothing was gathered or persisted for them",
+                       refused, intake_id, scope)
 
     progress = await coverage_progress(db, intake_id, scope=scope)
     by_outcome: Dict[str, int] = {}
@@ -575,10 +766,16 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
         "intake_id": str(intake_id),
         "scope": scope,
         "skipped_lock": False,
-        "processed_this_call": len(outcomes),
+        # Entities a source was asked about in this call (never more than
+        # `batch_size`). Identity refusals and references that do not resolve
+        # are counted separately below; `by_outcome` and `outcomes` include
+        # all of them.
+        "processed_this_call": looked_up,
         "by_outcome": by_outcome,
-        # Attempts whose NPI outcome was not written: no validated delivered-record context / the write failed.
-        "npi_outcome_not_anchored": sum(1 for o in outcomes if o.get("npi_outcome_not_anchored")),
+        **_batch_identity_fields(refused=refused, exhausted=exhausted, limit_reached=limit_reached,
+                                 started_after=started_after, last_scanned=cursor,
+                                 remaining=progress["remaining"], looked_up=looked_up,
+                                 not_resolved=unresolved),
         "ledger_not_recorded": sum(1 for o in outcomes if o.get("ledger_recorded") is False),
         "outcomes": outcomes,
         **progress,
@@ -686,12 +883,61 @@ class _CoverageSchedulerState:
 _state = _CoverageSchedulerState()
 _state_lock = threading.Lock()
 
+#: IDENTITY HOLD (2026-11-25). A refused record gets no evidence row, so its
+#: delivery never leaves the "needs coverage" candidate set, and the tick
+#: takes ONE delivery per run — the newest. Without this, a delivery whose
+#: only not-covered entities are identity refusals would be picked on every
+#: tick forever (re-validating the same refusals every 15 s) and every older
+#: delivery would never be reached. A tick whose batch looked nothing up and
+#: only refused therefore puts that delivery on hold: it is left out of the
+#: candidate lookup until the hold expires (`backoff_max_seconds()`, default
+#: one hour), then tried again, so a corrected record is picked up without a
+#: restart. intake id (text) -> epoch seconds the hold ends. Process-local,
+#: like the backoff state above and with the same accepted limitation: each
+#: process learns its own holds, and a restart forgets them (one extra
+#: validation-only batch per held delivery). No schema, nothing persisted.
+_identity_holds: Dict[str, float] = {}
+
+#: Where the tick's walk of one delivery stopped at the per-call refusal cap
+#: (intake id -> entity id to continue after). Without it every tick would
+#: restart at the front, meet the same refusals, and never reach the records
+#: behind them. Dropped when a walk reaches the end of the list. Process-local,
+#: same limitation as the holds.
+_identity_cursors: Dict[str, str] = {}
+
+#: What the tick's current walk of one delivery has done so far, across the
+#: ticks it took: intake id -> [refused, looked_up]. The hold is decided on the
+#: WHOLE walk, not on its last tick, so a walk that met only refusals is held
+#: whichever tick it happened to end on (for instance when the entities behind
+#: the cursor were covered by another path between two ticks and the final
+#: tick finds nothing at all).
+_identity_walks: Dict[str, List[int]] = {}
+
 
 def reset_coverage_scheduler_state() -> None:
     """Forget all tick state (tests; a process restart does the same)."""
     global _state
     with _state_lock:
         _state = _CoverageSchedulerState()
+        _identity_holds.clear()
+        _identity_cursors.clear()
+        _identity_walks.clear()
+
+
+def _hold_delivery_for_identity_refusals(intake_id, now: float) -> float:
+    """Put a delivery on identity hold; returns when the hold ends."""
+    until = now + backoff_max_seconds()
+    with _state_lock:
+        _identity_holds[str(intake_id)] = until
+    return until
+
+
+def _held_intake_ids(now: float) -> List[str]:
+    """The deliveries on identity hold at `now` (expired holds are dropped)."""
+    with _state_lock:
+        for key in [k for k, until in _identity_holds.items() if until <= now]:
+            del _identity_holds[key]
+        return sorted(_identity_holds)
 
 
 def _env_seconds(name: str, default: int) -> int:
@@ -738,8 +984,13 @@ def coverage_scheduler_status() -> Dict[str, Any]:
     counters and durations only — no identifiers, SQL or secrets."""
     with _state_lock:
         s = _dc_replace(_state)
+        held = len(_identity_holds)
     return {
         "enabled": automated_coverage_enabled(),
+        # Deliveries this process is not ticking because their only
+        # not-covered entities were refused at identity validation (a count;
+        # holds that have expired are dropped at the next tick).
+        "deliveries_on_identity_hold": held,
         "last_tick_at": _iso(s.last_tick_at),
         "last_outcome": s.last_outcome,
         "consecutive_timeouts": s.consecutive_timeouts,
@@ -886,9 +1137,13 @@ async def _coverage_tick(*, now: Optional[Callable[[], float]] = None):
             try:
                 async with AsyncSession(bind=conn, expire_on_commit=False) as db:
                     lookup_started = clock()
+                    held = _held_intake_ids(lookup_started)
                     try:
+                        # The exclusion is passed only when there is one, so
+                        # the lookup's ordinary call is exactly what it was.
                         intake_id = await _next_delivery_needing_coverage(
-                            db, raise_on_timeout=True)
+                            db, raise_on_timeout=True,
+                            **({"exclude_intake_ids": held} if held else {}))
                     except CandidateLookupTimeout:
                         lookup_result = outcome = TICK_TIMEOUT
                         return
@@ -902,12 +1157,50 @@ async def _coverage_tick(*, now: Optional[Callable[[], float]] = None):
                         outcome = TICK_NO_CANDIDATE
                         return
                     batch_started = clock()
-                    result = await run_coverage_batch(db, intake_id)
+                    with _state_lock:
+                        resume_after = _identity_cursors.get(str(intake_id))
+                    # The cursor is passed only when there is one, so the
+                    # ordinary call is exactly what it was.
+                    result = await run_coverage_batch(
+                        db, intake_id,
+                        **({"after_entity_id": resume_after} if resume_after else {}))
                     batch_ms = int((clock() - batch_started) * 1000)
                     outcome = TICK_BATCH
                     logger.info("automated coverage tick for %s: %s/%s covered, %s remaining",
                                 intake_id, result["covered"], result["eligible"],
                                 result["remaining"])
+                    facts = result if isinstance(result, dict) else {}
+                    key = str(intake_id)
+                    with _state_lock:
+                        walk = _identity_walks.setdefault(key, [0, 0])
+                        walk[0] += (int(facts.get("identity_refused") or 0)
+                                    + int(facts.get("not_resolved") or 0))
+                        walk[1] += int(facts.get("processed_this_call") or 0)
+                        refused, looked_up_in_walk = walk[0], walk[1]
+                    if (facts.get("identity_refusal_scan_limit_reached")
+                            and facts.get("next_after_entity_id")):
+                        # Stopped at the refusal cap: the next tick continues
+                        # behind the refusals instead of meeting them again.
+                        with _state_lock:
+                            _identity_cursors[key] = str(facts["next_after_entity_id"])
+                    elif facts.get("candidates_exhausted"):
+                        with _state_lock:
+                            _identity_cursors.pop(key, None)
+                            _identity_walks.pop(key, None)
+                        if not looked_up_in_walk and int(facts.get("remaining") or 0) > 0:
+                            # The whole walk reached the end of the list and
+                            # asked no source about anything, yet entities
+                            # remain: identity refusals, references that do
+                            # not resolve, or records with no delivered
+                            # reference (those are never candidates at all).
+                            # Do not spin on it.
+                            until = _hold_delivery_for_identity_refusals(intake_id, clock())
+                            logger.warning(
+                                "automated coverage: the walk of delivery %s ended with %d record(s) "
+                                "refused at identity validation or not resolvable and nothing to look up; "
+                                "%s entity(ies) remain NOT covered. The delivery is on hold for the "
+                                "scheduler until %s; nothing was persisted for those records.",
+                                intake_id, refused, facts.get("remaining"), _iso(until))
             finally:
                 await _release_tick_lock(conn)
     except Exception as exc:  # noqa: BLE001 - a tick that raises must not stop the scheduler
@@ -944,6 +1237,7 @@ _ONE_DELIVERY_NEEDING_COVERAGE_SQL = """
               WHERE d.entity_id = CAST(r.canonical_entity_id AS TEXT))
         LIMIT 1
     )
+      AND NOT (CAST(c.source_intake_id AS TEXT) = ANY(CAST(:held AS TEXT[])))
     ORDER BY c.finished_at DESC
     LIMIT 1
 """
@@ -965,11 +1259,15 @@ def _is_statement_timeout(exc: BaseException) -> bool:
 
 async def _next_delivery_needing_coverage(db, *, job_limit: int = CANDIDATE_JOB_LIMIT,
                                           timeout_ms: Optional[int] = None,
-                                          raise_on_timeout: bool = False):
+                                          raise_on_timeout: bool = False,
+                                          exclude_intake_ids: Optional[List[str]] = None):
     """The next intake to cover, or None — also None (logged, nothing marked)
     when the lookup exceeds its statement timeout, unless `raise_on_timeout`
     asks for `CandidateLookupTimeout` instead so the caller (the scheduler
     tick) can tell "nothing to do" from "could not find out" and back off.
+
+    `exclude_intake_ids` leaves out deliveries the tick has on identity hold
+    (see `_identity_holds`); None or empty excludes nothing.
 
     `SET LOCAL` is transaction-scoped, and the transaction is ended after the
     lookup, so the timeout never applies to the batch that follows.
@@ -979,7 +1277,8 @@ async def _next_delivery_needing_coverage(db, *, job_limit: int = CANDIDATE_JOB_
         # SET LOCAL takes no bind parameter; the value is an int by construction.
         await db.execute(text(f"SET LOCAL statement_timeout = {timeout}"))
         row = (await db.execute(text(_ONE_DELIVERY_NEEDING_COVERAGE_SQL),
-                                {"job_limit": int(job_limit)})).first()
+                                {"job_limit": int(job_limit),
+                                 "held": [str(i) for i in (exclude_intake_ids or [])]})).first()
     except Exception as exc:  # noqa: BLE001 - a cancelled lookup is a skipped tick, not a crash
         if not _is_statement_timeout(exc):
             raise

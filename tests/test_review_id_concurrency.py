@@ -360,7 +360,13 @@ def test_verify_and_classify_acquires_the_lock_before_allocating_any_id():
         "the lock must be acquired exactly once, before any id allocation")
     lock_pos = source.index("await _lock_review_id_allocation(db)")
     chunk_loop_pos = source.index("for _chunk_start in range(")
-    gather_pos = source.index("await _gather_all_evidence(chunk_refs")
+    # 2026-11-25: the identity gates now run before the gather, so the gather call is passed the references that
+    # were not refused instead of `chunk_refs`, and a local pre-resolve precedes it. Neither allocates a review id;
+    # both must still come after the lock.
+    gather_pos = source.index("await _gather_all_evidence(")
+    pre_resolve_pos = source.index("await _resolve_all(chunk_refs)")
+    assert lock_pos < pre_resolve_pos < gather_pos, (
+        "the lock must be acquired before the pre-resolve, and the pre-resolve before the gather")
     loop_pos = source.index("for g in gathered:")
     assert lock_pos < chunk_loop_pos, (
         "the lock must be acquired before the chunk loop starts — it must "

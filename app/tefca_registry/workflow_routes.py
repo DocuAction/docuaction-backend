@@ -230,6 +230,10 @@ class ReviewCycleRequest(BaseModel):
                     "undrawn records; use this when the methodology requires "
                     "classifying the whole population. Same gates, batching "
                     "and audit; expect population-many verification calls.")
+    after_member_id: Optional[uuid.UUID] = Field(
+        None, description="Continue behind this sample member: the "
+                          "`next_after_member_id` of a response whose "
+                          "`identity_check_limit_reached` is true. Omit otherwise.")
 
 
 @router.post("/deliveries/{intake_id}/review-cycle",
@@ -261,7 +265,8 @@ async def create_review_cycle_route(
             include_held=body.include_held, seed=body.random_seed,
             sample_name=body.sample_name, batch=body.batch,
             ip_address=_client_ip(request),
-            full_population=body.full_population)
+            full_population=body.full_population,
+            after_member_id=body.after_member_id)
     except CycleRefused as exc:
         raise HTTPException(409, str(exc))
 
