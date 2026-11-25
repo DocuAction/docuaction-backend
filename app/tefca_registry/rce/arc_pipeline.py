@@ -924,6 +924,112 @@ def anchored_npi_refusal(entity, selected) -> Optional[str]:
     return None
 
 
+# ── a record that submitted NO NPI is classified on what it submitted (owner decision 2026-11-25) ──────────────────
+#
+# "For blank-NPI records, prepare the correction so classification evaluates the original submitted values. An
+#  earlier registry NPI must neither fill the blank nor prevent evaluation of the missing-NPI rule. Keep
+#  identity-dependent source checks separate and preserve original data."
+#
+# Until this change an anchored record that delivered no NPI, linked to an entity for which the registry holds an
+# NPI this record did not submit (an identifier row of any status, or the resolver's curated-record fallback - from
+# another delivery or a sibling record), was refused by gate 1 of `anchored_npi_refusal`: no review, so the
+# Treatment missing-NPI signals computed from the delivered row further down were never evaluated for it.
+#
+# Now such a record is verified against a REQUEST-LOCAL view of the entity that carries no NPI at all. The gates see
+# the view, and the gatherer builds evidence for the view - so every NPI-keyed probe behaves exactly as it does for
+# an entity with no NPI anywhere, and nothing is asked about the NPI the record did not submit. The registry entity,
+# its identifier rows, the delivered record and stored evidence are not modified by this; the NPI row stays as it is.
+#
+# NOT RETROACTIVE. It applies only to a delivery whose own assessment date (assessment_context) is on or after
+# `BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE`; a delivery assessed earlier is refused exactly as before, so re-running an
+# existing cycle of an earlier delivery classifies nothing new. The date is the owner's to set.
+
+#: First assessment date the blank-NPI rule applies to. The October delivery's assessment date is 2026-11-08
+#: (D-12), so it stays as it was. OWNER DECISION: confirm or change this date before release.
+BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE = date(2026, 11, 9)
+
+#: Recorded on the review (never with an NPI value) when the rule above was applied.
+SUBMITTED_VALUES_BASIS = {
+    "npi": "not submitted",
+    "basis": ("The delivered record submitted no NPI. The registry holds an NPI for the linked entity that this "
+              "record did not submit; it was not used. NPI-keyed sources were not asked for this record, and "
+              "classification used the record's own delivered values."),
+    "npi_keyed_sources": "not checked: no NPI was submitted",
+    "evidence": ("held in this review's snapshot only; not appended to the entity evidence store, whose rows "
+                 "carry no record key"),
+}
+
+REFUSAL_GATHERED_WITH_REGISTRY_NPI = (
+    "the record submitted no NPI but the evidence gathered for it was built with an NPI the registry holds for the "
+    "entity; no record classification written")
+
+
+def _submitted_npi(selected) -> str:
+    """The NPI a delivered record submitted, as delivered and stripped (`parsed["NPI"]`, else the record's `npi`)."""
+    return str((selected.parsed or {}).get("NPI", selected.npi) or "").strip()
+
+
+def _entity_carries_npi(entity) -> bool:
+    """Whether a resolved entity carries an NPI in EITHER place a probe reads it: a FHIR us-npi identifier
+    (matched by the broader of the two rules in use: `_entity_npi`'s substring and the connectors' exact system) or
+    the RCE block."""
+    from app.Tefca import rce_fields as _rf
+    if str(_rf.rce_npi(entity or {}) or "").strip():
+        return True
+    return any("us-npi" in str(ident.get("system") or "") and str(ident.get("value") or "").strip()
+               for ident in (entity or {}).get("identifier") or [])
+
+
+def _evidence_carries_npi(evidence) -> bool:
+    """Whether any item of an assembled evidence bundle was keyed on, or answered about, an NPI - read from the
+    fields the record report reads (query identifier, NPPES record identifier / `original_values.npi`, the CMS
+    `NPI=` filter)."""
+    for dimension in (evidence or {}).get("dimensions") or []:
+        for item in dimension.get("evidence") or []:
+            if not isinstance(item, dict):
+                continue
+            query = str(item.get("query_identifier") or "").lower().replace(" ", "")
+            # `npi=<value>` with a value; an item recorded as "npi=" (asked about nothing) carries none.
+            if any(part.split("npi=", 1)[1].strip("'\"") for part in query.replace(";", "&").split("&")
+                   if "npi=" in part):
+                return True
+            values = item.get("original_values") if isinstance(item.get("original_values"), dict) else {}
+            if str(values.get("npi") or "").strip():
+                return True
+            if item.get("source") == "NPPES" and str(item.get("source_record_identifier") or "").strip():
+                return True
+    return False
+
+
+def submitted_values_view(entity):
+    """A REQUEST-LOCAL copy of a resolved entity with no NPI: every us-npi identifier removed and the RCE-block NPI
+    blank. The argument is not modified; nothing is written anywhere."""
+    import copy
+    view = copy.deepcopy(entity)
+    view["identifier"] = [ident for ident in view.get("identifier") or []
+                          if "us-npi" not in str(ident.get("system") or "")]
+    if isinstance(view.get("_rce"), dict) and "NPI" in view["_rce"]:
+        view["_rce"]["NPI"] = ""
+    return view
+
+
+def record_identity(entity, selected, *, assessment_date):
+    """THE identity decision for one resolved reference: `(refusal, entity_to_use, npi_withheld)`.
+
+    `entity_to_use` is the entity the caller MUST gather evidence for and classify - never the one it passed in
+    unless they are the same object. `refusal` is `anchored_npi_refusal` applied to `entity_to_use` (None: proceed).
+    `npi_withheld` is True when `entity_to_use` is the no-NPI view: the anchored record submitted no NPI, the entity
+    carries one, and the delivery's assessment date is on or after `BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE`.
+
+    Every other case is exactly what it was: no anchor -> never refused here; a non-blank submitted NPI that is not
+    the registered one -> refused; a delivery assessed before the effective date -> refused as before."""
+    if (selected is not None and not _submitted_npi(selected) and _entity_carries_npi(entity)
+            and assessment_date is not None and assessment_date >= BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE):
+        view = submitted_values_view(entity)
+        return anchored_npi_refusal(view, selected), view, True
+    return anchored_npi_refusal(entity, selected), entity, False
+
+
 async def verify_and_classify(
     db,
     entity_refs: List[str],
@@ -996,6 +1102,11 @@ async def verify_and_classify(
     #: References reviewed WITHOUT their evidence being appended to the entity evidence store,
     #: because the named delivery does not anchor them to one delivered record (reported, never silent).
     evidence_not_stored: List[Dict[str, str]] = []
+    #: References whose record submitted no NPI and was classified on its submitted values (this chunk's set, and
+    #: the whole call's list), and those whose evidence was therefore kept in the review snapshot only.
+    _on_submitted_values: set = set()
+    classified_on_submitted_values: List[str] = []
+    evidence_snapshot_only: List[str] = []
 
     # Held for the whole batch — see `_lock_review_id_allocation`. Acquired
     # even when entity_refs is empty or every ref is unresolved, which costs
@@ -1060,7 +1171,11 @@ async def verify_and_classify(
                 continue
             _sid, _ = _source_anchor(_anchors, _ref, _eid)
             _selected = await db.get(m.RceSourceRecord, _sid) if _sid else None
-            _reason = anchored_npi_refusal(_entity, _selected)
+            _reason, _use, _withheld = record_identity(_entity, _selected, assessment_date=_assessment.value)
+            if _withheld:
+                # The gatherer below builds evidence for THIS object (via _PRE_RESOLVED): the no-NPI view.
+                _pre[_ref] = _use
+                _on_submitted_values.add(_ref)
             if _reason:
                 _refused_before[_ref] = _reason
         _token = _PRE_RESOLVED.set(_pre)
@@ -1098,7 +1213,15 @@ async def verify_and_classify(
             submitted_npi = ((str(delivered.get("NPI", selected.npi) or "").strip())
                              if selected is not None else (_entity_npi(entity) or ""))
             # The two NPI gates (see `anchored_npi_refusal`): a refused record gets nothing classified or persisted.
-            _npi_refusal = anchored_npi_refusal(entity, selected)
+            _npi_refusal, _use, _withheld = record_identity(entity, selected, assessment_date=_assessment.value)
+            if _withheld or (ref in _on_submitted_values and (
+                    _entity_carries_npi(entity) or _evidence_carries_npi(evidence))):
+                # FAIL CLOSED. This record submitted no NPI. `_withheld` here means the entity that came back from
+                # the gatherer still carries the registry's NPI - it is not the view the gates passed - so the
+                # evidence in hand was built with that NPI (or it visibly carries one). Swapping the entity now
+                # would let that evidence be classified and snapshotted as this record's. Refuse instead.
+                _npi_refusal = REFUSAL_GATHERED_WITH_REGISTRY_NPI
+            _npi_withheld = ref in _on_submitted_values and not _npi_refusal
             if _npi_refusal:
                 unresolved.append(ref)
                 resolution_failures.append({"entity_ref": ref, "reason": _npi_refusal})
@@ -1123,6 +1246,14 @@ async def verify_and_classify(
             # snapshot of this evidence - which is what a report issued from the review reads. A call
             # that names no delivery is unchanged.
             store_evidence = persist_evidence and (_intake_uuid is None or _lineage == LINEAGE_ANCHORED)
+            if _npi_withheld:
+                # The evidence describes the no-NPI view, not the entity as the registry holds it. Evidence rows
+                # carry no record key, so appended under the entity this generation would become the entity's
+                # NEWEST for every other reader (the record that did submit the NPI, rechecks, coverage). It stays
+                # in this review's snapshot only.
+                if store_evidence:
+                    evidence_snapshot_only.append(ref)
+                store_evidence = False
             if persist_evidence and not store_evidence:
                 evidence_not_stored.append({"entity_ref": ref, "lineage": _lineage})
             if store_evidence:
@@ -1289,6 +1420,9 @@ async def verify_and_classify(
                     # Present ONLY when a prior risk signal is uncleared, so
                     # the snapshot shape of every other record is unchanged.
                     **({"prior_risk_not_cleared": prior_risk} if prior_risk else {}),
+                    # Present ONLY when the record submitted no NPI and the registry's NPI was withheld (same
+                    # shape-preserving contract). Never carries an NPI value.
+                    **({"submitted_values_basis": dict(SUBMITTED_VALUES_BASIS)} if _npi_withheld else {}),
                     **({"verification_claim": claim} if claim else {}),
                     # Present ONLY when a dimension demanded analyst review —
                     # same shape-preserving contract as prior_risk above.
@@ -1341,6 +1475,8 @@ async def verify_and_classify(
                     "verified" if classification.bucket == "B1" and not withhold_verified
                     else "in_review")
 
+            if _npi_withheld:
+                classified_on_submitted_values.append(ref)
             buckets[classification.bucket] = buckets.get(classification.bucket, 0) + 1
             tiers[tier] = tiers.get(tier, 0) + 1
             outcomes.append({
@@ -1351,6 +1487,7 @@ async def verify_and_classify(
                 "source_record_id": str(source_record_id) if source_record_id else None,
                 "lineage": _lineage,
                 "evidence_stored": bool(store_evidence),
+                "classified_on_submitted_values": bool(_npi_withheld),
                 "bucket": classification.bucket,
                 "rule_code": rule_code,
                 "rule_version": rule_version,
@@ -1407,6 +1544,11 @@ async def verify_and_classify(
         # Reviews whose evidence was kept in the review's own snapshot only (see the comment at the
         # evidence write): the named delivery does not anchor the reference to one delivered record.
         "evidence_not_stored_unanchored": evidence_not_stored,
+        # Records that submitted no NPI, linked to an entity the registry holds an NPI for: reviewed on their own
+        # delivered values, the registry NPI withheld, NPI-keyed sources not asked. Their evidence is in the review
+        # snapshot only (second list).
+        "classified_on_submitted_values": classified_on_submitted_values,
+        "evidence_snapshot_only_submitted_values": evidence_snapshot_only,
         # References refused on identity before any source was asked (each is also in `unresolved`, with its
         # reason in `resolution_failures`).
         "refused_before_gather": refused_before_gather,

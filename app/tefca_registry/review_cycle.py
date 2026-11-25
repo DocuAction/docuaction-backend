@@ -188,7 +188,7 @@ KIND_IDENTITY = "identity"
 KIND_TRANSIENT = "transient"
 
 
-async def _identity_precheck(db, intake_uuid, member_entity_id, ref) -> Optional[str]:
+async def _identity_precheck(db, intake_uuid, member_entity_id, ref, *, assessment_date=None) -> Optional[str]:
     """Why a sample member cannot be reviewed for identity reasons, decided BEFORE any source is asked - or None.
 
     Local reads only. It answers with a reason only on positive knowledge, using the rules the bulk writer itself
@@ -213,7 +213,13 @@ async def _identity_precheck(db, intake_uuid, member_entity_id, ref) -> Optional
     anchors = await ap._source_anchors(db, intake_uuid, [ref])
     source_record_id, _lineage = ap._source_anchor(anchors, ref, resolved_id)
     selected = await db.get(m.RceSourceRecord, source_record_id) if source_record_id else None
-    return ap.anchored_npi_refusal(entity, selected)
+    # The writer's own decision (`record_identity`), with the delivery's assessment date: a record that submitted
+    # no NPI is not refused for the registry's NPI when the blank-NPI rule applies to this delivery.
+    if assessment_date is None:
+        from app.tefca_registry.rce.assessment_context import resolve_assessment_date
+        assessment_date = (await resolve_assessment_date(db, intake_uuid)).value
+    refusal, _entity_to_use, _withheld = ap.record_identity(entity, selected, assessment_date=assessment_date)
+    return refusal
 
 
 def _merge_verification(total: Dict[str, Any], part: Dict[str, Any]) -> Dict[str, Any]:
@@ -232,7 +238,8 @@ def _merge_verification(total: Dict[str, Any], part: Dict[str, Any]) -> Dict[str
     for outcome, n in (part.get("lineage") or {}).items():
         lineage[outcome] = lineage.get(outcome, 0) + n
     out["lineage"] = lineage
-    for key in ("evidence_not_stored_unanchored", "refused_before_gather"):
+    for key in ("evidence_not_stored_unanchored", "refused_before_gather",
+                "classified_on_submitted_values", "evidence_snapshot_only_submitted_values"):
         out[key] = list(total.get(key) or []) + list(part.get(key) or [])
     out["execution_status"] = ("PARTIAL" if out["unresolved"] else part.get("execution_status"))
     return out
@@ -466,6 +473,7 @@ async def _create_review_cycle(
                     started_at_front = False
                     break
         not_reviewable: List[Dict[str, Any]] = []
+        cycle_assessment_date = None       # this delivery's own assessment date, read once when first needed
         limit_reached = False
         last_examined = None
         refs: Dict[Any, str] = {}
@@ -494,7 +502,11 @@ async def _create_review_cycle(
                 if not ref:
                     _set_aside(entity_id, None, NOT_REVIEWABLE_NO_REFERENCE, KIND_IDENTITY)
                     continue
-                reason = await _identity_precheck(db, intake_uuid, entity_id, ref)
+                if cycle_assessment_date is None:
+                    from app.tefca_registry.rce.assessment_context import resolve_assessment_date
+                    cycle_assessment_date = (await resolve_assessment_date(db, intake_uuid)).value
+                reason = await _identity_precheck(db, intake_uuid, entity_id, ref,
+                                                  assessment_date=cycle_assessment_date)
                 if reason:
                     _set_aside(entity_id, ref, reason, KIND_IDENTITY)
                     continue
@@ -510,7 +522,8 @@ async def _create_review_cycle(
             verified = _merge_verification(verified, {k: result.get(k) for k in
                         ("requested", "verified", "unresolved", "bucket_counts",
                          "resolver_source", "configuration_warnings", "execution_status",
-                         "lineage", "evidence_not_stored_unanchored", "refused_before_gather")})
+                         "lineage", "evidence_not_stored_unanchored", "refused_before_gather",
+                         "classified_on_submitted_values", "evidence_snapshot_only_submitted_values")})
             outcome_by_ref = {o.get("entity_ref"): o for o in result.get("outcomes", [])}
             failure_by_ref = {f.get("entity_ref"): f.get("reason")
                               for f in result.get("resolution_failures") or []}
@@ -567,6 +580,11 @@ async def _create_review_cycle(
         verified["evidence_not_stored_unanchored"] = not_stored[:CYCLE_LIST_CAP]
         verified["evidence_not_stored_unanchored_truncated"] = len(not_stored) > CYCLE_LIST_CAP
         verified.setdefault("lineage", {})
+        on_submitted = list(verified.get("classified_on_submitted_values") or [])
+        verified["classified_on_submitted_values_count"] = len(on_submitted)
+        verified["classified_on_submitted_values"] = on_submitted[:CYCLE_LIST_CAP]
+        verified["evidence_snapshot_only_submitted_values"] = list(
+            verified.get("evidence_snapshot_only_submitted_values") or [])[:CYCLE_LIST_CAP]
         walk_exhausted = position >= len(members)
         if verified.get("requested") or not_reviewable:
             reg_audit.record(
@@ -588,7 +606,11 @@ async def _create_review_cycle(
                               for n in not_reviewable[:CYCLE_LIST_CAP]],
                           "lineage": verified.get("lineage"),
                           "evidence_not_stored_unanchored": verified["evidence_not_stored_unanchored_count"],
-                          "evidence_not_stored_unanchored_refs": verified["evidence_not_stored_unanchored"]})
+                          "evidence_not_stored_unanchored_refs": verified["evidence_not_stored_unanchored"],
+                          # Records that submitted no NPI and were classified on their submitted values (the
+                          # registry NPI withheld; evidence in the review snapshot only).
+                          "classified_on_submitted_values": verified["classified_on_submitted_values_count"],
+                          "classified_on_submitted_values_refs": verified["classified_on_submitted_values"]})
             await db.commit()
         if not_reviewable:
             logger.warning(

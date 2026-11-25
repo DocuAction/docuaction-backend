@@ -178,6 +178,11 @@ NPI_ANSWER_SOURCES = {"NPPES": "NPPES", "CMS_PPEF_ENROLLMENT": "CMS PPEF enrolme
 #: Cell texts are short and carry a marker; each marker is explained ONCE in `EVIDENCE_NOTES`, which every
 #: rendering prints (first CSV line, the Excel "Evidence Notes" sheet, the PDF, the frozen JSON meta).
 NPI_MATCH_ONLY = "NPI match only [N1]"
+#: The record's own review says it submitted no NPI and was classified on its submitted values (the registry's NPI
+#: withheld; `arc_pipeline.SUBMITTED_VALUES_BASIS`). An NPI-keyed source was therefore not asked for THIS record:
+#: whatever NPI-keyed row the linked entity has on file is another record's and is not shown here.
+NOT_CHECKED_NO_SUBMITTED_NPI = ("Not checked for this record: the record submitted no NPI, so this NPI-keyed source "
+                                "was not asked (an NPI the registry holds for the linked entity was not used)")
 NOT_ATTRIBUTED_ANSWER = ("Not attributed to this record [N2]: the stored row concerns {why} ({basis}); "
                          "observed {observed} UTC")
 NOT_ATTRIBUTED_UNRECORDED = ("Not attributed to this record [N3]: no identifier stored on the row; entity-level, as "
@@ -730,6 +735,13 @@ async def load_record_facts(
             for key, (source, _dim) in EVIDENCE_SOURCES.items():
                 if ent is None:
                     cells[key] = NOT_PROMOTED
+                    continue
+                if (source in NPI_ANSWER_SOURCES and rev is not None
+                        and isinstance(rev.verification_results, dict)
+                        and rev.verification_results.get("submitted_values_basis")):
+                    stats["npi_sources_not_checked_no_submitted_npi"] = (
+                        stats.get("npi_sources_not_checked_no_submitted_npi", 0) + 1)
+                    cells[key] = NOT_CHECKED_NO_SUBMITTED_NPI
                     continue
                 row = evidence.get((ent, source))
                 if row is None:
