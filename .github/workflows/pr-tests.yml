@@ -206,6 +206,7 @@ jobs:
             tests/test_october_review_loader_db_2026_11_12.py \
             tests/test_record_review_evidence_attribution_db_2026_11_25.py \
             tests/test_record_review_frozen_dataset_db_2026_11_25.py \
+            tests/test_record_review_concurrent_freeze_db_2026_11_25.py \
             tests/test_october_review_export_db_2026_11_12.py \
             tests/test_report_export_session_failure_2026_11_15.py \
             tests/test_extract_row_subject_identifier_2026_11_15.py \

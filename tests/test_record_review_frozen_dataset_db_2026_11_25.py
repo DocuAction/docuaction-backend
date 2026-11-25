@@ -191,6 +191,12 @@ async def test_the_stated_hash_is_the_sha256_of_the_downloadable_dataset_and_sta
     assert f"SHA-256 {sha}" in banner and f"SHA-256 {sha}" in html and pdf_art["report_data_hash"] == sha
     assert frozen["schema"] == freeze.FROZEN_SCHEMA and frozen["curated_status_basis"] == "freeze_time"
     assert frozen["evidence_cutoff"] == CUTOFF_ISO and len(frozen["facts"]) == 4
+    # the evidence limits travel inside the frozen dataset and are printed by the formats rendered from it
+    notes = frozen["load_meta"]["evidence_notes"]
+    assert [n["marker"] for n in notes] == ["N1", "N2", "N3", "N4", "N5"]
+    for text in (banner, html):
+        assert "Identifier match only" in text and "carries no delivery or record id" in text
+        assert "carries NO carried label" in text and "shown without any attribution check" in text
     # hold / curated status is labelled with the time it was captured - not the cutoff, not "generation"
     for text in (banner, html):
         assert "as captured when the dataset was frozen" in text and frozen["frozen_at"] in text
@@ -314,6 +320,47 @@ async def test_a_named_dataset_is_refused_unless_it_is_this_deliverys_and_this_c
 
 # ── stored bytes gone or altered: fail closed, never rebuild under the same id ─────────────────────────────────
 
+async def _assert_failed_safely_and_the_next_request_opens_a_new_freeze(db, intake_id, first_job, out_failed, why):
+    """What every unreadable-dataset case must show: the job FAILED with the reason; nothing was rendered from
+    unverified bytes; nothing was rebuilt under the freeze id; the next default request opens a NEW freeze with a
+    new id and a new hash; and the failed job stays visible as failed."""
+    first_sha = first_job.request_parameters["dataset_sha256"]
+    failed, state = await _run(db, out_failed)
+    assert state == ReportExportJob.STATE_FAILED and failed.state == ReportExportJob.STATE_FAILED
+    assert failed.error_reason.startswith(freeze.UNAVAILABLE_MARK) and why in failed.error_reason
+    assert "new_freeze=true" in failed.error_reason and "nothing was rebuilt under that id" in failed.error_reason
+    # never a report from unverified bytes: the job names no artifact and none is registered under its report id
+    assert failed.artifact_id is None and failed.report_id is None and failed.rendered_sha256 is None
+    failed_report = f"RECORD-REVIEW-{str(failed.id).upper()}"
+    assert (await db.execute(select(ReportArtifact).where(
+        ReportArtifact.report_id == failed_report))).scalars().all() == []
+    assert "dataset_sha256" not in failed.request_parameters        # it never accepted a dataset
+    # never rebuilt under the same freeze id: still the one registration, with the original hash
+    datasets = await _datasets(db, intake_id)
+    assert [(d.report_id, d.rendered_sha256) for d in datasets] == [
+        (freeze.dataset_report_id(first_job.id), first_sha)]
+    # the next DEFAULT request opens a new freeze: new id, new hash, and it renders
+    out_next, next_job, next_csv, next_art = await _export(db, intake_id, "csv")
+    assert out_next["dataset_reused"] is False and out_next["dataset_state"] == "pending"
+    assert out_next["dataset_job_id"] == str(next_job.id) != str(first_job.id)
+    next_sha = next_job.request_parameters["dataset_sha256"]
+    assert next_sha != first_sha and next_art["report_data_hash"] == next_sha
+    assert f"SHA-256 {next_sha}" in _csv(next_csv)[0] and first_sha not in _csv(next_csv)[0]
+    assert sorted(d.report_id for d in await _datasets(db, intake_id)) == sorted(
+        [freeze.dataset_report_id(first_job.id), freeze.dataset_report_id(next_job.id)])
+    # the dead freeze cannot be named either
+    with pytest.raises(HTTPException) as exc:
+        await _request(db, intake_id, "xlsx", dataset_job_id=str(first_job.id))
+    assert exc.value.status_code == 409 and "no usable frozen dataset" in exc.value.detail
+    # the failed job stays visible as failed, with its reason and no download link
+    status = await report_routes.export_job_status(str(failed.id), db=db, user=QA)
+    assert status["state"] == ReportExportJob.STATE_FAILED and "download" not in status
+    assert status["error_reason"].startswith(freeze.UNAVAILABLE_MARK)
+    assert status["dataset_job_id"] == str(first_job.id) and status["dataset_sha256"] is None
+    assert status["dataset_download"] is None
+    return next_csv
+
+
 async def test_a_frozen_dataset_whose_bytes_are_gone_fails_the_job_and_is_never_rebuilt_under_its_id(
         rolled_back_db, store):
     db = rolled_back_db
@@ -323,34 +370,64 @@ async def test_a_frozen_dataset_whose_bytes_are_gone_fails_the_job_and_is_never_
     assert out_xl["dataset_state"] == "frozen"
     shutil.rmtree(store)                                              # the non-durable store loses its files
     await _release_hold(db, recs[2])
-    job_xl, state = await _run(db, out_xl)
-    assert state == ReportExportJob.STATE_FAILED and job_xl.artifact_id is None and job_xl.report_id is None
-    assert job_xl.error_reason.startswith(freeze.UNAVAILABLE_MARK) and "new_freeze=true" in job_xl.error_reason
-    datasets = await _datasets(db, intake_id)
-    assert len(datasets) == 1 and datasets[0].rendered_sha256 == first_job.request_parameters["dataset_sha256"]
-    # the dead freeze is not offered again: the next default request opens a new one, and it succeeds
-    out_next, next_job, next_csv, _ = await _export(db, intake_id, "csv")
-    assert out_next["dataset_reused"] is False and out_next["dataset_job_id"] == str(next_job.id)
-    assert _totals(_csv(next_csv)[1])[1] == 0
-    with pytest.raises(HTTPException) as exc:                         # and it cannot be named either
-        await _request(db, intake_id, "xlsx", dataset_job_id=str(first_job.id))
-    assert exc.value.status_code == 409 and "no usable frozen dataset" in exc.value.detail
+    next_csv = await _assert_failed_safely_and_the_next_request_opens_a_new_freeze(
+        db, intake_id, first_job, out_xl, "its stored bytes are missing from the artifact store")
+    assert _totals(_csv(next_csv)[1])[1] == 0                         # the new freeze captured status again, now
 
 
 async def test_a_frozen_dataset_whose_bytes_were_altered_fails_the_integrity_check_and_the_job(rolled_back_db, store):
     db = rolled_back_db
     intake_id, _ = await _seed(db, "9.99.779.18")
-    await _export(db, intake_id, "csv")
+    _, first_job, _, _ = await _export(db, intake_id, "csv")
     out_xl = await _request(db, intake_id, "xlsx")
+    assert out_xl["dataset_state"] == "frozen"                        # the bytes are present, so it is offered
     # the stored dataset bytes (the store keeps a small sidecar record beside them)
     target = next(p for p in store.rglob("artifact.bin") if "RECORD-REVIEW-DATASET" in str(p))
-    target.write_bytes(target.read_bytes().replace(b'"HELD"', b'"CLEAN"'))
-    job_xl, state = await _run(db, out_xl)
-    assert state == ReportExportJob.STATE_FAILED
-    assert job_xl.error_reason.startswith(freeze.UNAVAILABLE_MARK)
-    assert "no longer hash to the registered SHA-256" in job_xl.error_reason
-    out_next = await _request(db, intake_id, "csv")                   # a job already found it unreadable
-    assert out_next["dataset_reused"] is False
+    altered = target.read_bytes().replace(b'"HELD"', b'"CLEAN"')
+    assert altered != target.read_bytes()
+    target.write_bytes(altered)                                       # valid JSON, different content, same name
+    next_csv = await _assert_failed_safely_and_the_next_request_opens_a_new_freeze(
+        db, intake_id, first_job, out_xl, "no longer hash to the registered SHA-256")
+    assert _totals(_csv(next_csv)[1])[1] == 1                         # read from the database, not the altered file
+
+
+async def test_a_registered_dataset_whose_storage_cannot_be_read_fails_the_job_and_is_never_rebuilt(
+        rolled_back_db, store, monkeypatch):
+    """The registry row exists and the store still answers a metadata check, but reading the bytes fails (I/O,
+    permission, backend client). The job fails closed - never "could not read, so load again under that id"."""
+    from app.core.storage import artifact_store
+
+    db = rolled_back_db
+    intake_id, _ = await _seed(db, "9.99.779.21")
+    _, first_job, _, _ = await _export(db, intake_id, "csv")
+    out_xl = await _request(db, intake_id, "xlsx")
+    assert out_xl["dataset_state"] == "frozen"
+    real_get = artifact_store._store.get
+    dead = freeze.dataset_report_id(first_job.id)
+
+    def unreadable(locator):
+        if dead in locator:
+            raise PermissionError(13, "synthetic: storage refused the read")
+        return real_get(locator)
+
+    monkeypatch.setattr(artifact_store._store, "get", unreadable)
+    await _assert_failed_safely_and_the_next_request_opens_a_new_freeze(
+        db, intake_id, first_job, out_xl, "the artifact store could not return its bytes (PermissionError)")
+
+
+async def test_two_datasets_registered_under_one_freeze_id_are_refused_not_chosen_between(rolled_back_db):
+    db = rolled_back_db
+    intake_id, _ = await _seed(db, "9.99.779.22")
+    _, first_job, _, _ = await _export(db, intake_id, "csv")
+    out_xl = await _request(db, intake_id, "xlsx")
+    await artifact_registry.finalize_artifact(                        # a second registration that must never exist
+        db, report_id=freeze.dataset_report_id(first_job.id), report_type=freeze.DATASET_REPORT_TYPE,
+        content=b'{"schema":"other"}', content_type=freeze.DATASET_CONTENT_TYPE,
+        review_cycle_id="synthetic-second-registration", generated_by=QA.email)
+    failed, state = await _run(db, out_xl)
+    assert state == ReportExportJob.STATE_FAILED and failed.artifact_id is None
+    assert failed.error_reason.startswith(freeze.UNAVAILABLE_MARK)
+    assert "2 datasets are registered under it where exactly one is allowed" in failed.error_reason
 
 
 # ── row count is enforced ──────────────────────────────────────────────────────────────────────────────────────

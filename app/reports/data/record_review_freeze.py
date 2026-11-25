@@ -106,7 +106,7 @@ async def read_registered(db, report_id: str) -> Optional[Tuple[bytes, Dict[str,
     """(stored bytes, registry row) of the ONE dataset registered under `report_id`, re-hashed against the
     registry; None when none is registered. Missing bytes, a hash mismatch or more than one registration is a
     controlled refusal - never a rebuild."""
-    from app.core.storage.artifact_store import ArtifactStoreError
+    from app.core.storage.artifact_store import ArtifactNotFound, ArtifactStoreError
     from app.reports.data import artifact_registry
 
     rows = await _registered_rows(db, report_id)
@@ -117,11 +117,21 @@ async def read_registered(db, report_id: str) -> Optional[Tuple[bytes, Dict[str,
     try:
         got = await artifact_registry.retrieve_artifact(
             db, report_id, content_type=DATASET_CONTENT_TYPE, version=rows[0].artifact_version)
-    except ArtifactStoreError as exc:
+    except ArtifactNotFound as exc:
         logger.warning("frozen dataset %s unreadable: %s", report_id, type(exc).__name__)
         raise unavailable(report_id, "its stored bytes are missing from the artifact store")
-    except RuntimeError:                       # artifact_registry._verified: INTEGRITY FAILURE
-        logger.error("frozen dataset %s failed its integrity check", report_id)
+    except RuntimeError as exc:
+        if isinstance(exc, ArtifactStoreError) or "INTEGRITY FAILURE" not in str(exc):
+            logger.warning("frozen dataset %s unreadable: %s", report_id, type(exc).__name__)
+            raise unavailable(report_id, f"the artifact store could not return its bytes ({type(exc).__name__})")
+        logger.error("frozen dataset %s failed its integrity check", report_id)     # artifact_registry._verified
+        raise unavailable(report_id, "its stored bytes no longer hash to the registered SHA-256")
+    except Exception as exc:  # noqa: BLE001 - any storage failure (I/O, permission, backend client): never rebuild
+        logger.warning("frozen dataset %s unreadable: %s", report_id, type(exc).__name__)
+        raise unavailable(report_id, f"the artifact store could not return its bytes ({type(exc).__name__})")
+    # Defence in depth: the registry re-hashed the bytes; they are rendered only if they also hash to the ONE
+    # registered row this function selected.
+    if hashlib.sha256(got["content"]).hexdigest() != rows[0].rendered_sha256:
         raise unavailable(report_id, "its stored bytes no longer hash to the registered SHA-256")
     return got["content"], got["artifact"]
 
