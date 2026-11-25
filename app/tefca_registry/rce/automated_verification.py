@@ -888,6 +888,14 @@ _identity_holds: Dict[str, float] = {}
 #: same limitation as the holds.
 _identity_cursors: Dict[str, str] = {}
 
+#: What the tick's current walk of one delivery has done so far, across the
+#: ticks it took: intake id -> [refused, looked_up]. The hold is decided on the
+#: WHOLE walk, not on its last tick, so a walk that met only refusals is held
+#: whichever tick it happened to end on (for instance when the entities behind
+#: the cursor were covered by another path between two ticks and the final
+#: tick finds nothing at all).
+_identity_walks: Dict[str, List[int]] = {}
+
 
 def reset_coverage_scheduler_state() -> None:
     """Forget all tick state (tests; a process restart does the same)."""
@@ -896,6 +904,7 @@ def reset_coverage_scheduler_state() -> None:
         _state = _CoverageSchedulerState()
         _identity_holds.clear()
         _identity_cursors.clear()
+        _identity_walks.clear()
 
 
 def _hold_delivery_for_identity_refusals(intake_id, now: float) -> float:
@@ -1144,19 +1153,25 @@ async def _coverage_tick(*, now: Optional[Callable[[], float]] = None):
                                 intake_id, result["covered"], result["eligible"],
                                 result["remaining"])
                     facts = result if isinstance(result, dict) else {}
-                    refused = int(facts.get("identity_refused") or 0)
+                    key = str(intake_id)
+                    with _state_lock:
+                        walk = _identity_walks.setdefault(key, [0, 0])
+                        walk[0] += int(facts.get("identity_refused") or 0)
+                        walk[1] += int(facts.get("processed_this_call") or 0)
+                        refused, looked_up_in_walk = walk[0], walk[1]
                     if (facts.get("identity_refusal_scan_limit_reached")
                             and facts.get("next_after_entity_id")):
                         # Stopped at the refusal cap: the next tick continues
                         # behind the refusals instead of meeting them again.
                         with _state_lock:
-                            _identity_cursors[str(intake_id)] = str(facts["next_after_entity_id"])
+                            _identity_cursors[key] = str(facts["next_after_entity_id"])
                     elif facts.get("candidates_exhausted"):
                         with _state_lock:
-                            _identity_cursors.pop(str(intake_id), None)
-                        if refused and not facts.get("processed_this_call"):
-                            # The walk reached the end of the list and found
-                            # nothing it may look up. Do not spin on it.
+                            _identity_cursors.pop(key, None)
+                            _identity_walks.pop(key, None)
+                        if refused and not looked_up_in_walk:
+                            # The whole walk reached the end of the list and
+                            # found nothing it may look up. Do not spin on it.
                             until = _hold_delivery_for_identity_refusals(intake_id, clock())
                             logger.warning(
                                 "automated coverage: the walk of delivery %s ended with %d record(s) "
