@@ -356,10 +356,12 @@ async def run_record_review_export_job(db, job) -> str:
             f"application log against job {job_id}.")
         return ReportExportJob.STATE_FAILED
 
-    await export_jobs.finish_succeeded(
+    recorded = await export_jobs.finish_succeeded(
         db, job_id, report_id=report_id,
         artifact_id=str(artifact["artifact_id"]),
         artifact_version=int(artifact["artifact_version"]),
         rendered_sha256=artifact["rendered_sha256"],
         size_bytes=int(artifact["size_bytes"] or 0))
-    return ReportExportJob.STATE_SUCCEEDED
+    # False: the job was already terminal (reaped while this worker was still rendering). It stays FAILED and
+    # this run reports what the row says, not what it hoped to write.
+    return ReportExportJob.STATE_SUCCEEDED if recorded is not False else ReportExportJob.STATE_FAILED

@@ -672,3 +672,47 @@ def test_only_one_export_runs_at_a_time():
     start = inspect.getsource(scheduler.start_export_scheduler)
     assert "max_instances=1" in start, (
         "overlapping scheduler ticks are permitted; two ticks means two exports")
+
+
+# ═══ a reaped job cannot be flipped to SUCCEEDED (2026-11-25) ═════════════════
+
+async def test_a_job_the_reaper_failed_stays_failed_when_its_worker_reports_success_late(
+        rolled_back_db):
+    """The worker went quiet past the threshold, was reaped, and then finished after all. Its slot was released
+    and a replacement may be running: the late success must not overwrite FAILED or the recorded reason."""
+    from datetime import datetime, timedelta
+
+    db = rolled_back_db
+    intake_id = await _estate(db)
+    job = await _request(db, intake_id)
+    claimed = await export_jobs.claim_next_queued(db)
+    claimed.heartbeat_at = datetime.utcnow() - timedelta(seconds=export_jobs.STALE_HEARTBEAT_SECONDS + 60)
+    await db.commit()
+    assert [r["job_id"] for r in await export_jobs.reap_stale_jobs(db)] == [str(job.id)]
+
+    recorded = await export_jobs.finish_succeeded(
+        db, job.id, report_id="LATE-REPORT", artifact_id="late-artifact", artifact_version=1,
+        rendered_sha256="a" * 64, size_bytes=10)
+
+    assert recorded is False
+    after = await export_jobs.get_job(db, job.id)
+    assert after.state == ReportExportJob.STATE_FAILED and after.error_reason == export_jobs.REAPED_REASON
+    assert after.report_id is None and after.artifact_id is None and after.rendered_sha256 is None
+    assert after.active_marker is None and after.completed_at is None
+
+
+async def test_a_running_job_still_succeeds_and_a_second_success_changes_nothing(rolled_back_db):
+    db = rolled_back_db
+    intake_id = await _estate(db)
+    job = await _request(db, intake_id)
+    await export_jobs.claim_next_queued(db)
+    first = await export_jobs.finish_succeeded(
+        db, job.id, report_id="REPORT-1", artifact_id="artifact-1", artifact_version=1,
+        rendered_sha256="b" * 64, size_bytes=10)
+    again = await export_jobs.finish_succeeded(
+        db, job.id, report_id="REPORT-2", artifact_id="artifact-2", artifact_version=2,
+        rendered_sha256="c" * 64, size_bytes=20)
+    after = await export_jobs.get_job(db, job.id)
+    assert first is True and again is False
+    assert after.state == ReportExportJob.STATE_SUCCEEDED
+    assert (after.report_id, after.artifact_id, after.rendered_sha256) == ("REPORT-1", "artifact-1", "b" * 64)

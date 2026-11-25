@@ -529,3 +529,30 @@ def test_the_dataset_has_its_own_id_and_content_type_never_a_formats():
     assert artifact_registry.ARTIFACT_SUFFIXES[freeze.DATASET_CONTENT_TYPE] == "json"
     a = freeze.canonical_bytes({"b": 1, "a": ["x", {"d": 2, "c": None}]})
     assert a == freeze.canonical_bytes({"a": ["x", {"c": None, "d": 2}], "b": 1})       # one serialisation
+
+
+# ── a reaped record-review job is not flipped to SUCCEEDED by its late worker ──────────────────────────────────
+
+async def test_a_record_review_job_reaped_while_rendering_stays_failed_and_the_run_reports_failed(
+        rolled_back_db, monkeypatch):
+    from app.reports.data import export_jobs
+
+    db = rolled_back_db
+    intake_id, _ = await _seed(db, "9.99.779.23")
+    out = await _request(db, intake_id, "csv")
+    real_finalize = artifact_registry.finalize_artifact
+
+    async def reaped_before_the_rendering_is_registered(db_, **kw):
+        if kw["content_type"] == "text/csv":
+            # the reaper runs now: every job that has been silent "too long" (threshold in the future = this one)
+            reaped = await export_jobs.reap_stale_jobs(db_, threshold_seconds=-60)
+            assert out["job_id"] in [r["job_id"] for r in reaped]
+        return await real_finalize(db_, **kw)
+
+    monkeypatch.setattr(artifact_registry, "finalize_artifact", reaped_before_the_rendering_is_registered)
+    job, state = await _run(db, out)
+    assert state == ReportExportJob.STATE_FAILED                      # what the row says, not what the worker hoped
+    assert job.state == ReportExportJob.STATE_FAILED and job.error_reason == export_jobs.REAPED_REASON
+    assert job.report_id is None and job.artifact_id is None
+    status = await report_routes.export_job_status(out["job_id"], db=db, user=QA)
+    assert status["state"] == ReportExportJob.STATE_FAILED and "download" not in status
