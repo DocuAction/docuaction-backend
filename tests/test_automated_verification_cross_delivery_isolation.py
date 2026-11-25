@@ -191,9 +191,24 @@ async def test_work_item_from_delivery_b_is_scoped_to_b_and_absent_from_a(
     b_entity_ids = await _entity_ids_for(db, b)
     one_b_entity = next(iter(b_entity_ids))
 
+    # The ledger write is anchored to the verified RECORD (2026-11-16): delivery B's curated record for this entity.
+    b_record = (await db.execute(
+        select(rce_m.RceCuratedRecord.source_record_id).where(
+            rce_m.RceCuratedRecord.canonical_entity_id == one_b_entity,
+            rce_m.RceCuratedRecord.source_intake_id == b).limit(1))).scalar_one()
+    # An NPI outcome is recorded only for the NPI the anchored record DELIVERED (2026-11-16): report that record's
+    # own delivered NPI (this fixture's record delivers one; if it did not, no NPI outcome could be its finding).
+    b_source = await db.get(rce_m.RceSourceRecord, b_record)
+    if not vf.delivered_npi_of(b_source):                 # the seeded corpus row delivers no NPI: give it one
+        b_source.parsed = {**(b_source.parsed or {}), "NPI": "1234567893"}
+        b_source.npi = "1234567893"
+        await db.flush()
+    delivered_npi = vf.delivered_npi_of(b_source)
+    assert delivered_npi, "fixture record must deliver an NPI for an NPI outcome to be recorded on it"
     issue = await vf.record_npi_outcome(
-        db, entity_id=one_b_entity, npi="1234567893",
-        outcome=vf.NPI_NOT_FOUND, detail="NPI not present in NPPES.")
+        db, entity_id=one_b_entity, npi=delivered_npi,
+        outcome=vf.NPI_NOT_FOUND, detail="NPI not present in NPPES.",
+        source_record_id=b_record, intake_id=b)
     await db.flush()
 
     assert issue is not None, "record_npi_outcome produced no ledger row for a real curated entity"

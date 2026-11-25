@@ -216,6 +216,30 @@ async def curated_by_oid(db, intake_id, oid: str) -> m.RceCuratedRecord:
             m.RceCuratedRecord.rce_org_oid == oid))).scalar_one()
 
 
+async def anchor_for_entity(db, entity_id) -> Dict[str, Any]:
+    """`source_record_id` / `intake_id` keyword arguments naming the ONE curated record of a single-delivery entity
+    (NPPES-outcome ledger writes are anchored to the verified record). For tests whose entity belongs to exactly one
+    delivery; refuses an entity with several curated records instead of guessing."""
+    eid = entity_id if isinstance(entity_id, uuid.UUID) else uuid.UUID(str(entity_id))
+    rows = (await db.execute(
+        select(m.RceCuratedRecord.source_record_id, m.RceCuratedRecord.source_intake_id)
+        .where(m.RceCuratedRecord.canonical_entity_id == eid))).all()
+    assert len(rows) == 1, f"expected exactly one curated record for entity {eid}, found {len(rows)}"
+    return {"source_record_id": rows[0][0], "intake_id": rows[0][1]}
+
+
+async def delivered_npi_for_anchor(db, anchor: Dict[str, Any], default: str = "1234567893") -> str:
+    """The NPI the anchored source record DELIVERED, for fixtures that record an NPI finding on it (a finding about an
+    NPI is recorded only for the NPI its record delivered). A seeded record that delivers none is given `default`."""
+    from app.tefca_registry.rce import verification_findings as vf
+    record = await db.get(m.RceSourceRecord, anchor["source_record_id"])
+    if not vf.delivered_npi_of(record):
+        record.parsed = {**(record.parsed or {}), "NPI": default}
+        record.npi = default
+        await db.flush()
+    return vf.delivered_npi_of(record)
+
+
 async def source_by_oid(db, intake_id, oid: str) -> m.RceSourceRecord:
     return (await db.execute(
         select(m.RceSourceRecord).where(

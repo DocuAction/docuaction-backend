@@ -624,6 +624,32 @@ CLASSIFIER_SIGNAL_REGISTRY: Dict[str, SignalEntry] = {
              "Sub-Participant + active + blank submitted NPI; reason code "
              "TREATMENT_SOLE_PURPOSE_NPI_MISSING_ONC_SCOPE.",
     ),
+    "treatment_combined_scope_missing_npi": SignalEntry(
+        # SUBMITTED METHODOLOGY v1.4 RULE-006 (owner-confirmed submitted copy,
+        # 2026-11-24): IS_ACTIVE=1 AND the exact T-TRTMNT token ALONE OR WITH
+        # OTHER PURPOSES (T-TREAT never a substitute) AND participation level
+        # Participant or Sub-Participant AND submitted NPI blank. NO node-type
+        # input. Supplemental NPIs never fill the blank. Consumed only by the
+        # combined-scope VERSION of RULE-006 in the INACTIVE component
+        # treatment_b4_combined_scope.
+        production_state=PRODUCIBLE,
+        value_domain=SETTLED,
+        consequence_state=METHODOLOGY_PENDING,
+        producers=(
+            Producer(PATH_RCE,
+                     "app/tefca_registry/rce/npi_applicability.py "
+                     "(treatment_field_signals, combined-scope signal)",
+                     ("true",)),
+        ),
+        unused_reason="Consumed only by the combined-scope RULE-006 version in "
+                      "the INACTIVE component treatment_b4_combined_scope; "
+                      "computed and inert until that component is activated "
+                      "under its recorded approval.",
+        note="Methodology v1.4 scope: T-TRTMNT alone or combined + Participant/"
+             "Sub-Participant + active + blank submitted NPI; reason code "
+             "TREATMENT_TOKEN_NPI_MISSING_COMBINED_SCOPE. ONC acceptance and "
+             "effective date not recorded.",
+    ),
     "inactive_treatment_npi_missing": SignalEntry(
         # OBSERVATION ONLY (owner instruction 2026-11-08): an INACTIVE record
         # (active flag not '1') carrying the exact T-TRTMNT token in any

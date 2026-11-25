@@ -115,9 +115,19 @@ def processing_outcome(*, job_state: Optional[str], job_stage: Optional[str],
         return _result(OUTCOME_PROCESSING, basis,
                        f"Processing is in progress at stage {job_stage or 'unknown'}.")
     if job_state == "FAILED":
+        from app.core.logging_config import sanitize_stored_error
+
         where = failed_stage or job_stage or "unknown"
+        # The stored reason is masked HERE, where it is put into text that every
+        # caller returns to the browser (delivery list, job detail, the fallback
+        # status). `RceDeliveryJob.to_dict()` already masks `error_reason`; this
+        # sentence embedded the raw column beside it, so a row written before
+        # PR #85 - a driver's rendering of the failed statement and its
+        # parameters - reached every role that may list deliveries. Masking at
+        # the one place the text is built keeps every derivation equivalent.
+        reason = sanitize_stored_error(error_reason) or "no reason recorded"
         return _result(OUTCOME_FAILED, basis,
-                       f"Processing stopped at {where}: {error_reason or 'no reason recorded'}.",
+                       f"Processing stopped at {where}: {reason}.",
                        failed_stage=where)
 
     # SUCCEEDED from here on.

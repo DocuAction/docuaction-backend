@@ -182,6 +182,48 @@ def _delta_treatment_b4_onc_scope(rules: List[dict]) -> List[dict]:
     return out
 
 
+def _delta_treatment_b4_combined_scope(rules: List[dict]) -> List[dict]:
+    """SUBMITTED METHODOLOGY v1.4, RULE-006 (owner-confirmed submitted copy,
+    SHA-256 4563beb2...3d540; reading text with insertions included): a NEW
+    VERSION of RULE-006 that supersedes the sole-purpose ONC scope on
+    activation (the sole-purpose version survives as the prior version;
+    activated rows are retired, never deleted). All conditions hold IN THE
+    PRODUCER (`npi_applicability.treatment_combined_scope_missing_npi`):
+
+      - Purpose_of_Use contains the exact parsed token T-TRTMNT, ALONE OR WITH
+        OTHER PURPOSES, in any order (T-TREAT alone never triggers it);
+      - Activity Status is Active;
+      - Participation Level is Participant or Sub-Participant;
+      - the ORIGINAL SUBMITTED NPI is blank (a supplemental NPI never fills it).
+
+    No initiating-node condition. A record outside this scope is evaluated by
+    the remaining rules exactly as any other record. Higher-priority approved
+    conditions (RULE-005) still win.
+
+    NOT ACTIVATED BY THIS CHANGE. Submission is not acceptance: ONC acceptance
+    and the scope's effective date are not recorded, and activation is a
+    separate governed owner act. One treatment regime at a time."""
+    out = copy.deepcopy(rules)
+    out.append({
+        "rule_code": "RULE-006",
+        "name": "B4 Treatment Missing Required NPI (combined-purpose scope, methodology v1.4)",
+        "bucket": "B4",
+        "priority": 6,
+        "description": (
+            "Methodology v1.4 Treatment scope: an Active Participant/"
+            "Sub-Participant record whose Purpose_of_Use contains the exact "
+            "T-TRTMNT token, alone or with other purposes, with no SUBMITTED "
+            "NPI classifies B4. T-TREAT alone does not trigger this rule. "
+            "organizationNodeType does not gate it. A supplemental NPI "
+            "(manual QA, NPPES, IQVIA) never fills the submitted blank and "
+            "never suppresses the condition."),
+        "conditions": {"all_of": [
+            {"field": "treatment_combined_scope_missing_npi", "status": True},
+        ]},
+    })
+    return out
+
+
 def _delta_structural_npi_handling(rules: List[dict]) -> List[dict]:
     """D-02 rule side: defense-in-depth guards so a confirmed-invalid NPI can
     never pass B1/B2 by rule order alone. The producer half is the
@@ -279,13 +321,15 @@ COMPONENTS: Dict[str, Component] = {c.name: c for c in (
               "RULE-007 B3 applicability review + RULE-006 as B3/B4-candidate",
               apply=_delta_treatment_review_b3,
               conflicts_with=("treatment_b4_owner_adopted",
-                              "treatment_b4_onc_scope"),
+                              "treatment_b4_onc_scope",
+                              "treatment_b4_combined_scope"),
               regime="treatment"),
     Component("treatment_b4", ("D-01 CONFIG A (superseded 2026-11-08; preserved as history)",),
               "RULE-006 upgraded to B4 (confirmed Treatment non-compliance)",
               apply=_delta_treatment_b4, depends_on=("treatment_review_b3",),
               conflicts_with=("treatment_b4_owner_adopted",
-                              "treatment_b4_onc_scope"),
+                              "treatment_b4_onc_scope",
+                              "treatment_b4_combined_scope"),
               regime="treatment"),
     Component("treatment_b4_owner_adopted",
               ("D-01 SUPERSEDING 2026-11-08 (owner-adopted policy; "
@@ -295,7 +339,8 @@ COMPONENTS: Dict[str, Component] = {c.name: c for c in (
               "NPI -> B4; no node-type gate; a new VERSION of RULE-006",
               apply=_delta_treatment_b4_owner_adopted,
               conflicts_with=("treatment_review_b3", "treatment_b4",
-                              "treatment_b4_onc_scope"),
+                              "treatment_b4_onc_scope",
+                              "treatment_b4_combined_scope"),
               regime="treatment"),
     Component("treatment_b4_onc_scope",
               ("ONC updated Treatment scope (relayed 2026-11-09); "
@@ -305,7 +350,19 @@ COMPONENTS: Dict[str, Component] = {c.name: c for c in (
               "gate; out-of-scope records evaluated by the remaining rules",
               apply=_delta_treatment_b4_onc_scope,
               conflicts_with=("treatment_review_b3", "treatment_b4",
-                              "treatment_b4_owner_adopted"),
+                              "treatment_b4_owner_adopted",
+                              "treatment_b4_combined_scope"),
+              regime="treatment"),
+    Component("treatment_b4_combined_scope",
+              ("Submitted methodology v1.4 RULE-006 (owner-confirmed submitted copy "
+               "2026-11-24; ONC acceptance and effective date NOT recorded)",),
+              "active + exact T-TRTMNT alone or with other purposes + Participant/"
+              "Sub-Participant + blank submitted NPI -> B4; no node-type gate; a new "
+              "VERSION of RULE-006 superseding the sole-purpose ONC scope on activation",
+              apply=_delta_treatment_b4_combined_scope,
+              conflicts_with=("treatment_review_b3", "treatment_b4",
+                              "treatment_b4_owner_adopted",
+                              "treatment_b4_onc_scope"),
               regime="treatment"),
     Component("structural_npi_handling", ("D-02", "D6"),
               "invalid/flagged split: producer flag + B1/B2 invalid guards",
@@ -330,7 +387,7 @@ COMPONENTS: Dict[str, Component] = {c.name: c for c in (
 
 #: Canonical application order (deterministic composition).
 _ORDER = ("treatment_review_b3", "treatment_b4", "treatment_b4_owner_adopted",
-          "treatment_b4_onc_scope",
+          "treatment_b4_onc_scope", "treatment_b4_combined_scope",
           "structural_npi_handling", "mandatory_source_guards",
           "material_conflict_guards", "name_severity_configuration",
           "exclusion_candidate_b3")

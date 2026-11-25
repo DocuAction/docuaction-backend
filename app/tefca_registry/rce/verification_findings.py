@@ -194,15 +194,107 @@ async def _curated_for_entity(db, entity_id):
         .limit(1))).scalar_one_or_none()
 
 
+async def anchor_for_reference(db, *, intake_id, ref, entity_id):
+    """The source_record_id a verification of `ref` belongs to, or None.
+
+    ANCHORED only when exactly ONE curated record of the named delivery carries the delivered reference
+    (`rce_org_oid`) AND links the very entity being verified - the rule `arc_pipeline._source_anchor` applies. No
+    delivery, no such record, a duplicate delivered id or a different linked entity leave it unanchored; an
+    unanchored verification writes no ledger row (never "the entity's latest record")."""
+    if intake_id is None or not ref or entity_id is None:
+        return None
+    rows = (await db.execute(
+        select(m.RceCuratedRecord.source_record_id, m.RceCuratedRecord.canonical_entity_id)
+        .where(m.RceCuratedRecord.source_intake_id == intake_id,
+               m.RceCuratedRecord.rce_org_oid == ref))).all()
+    if len(rows) != 1:
+        return None
+    source_record_id, canonical = rows[0]
+    if canonical is None or str(canonical) != str(entity_id):
+        return None
+    return source_record_id
+
+
+def npi_key(value) -> str:
+    """One comparable form of an NPI: stripped, a spreadsheet's trailing ".0" tolerated, digits only. No validity
+    rule. The ledger writer also uses it for the identifier lookup, the duplicate check and the issue row's
+    `original_value`; delivered records are never rewritten."""
+    text = str(value or "").strip()
+    if "." in text and text.split(".", 1)[1].strip("0") == "" and text.split(".", 1)[0].isdigit():
+        text = text.split(".", 1)[0]
+    return "".join(ch for ch in text if ch.isdigit())
+
+
+def delivered_npi_of(record) -> str:
+    """The NPI a delivered source record submitted, as delivered (`parsed["NPI"]`, else the record's `npi`)."""
+    return str((getattr(record, "parsed", None) or {}).get("NPI", getattr(record, "npi", None)) or "").strip()
+
+
+async def validated_delivery_context(db, *, intake_id, ref, queued_entity_id, entity, probe_npi):
+    """ONE identity validation for a verification of `ref` in a delivery, run BEFORE anything is persisted.
+    Shared by the recheck and automated-coverage callers. Returns (context, None) or (None, reason).
+
+    `resolve_entity` resolves a reference GLOBALLY, so before evidence, a ledger row, an identifier status or an
+    entity status may be written, all of this must hold: (1) the reference resolves to a registry identity equal to
+    the QUEUED entity; (2) exactly one delivered record of the named delivery carries the reference and links that
+    entity (`anchor_for_reference`); (3) that record can be read; (4) when the source probes will be asked about an
+    NPI (`probe_npi`, the resolved entity's), it is the NPI that record DELIVERED (compared by `npi_key`) - the rule
+    `arc_pipeline.verify_and_classify` already applies ("submitted NPI differs from the identifier used by source
+    probes"). A refusal means the caller persists nothing."""
+    resolved_id = (entity or {}).get("_registry_entity_id")
+    if resolved_id is None:
+        return None, "the reference has no registry identity now"
+    if queued_entity_id is None or str(resolved_id) != str(queued_entity_id):
+        return None, "the reference now resolves to a different entity than the one queued"
+    # Both reads run inside a savepoint: if PostgreSQL rejects one, only the savepoint is rolled back and the error
+    # propagates, so a batch caller that catches a per-item failure keeps a usable session (CodeRabbit 5916281973).
+    # begin_nested flushes pending caller state first; state flushed before the savepoint is not protected by it.
+    async with db.begin_nested():
+        anchor = await anchor_for_reference(db, intake_id=intake_id, ref=ref, entity_id=queued_entity_id)
+        record = await db.get(m.RceSourceRecord, anchor) if anchor is not None else None
+    if anchor is None:
+        return None, ("the delivery has no single delivered record carrying this reference and linking the queued "
+                      "entity (missing, duplicated, or linked to another entity)")
+    if record is None:
+        return None, "the delivered record could not be read"
+    delivered = delivered_npi_of(record)
+    if npi_key(probe_npi) and npi_key(delivered) != npi_key(probe_npi):
+        # The probes would be asked about an NPI this delivery did not submit. (No probe NPI at all is not a
+        # mismatch: nothing NPI-derived can be produced, the NPI-keyed lookups answer "unavailable" fail-closed.)
+        return None, ("the source probes would use an NPI this delivery did not submit; nothing was gathered or "
+                      "recorded for this delivery")
+    return {"source_record_id": anchor, "intake_id": intake_id, "delivered_npi": delivered}, None
+
+
+async def _curated_for_anchor(db, entity_id, source_record_id, intake_id=None):
+    """The curated record of the NAMED source record, only if it links `entity_id` (and belongs to `intake_id` when
+    the caller knows the delivery); otherwise None. Never another delivery's record for the same entity."""
+    if source_record_id is None:
+        return None
+    stmt = select(m.RceCuratedRecord).where(
+        m.RceCuratedRecord.source_record_id == source_record_id,
+        m.RceCuratedRecord.canonical_entity_id == entity_id)
+    if intake_id is not None:
+        stmt = stmt.where(m.RceCuratedRecord.source_intake_id == intake_id)
+    return (await db.execute(stmt.limit(1))).scalar_one_or_none()
+
+
 async def record_npi_outcome(db, *, entity_id, npi: Optional[str], outcome: str,
                              detail: Optional[Any] = None,
-                             commit: bool = False) -> Optional[m.RceIssue]:
+                             commit: bool = False,
+                             source_record_id=None,
+                             intake_id=None) -> Optional[m.RceIssue]:
     """Write the ledger row for one verification outcome. Returns it, or None.
 
-    None when the outcome is VERIFIED (nothing to record), when the entity did
-    not come from a delivery (no ledger), or when an identical undecided issue
-    already exists for the record (no duplicate). Does not commit unless asked:
-    the caller's verification transaction owns the commit.
+    ANCHORED: the row is written on the curated record of `source_record_id` - the source record the verification
+    is about - validated against `entity_id` (and `intake_id` when the caller knows the delivery). The same record
+    serves insertion and duplicate detection. WITHOUT an established anchor nothing is written: an entity can be
+    promoted by several deliveries, and "the entity's latest record" would put one delivery's finding on another's
+    ledger.
+
+    None when the outcome is VERIFIED (nothing to record), when there is no anchor (or it does not match the
+    entity/delivery), or when an identical undecided issue already exists for the record (no duplicate). Does not
+    commit unless asked: the caller's verification transaction owns the commit.
     """
     if outcome not in OUTCOMES:
         raise ValueError(f"unknown NPI outcome {outcome!r}; one of {OUTCOMES}")
@@ -213,17 +305,57 @@ async def record_npi_outcome(db, *, entity_id, npi: Optional[str], outcome: str,
         detail_text = str(detail or "")
         deactivation_date = None
 
-    if outcome == NPI_DEACTIVATED and npi:
-        await _mark_identifier_inactive(db, entity_id, npi)
-
     if outcome == VERIFIED:
         return None
 
-    curated = await _curated_for_entity(db, entity_id)
-    if curated is None:
-        logger.info("NPI outcome %s for entity %s has no delivery ledger; recorded "
-                    "in the review only", outcome, entity_id)
+    if source_record_id is None:
+        logger.warning("NPI outcome %s for entity %s has no delivery-record anchor (intake_id=%s); no ledger row "
+                       "written, no identifier status changed", outcome, entity_id, intake_id)
         return None
+
+    # Protect anchor reads as well as writes: a failed best-effort lookup must not abort the caller's transaction.
+    # begin_nested flushes pending caller state first; only operations inside this savepoint are rolled back here.
+    async with db.begin_nested():
+        # VALIDATE FIRST: nothing below - the identifier-status change included - happens without an established anchor
+        # and an NPI that anchored record delivered (CodeRabbit on #233 round 6: the status change used to run before
+        # the anchor was validated, for every caller).
+        curated = await _curated_for_anchor(db, entity_id, source_record_id, intake_id)
+        if curated is None:
+            logger.warning("NPI outcome %s for entity %s has no established delivery-record anchor (source_record_id=%s, "
+                           "intake_id=%s); no ledger row written, no identifier status changed",
+                           outcome, entity_id, source_record_id, intake_id)
+            return None
+        record = await db.get(m.RceSourceRecord, curated.source_record_id)
+        if npi_key(npi) and (record is None or npi_key(delivered_npi_of(record)) != npi_key(npi)):
+            # A finding ABOUT an NPI belongs only to a record that delivered that NPI (callers hold the registry
+            # entity's NPI, which another delivery may have supplied). An explicit finding reported with no NPI at all
+            # (post-promotion findings) is not compared; the NPPES-derived helpers below never report one without an NPI.
+            logger.warning("NPI outcome %s for entity %s is about an NPI the anchored record (%s) did not deliver; no "
+                           "ledger row written, no identifier status changed", outcome, entity_id,
+                           curated.source_record_id)
+            return None
+
+        # ONE form of the NPI from here on - the digits (`npi_key`): the identifier flip, the duplicate check and the
+        # stored `original_value` all use it, so a reported "1234567893.0" cannot write a row that claims a flip it did
+        # not make. A value with no digits ("n/a") is no NPI.
+        npi = npi_key(npi) or None
+        if outcome == NPI_DEACTIVATED and npi is None:
+            logger.warning("NPI_DEACTIVATED for entity %s was reported with no NPI; a deactivation is about an NPI - no "
+                           "ledger row written", entity_id)
+            return None
+
+        # The identifier-status change and the ledger row succeed or fail TOGETHER: a savepoint owned by the writer, so
+        # a caller without its own (arc_pipeline, review_service) cannot commit a flushed status change without its row.
+        issue = await _write_npi_outcome(db, entity_id=entity_id, npi=npi, outcome=outcome, curated=curated,
+                                         detail_text=detail_text, deactivation_date=deactivation_date)
+    if commit and issue is not None:
+        await db.commit()
+    return issue
+
+
+async def _write_npi_outcome(db, *, entity_id, npi, outcome, curated, detail_text, deactivation_date):
+    if outcome == NPI_DEACTIVATED:
+        await _mark_identifier_inactive(db, entity_id, npi)
 
     rule_id, severity, authority = NON_QUALITY_ISSUE_TYPES[outcome]
     existing = (await db.execute(
@@ -277,8 +409,6 @@ async def record_npi_outcome(db, *, entity_id, npi: Optional[str], outcome: str,
     )
     db.add(issue)
     await db.flush()
-    if commit:
-        await db.commit()
     logger.info("NPI verification outcome recorded",
                 extra={"entity_id": str(entity_id), "outcome": outcome,
                        "issue_code": issue.issue_code})
@@ -446,21 +576,27 @@ async def record_sam_extract_candidate(db, *, entity_id, npi: Optional[str],
     return issue
 
 
-async def record_from_sources(db, *, entity_id, sources: Dict[str, Any]
+async def record_from_sources(db, *, entity_id, sources: Dict[str, Any],
+                              source_record_id=None, intake_id=None
                               ) -> Optional[m.RceIssue]:
     """Convenience for `review_service`: read the probed NPPES source dict."""
     nppes = (sources or {}).get("nppes") or {}
     outcome = nppes.get("npi_outcome")
     if not outcome:
         return None
+    if not npi_key(nppes.get("lookup_identifier")):
+        return None          # an NPPES-derived outcome with no NPI is about nothing: never a ledger row with npi=None
     return await record_npi_outcome(
         db, entity_id=entity_id, npi=nppes.get("lookup_identifier"),
-        outcome=outcome, detail=nppes.get("npi_outcome_detail") or nppes.get("reason"))
+        outcome=outcome, detail=nppes.get("npi_outcome_detail") or nppes.get("reason"),
+        source_record_id=source_record_id, intake_id=intake_id)
 
 
 async def record_from_evidence(db, *, entity_id, npi: Optional[str],
-                               evidence: Dict[str, Any]) -> Optional[m.RceIssue]:
-    """Convenience for `arc_pipeline.verify_and_classify`."""
+                               evidence: Dict[str, Any],
+                               source_record_id=None, intake_id=None) -> Optional[m.RceIssue]:
+    """Convenience for the verification callers; they name the source record the evidence is about
+    (see `record_npi_outcome` - no anchor, no ledger write)."""
     derived = npi_outcome_from_evidence(evidence)
     if derived is None:
         return None
@@ -470,7 +606,10 @@ async def record_from_evidence(db, *, entity_id, npi: Optional[str],
     # record would get an NPI_VERIFICATION_UNAVAILABLE issue -- one technical
     # non-event manufactured into a finding per record (2026-10-04, found the
     # moment the dimension-name fix above made this function live).
-    if not npi and derived["outcome"] == NPI_VERIFICATION_UNAVAILABLE:
+    # The same holds for every NPPES-derived outcome (2026-11-16): with no NPI there is nothing the outcome is about,
+    # so no ledger row is written with npi=None (a both-blank NOT_FOUND used to produce one).
+    if not npi_key(npi):
         return None
     return await record_npi_outcome(db, entity_id=entity_id, npi=npi,
-                                    outcome=derived["outcome"], detail=derived)
+                                    outcome=derived["outcome"], detail=derived,
+                                    source_record_id=source_record_id, intake_id=intake_id)
