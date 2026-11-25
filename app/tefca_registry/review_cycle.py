@@ -172,6 +172,20 @@ NOT_REVIEWABLE_UNRESOLVED = "the delivered reference does not resolve to a regis
 NOT_REVIEWABLE_OTHER_ENTITY = ("the delivered reference resolves to a different registry entity than the sample "
                                "member; a review of that entity is not a review of this member")
 NOT_REVIEWABLE_NO_REVIEW = "verification produced no review for this member"
+NOT_REVIEWABLE_CHANGED = ("the delivered reference resolved to the sample member when it was checked and to a "
+                          "different registry entity when it was verified; the review written is not this "
+                          "member's and was not linked")
+
+#: Why a member was set aside, as far as this call can know.
+#:   identity  - decided from the delivery's own stored data by a deterministic rule (the reference resolves to
+#:               another entity, an NPI gate refuses the anchored record, the member has no delivered reference).
+#:               The same call tomorrow gives the same answer until the data is corrected.
+#:   transient - NOT established as an identity fact: the resolver returned nothing (it also returns nothing on a
+#:               database fault - `entity_resolution.resolve_from_db` never raises), verification produced no
+#:               review, or the resolution changed during the call. Another call may succeed.
+#: Only `identity` members can justify the stop signal.
+KIND_IDENTITY = "identity"
+KIND_TRANSIENT = "transient"
 
 
 async def _identity_precheck(db, intake_uuid, member_entity_id, ref) -> Optional[str]:
@@ -296,7 +310,8 @@ async def _create_review_cycle(
 
     Returns the plan, how many members are linked, how many remain, and the
     verification summary for this call. Call again until `remaining` is 0 or
-    `no_further_reviews_possible` is true.
+    `no_further_reviews_possible` is true (see the return value for exactly
+    when that is set; a walk continued from a cursor never sets it).
 
     MEMBERS THAT CANNOT BE REVIEWED FOR IDENTITY REASONS (2026-11-25). A member
     is linked only to a review of ITS OWN entity. A member whose delivered
@@ -442,11 +457,13 @@ async def _create_review_cycle(
         # able to expire what the walk is iterating over.
         members = [(member, member.id, member.entity_id) for member in unlinked]
         position = 0
+        started_at_front = True
         if after_member_id is not None:
             wanted = str(after_member_id)
             for index, (_member, member_id, _entity_id) in enumerate(members):
                 if str(member_id) == wanted:
                     position = index + 1          # continue behind it; an unknown id starts at the front
+                    started_at_front = False
                     break
         not_reviewable: List[Dict[str, Any]] = []
         limit_reached = False
@@ -454,8 +471,9 @@ async def _create_review_cycle(
         refs: Dict[Any, str] = {}
         refs_loaded_to = position
 
-        def _set_aside(entity_id, ref, reason):
-            not_reviewable.append({"entity_id": str(entity_id), "entity_ref": ref, "reason": reason})
+        def _set_aside(entity_id, ref, reason, kind):
+            not_reviewable.append({"entity_id": str(entity_id), "entity_ref": ref, "reason": reason,
+                                   "kind": kind})
 
         while linked < batch and position < len(members) and not limit_reached:
             # ── choose the next members to verify, walking past the ones that
@@ -474,11 +492,11 @@ async def _create_review_cycle(
                 last_examined = member_id
                 ref = refs.get(entity_id)
                 if not ref:
-                    _set_aside(entity_id, None, NOT_REVIEWABLE_NO_REFERENCE)
+                    _set_aside(entity_id, None, NOT_REVIEWABLE_NO_REFERENCE, KIND_IDENTITY)
                     continue
                 reason = await _identity_precheck(db, intake_uuid, entity_id, ref)
                 if reason:
-                    _set_aside(entity_id, ref, reason)
+                    _set_aside(entity_id, ref, reason, KIND_IDENTITY)
                     continue
                 step.append((member, entity_id, ref))
             if not step:
@@ -504,8 +522,13 @@ async def _create_review_cycle(
                 outcome = outcome_by_ref.get(ref)
                 review_id = outcome.get("review_id") if outcome else None
                 if not review_id:
-                    _set_aside(entity_id, ref, failure_by_ref.get(ref) or (
-                        NOT_REVIEWABLE_UNRESOLVED if ref in unresolved_refs else NOT_REVIEWABLE_NO_REVIEW))
+                    if failure_by_ref.get(ref):
+                        # The writer's own identity gate refused the record (its reason, verbatim).
+                        _set_aside(entity_id, ref, failure_by_ref[ref], KIND_IDENTITY)
+                    else:
+                        # Not resolved, or no review came back: not established as an identity fact.
+                        _set_aside(entity_id, ref, (NOT_REVIEWABLE_UNRESOLVED if ref in unresolved_refs
+                                                    else NOT_REVIEWABLE_NO_REVIEW), KIND_TRANSIENT)
                     continue
                 reviewed = outcome.get("entity_id")
                 if reviewed is not None and str(reviewed) != str(entity_id):
@@ -513,14 +536,14 @@ async def _create_review_cycle(
                     # resolution changed between the check above and the
                     # writer's own, or the writer resolved differently). It is
                     # never recorded as this member's review.
-                    _set_aside(entity_id, ref, NOT_REVIEWABLE_OTHER_ENTITY)
+                    _set_aside(entity_id, ref, NOT_REVIEWABLE_CHANGED, KIND_TRANSIENT)
                     not_reviewable[-1]["review_not_linked"] = review_id
                     continue
                 record = (await db.execute(
                     select(reg.ReviewRecord)
                     .where(reg.ReviewRecord.review_id == review_id))).scalars().first()
                 if record is None:
-                    _set_aside(entity_id, ref, NOT_REVIEWABLE_NO_REVIEW)
+                    _set_aside(entity_id, ref, NOT_REVIEWABLE_NO_REVIEW, KIND_TRANSIENT)
                     continue
                 record.sample_id = sample_id
                 # Replaced, not mutated: SQLAlchemy does not see an in-place
@@ -561,7 +584,7 @@ async def _create_review_cycle(
                           "not_reviewable_for_identity": len(not_reviewable),
                           "not_reviewable_reasons": sorted({n["reason"] for n in not_reviewable}),
                           "not_reviewable_members": [
-                              {"entity_id": n["entity_id"], "reason": n["reason"]}
+                              {"entity_id": n["entity_id"], "reason": n["reason"], "kind": n["kind"]}
                               for n in not_reviewable[:CYCLE_LIST_CAP]],
                           "lineage": verified.get("lineage"),
                           "evidence_not_stored_unanchored": verified["evidence_not_stored_unanchored_count"],
@@ -604,6 +627,7 @@ async def _create_review_cycle(
                            type(exc).__name__)
 
     remaining = max(total_unlinked - linked, 0)
+    identity_count = sum(1 for n in not_reviewable if n["kind"] == KIND_IDENTITY)
     return {
         "intake_id": str(intake_id),
         "review_cycle_id": str(review_cycle_id),
@@ -622,6 +646,11 @@ async def _create_review_cycle(
         # status; each is still counted in `remaining`.
         "not_reviewable_for_identity": not_reviewable,
         "not_reviewable_for_identity_count": len(not_reviewable),
+        # Split by `kind` (see KIND_IDENTITY / KIND_TRANSIENT): only the first is a settled identity fact.
+        "not_reviewable_identity_count": identity_count,
+        "not_reviewable_transient_count": len(not_reviewable) - identity_count,
+        # Whether this call's walk began at the first unlinked member (no cursor, or a cursor it did not find).
+        "walk_started_at_front": started_at_front,
         # Members this call did not get to (its `batch` was used up, or the
         # limit below was reached). Their reviewability is not known yet, so
         # this is the most that can still be reviewable; 0 when the walk
@@ -632,11 +661,18 @@ async def _create_review_cycle(
         "identity_check_limit_reached": limit_reached,
         "next_after_member_id": (str(last_examined)
                                  if limit_reached and last_examined is not None else None),
-        # THE STOP SIGNAL: the walk reached the end of the sample, nothing was
-        # linked, and members remain. Everything left is not reviewable as the
-        # data stands; calling again cannot change that. The sample is NOT
-        # complete.
-        "no_further_reviews_possible": bool(walk_exhausted and linked == 0 and remaining > 0),
+        # THE STOP SIGNAL. True only when ALL of this holds: the walk began at
+        # the FIRST unlinked member and reached the end in this one call (so
+        # no member was left unexamined in front of a cursor or behind the
+        # per-call limit), nothing was linked, members remain, and every one
+        # of them was set aside for a settled identity reason. A member set
+        # aside for a reason that may be transient (the reference did not
+        # resolve, no review came back, the resolution changed mid-call)
+        # keeps it false: calling again may review that member. The sample is
+        # NOT complete either way.
+        "no_further_reviews_possible": bool(
+            started_at_front and walk_exhausted and linked == 0 and remaining > 0
+            and identity_count == len(not_reviewable) == remaining),
         "verification": verified,
         "batch": batch,
         "note": ("The sample is frozen; asking again never redraws it. "

@@ -524,7 +524,8 @@ async def test_a_review_about_another_entity_is_never_linked_to_the_sample_membe
     assert await _reviews_of(db, member, elsewhere) == []
     assert result["linked_this_call"] == 0 and result["remaining"] == 1 and result["complete"] is False
     assert result["not_reviewable_for_identity"] == [{
-        "entity_id": str(member), "entity_ref": cycle.refs[0], "reason": rc.NOT_REVIEWABLE_OTHER_ENTITY}]
+        "entity_id": str(member), "entity_ref": cycle.refs[0], "reason": rc.NOT_REVIEWABLE_OTHER_ENTITY,
+        "kind": rc.KIND_IDENTITY}]
     assert result["no_further_reviews_possible"] is True
     assert cycle.asked == []                                                # decided before any source was asked
     assert await _evidence_count(db, member, elsewhere) == 0
@@ -549,7 +550,9 @@ async def test_a_review_the_writer_made_about_another_entity_is_still_not_linked
 
     assert await cycle.linked() == [None] and result["linked_this_call"] == 0 and result["complete"] is False
     listed = result["not_reviewable_for_identity"]
-    assert len(listed) == 1 and listed[0]["reason"] == rc.NOT_REVIEWABLE_OTHER_ENTITY
+    assert len(listed) == 1 and listed[0]["reason"] == rc.NOT_REVIEWABLE_CHANGED
+    # The resolution moved DURING the call: not a settled identity fact, so it is not a reason to stop calling.
+    assert listed[0]["kind"] == rc.KIND_TRANSIENT and result["no_further_reviews_possible"] is False
     review = (await _reviews_of(db, elsewhere))[0]
     assert listed[0]["review_not_linked"] == review.review_id and review.sample_id is None
 
@@ -610,6 +613,10 @@ async def test_every_identity_reason_is_reported_and_none_blocks(rolled_back_db,
 
     assert result["linked_this_call"] == 1 and (await cycle.linked())[4]
     reasons = {n["entity_id"]: n["reason"] for n in result["not_reviewable_for_identity"]}
+    kinds = {n["entity_id"]: n["kind"] for n in result["not_reviewable_for_identity"]}
+    assert kinds == {str(cycle.entities[0]): rc.KIND_IDENTITY, str(cycle.entities[1]): rc.KIND_TRANSIENT,
+                     str(cycle.entities[2]): rc.KIND_IDENTITY, str(cycle.entities[3]): rc.KIND_IDENTITY}
+    assert (result["not_reviewable_identity_count"], result["not_reviewable_transient_count"]) == (3, 1)
     assert reasons == {str(cycle.entities[0]): rc.NOT_REVIEWABLE_NO_REFERENCE,
                        str(cycle.entities[1]): rc.NOT_REVIEWABLE_UNRESOLVED,
                        str(cycle.entities[2]): rc.NOT_REVIEWABLE_OTHER_ENTITY,
@@ -928,3 +935,108 @@ def test_every_caller_of_the_extract_attempt_names_its_delivery():
     assert [c[0] for c in calls] == ["tefca_registry/rce/automated_verification.py"], calls
     assert "intake_id=intake_id" in calls[0][1]
     assert inspect.signature(av.record_sam_extract_attempt).parameters["intake_id"].default is inspect.Parameter.empty
+
+
+# ═══ F. the stop signal is only ever a settled answer (exact-head review of 7092030) ═════════════════════════════════
+
+async def test_a_walk_from_a_cursor_never_reports_the_stop_signal(rolled_back_db, monkeypatch):
+    """A stale or arbitrary cursor can sit BEHIND reviewable members. A call that starts at a cursor and reaches the
+    end with nothing linked has not examined what is in front of it, so it must not say "no further reviews
+    possible" - here two reviewable members sit in front of the cursor and only refused ones behind it."""
+    db = rolled_back_db
+    cycle = await _Cycle(db, monkeypatch).build("9.99.778.60", 4)
+    for ref in cycle.refs[2:]:
+        cycle.registry_npi[ref] = OTHER_NPI                                 # members 2 and 3 are refused
+    members = await _members(db, cycle.sample_id)
+    cursor = members[cycle.entities[1]].id                                  # an arbitrary cursor: behind 0 and 1
+
+    from_cursor = await cycle.call(batch=5, after_member_id=cursor)
+    assert from_cursor["walk_started_at_front"] is False and from_cursor["walk_exhausted"] is True
+    assert from_cursor["linked_this_call"] == 0 and from_cursor["not_reviewable_identity_count"] == 2
+    assert from_cursor["no_further_reviews_possible"] is False              # two reviewable members are in front
+    assert from_cursor["remaining"] == 4 and from_cursor["complete"] is False
+
+    unknown = await cycle.call(batch=5, after_member_id=uuid.uuid4())       # a cursor it cannot find: from the front
+    assert unknown["walk_started_at_front"] is True and unknown["linked_this_call"] == 2
+
+    front = await cycle.call(batch=5)                                       # now only the refused two are left
+    assert front["walk_started_at_front"] is True and front["no_further_reviews_possible"] is True
+    assert front["remaining"] == 2 and front["complete"] is False
+
+
+async def test_a_transient_failure_is_reported_but_is_never_the_stop_signal(rolled_back_db, monkeypatch):
+    """A resolver that returns nothing (it also returns nothing on a database fault) and a verification that
+    produced no review are NOT settled identity facts. The member is reported with kind `transient`, the stop signal
+    stays false although nothing was linked and the walk covered everything - and when the fault is gone the same
+    member is reviewed."""
+    db = rolled_back_db
+    cycle = await _Cycle(db, monkeypatch).build("9.99.778.61", 2)
+    member_ref, refused_ref = cycle.refs
+    cycle.registry_npi[refused_ref] = OTHER_NPI                             # member 1: a settled identity refusal
+    real_target = cycle.resolves_to[member_ref]
+    cycle.resolves_to[member_ref] = None                                    # member 0: the resolver answers nothing
+
+    faulty = await cycle.call(batch=5)
+    by_ref = {n["entity_ref"]: n for n in faulty["not_reviewable_for_identity"]}
+    assert by_ref[member_ref]["kind"] == rc.KIND_TRANSIENT and by_ref[member_ref]["reason"] == rc.NOT_REVIEWABLE_UNRESOLVED
+    assert by_ref[refused_ref]["kind"] == rc.KIND_IDENTITY
+    assert faulty["linked_this_call"] == 0 and faulty["walk_started_at_front"] and faulty["walk_exhausted"]
+    assert faulty["no_further_reviews_possible"] is False                   # one of the two may yet be reviewed
+
+    # "No review was produced" (the writer returned no outcome for the reference): transient as well.
+    cycle.resolves_to[member_ref] = real_target
+    real_verify = ap.verify_and_classify
+
+    async def _no_outcome(db_, refs, **kw):
+        return {"requested": len(refs), "verified": 0, "unresolved": [], "outcomes": [], "bucket_counts": {},
+                "resolution_failures": [], "lineage": {}, "execution_status": "NO_CASES_CREATED"}
+    monkeypatch.setattr(ap, "verify_and_classify", _no_outcome)
+    silent = await cycle.call(batch=5)
+    by_ref = {n["entity_ref"]: n for n in silent["not_reviewable_for_identity"]}
+    assert by_ref[member_ref]["kind"] == rc.KIND_TRANSIENT and by_ref[member_ref]["reason"] == rc.NOT_REVIEWABLE_NO_REVIEW
+    assert silent["no_further_reviews_possible"] is False
+
+    monkeypatch.setattr(ap, "verify_and_classify", real_verify)             # the fault is gone
+    healthy = await cycle.call(batch=5)
+    assert healthy["linked_this_call"] == 1 and (await cycle.linked())[0]
+    settled = await cycle.call(batch=5)
+    assert settled["not_reviewable_transient_count"] == 0 and settled["not_reviewable_identity_count"] == 1
+    assert settled["no_further_reviews_possible"] is True                   # only the settled refusal is left
+
+
+async def test_a_caller_that_never_sends_the_cursor_still_makes_progress_below_the_per_call_limit(
+        rolled_back_db, monkeypatch):
+    """The current frontend calls the review-cycle route repeatedly and never sends `after_member_id`. With fewer
+    not-reviewable members in front than the per-call limit (`MAX_NOT_REVIEWABLE_PER_CALL`, 2,000; forced to 3
+    here), every such call walks past them, reviews the next members, and ends with the stop signal.
+
+    THE HONEST LIMIT: when the limit or more not-reviewable members sit in front (2,000+ in production), a caller
+    that never sends the cursor examines the same members on every call and links nothing. It is told so -
+    `identity_check_limit_reached` is true, `next_after_member_id` is returned, `no_further_reviews_possible` stays
+    false - but it makes no progress until it sends the cursor. Nothing is linked wrongly and no source is asked;
+    the cycle simply does not advance for that caller."""
+    db = rolled_back_db
+    cycle = await _Cycle(db, monkeypatch).build("9.99.778.62", 5)
+    for ref in cycle.refs[:2]:
+        cycle.registry_npi[ref] = OTHER_NPI                                 # two in front: below the limit of 3
+    monkeypatch.setattr(rc, "MAX_NOT_REVIEWABLE_PER_CALL", 3)
+
+    calls = [await cycle.call(batch=1) for _ in range(4)]                   # no cursor, ever
+    assert [c["linked_this_call"] for c in calls] == [1, 1, 1, 0]
+    assert all(c["identity_check_limit_reached"] is False for c in calls)
+    assert [c["no_further_reviews_possible"] for c in calls] == [False, False, False, True]
+    assert all((await cycle.linked())[2:])
+    assert cycle.asked == cycle.refs[2:]
+
+    # At the limit: three not-reviewable members in front. Without the cursor: no progress, and it is said.
+    limited = await _Cycle(db, monkeypatch).build("9.99.778.63", 5)
+    for ref in limited.refs[:3]:
+        limited.registry_npi[ref] = OTHER_NPI
+    stuck = [await limited.call(batch=1) for _ in range(3)]
+    for call in stuck:
+        assert call["linked_this_call"] == 0 and call["identity_check_limit_reached"] is True
+        assert call["next_after_member_id"] and call["no_further_reviews_possible"] is False
+        assert call["complete"] is False
+    assert limited.asked == []                                              # and no source was asked meanwhile
+    moved = await limited.call(batch=1, after_member_id=stuck[-1]["next_after_member_id"])
+    assert moved["linked_this_call"] == 1                                   # the cursor is what advances it
