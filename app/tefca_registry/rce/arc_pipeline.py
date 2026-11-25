@@ -31,6 +31,7 @@ no Medicare dimension to fail.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import uuid
 from datetime import date, datetime
@@ -728,6 +729,37 @@ _GATHER_CHUNK_SIZE = 1000
 # live government APIs that were not asked to absorb 24,589 simultaneous callers.
 
 
+#: reference -> the entity `verify_and_classify` already resolved for the chunk it is working on (or None when the
+#: reference did not resolve). Set only around the gather call, so `_resolve_and_gather_evidence` builds evidence
+#: for THE SAME entity object the identity gates were applied to instead of resolving the reference a second time.
+_PRE_RESOLVED: "contextvars.ContextVar[Optional[Dict[str, Any]]]" = contextvars.ContextVar(
+    "arc_pipeline_pre_resolved", default=None)
+
+
+async def _resolve_one(ref: str) -> Optional[Dict[str, Any]]:
+    """Resolve one reference exactly as the gather phase does (own scratch session; none for the fixture
+    resolver). Local registry reads only - no source is asked."""
+    from app.Tefca.entity_resolution import resolve_entity, resolver_source, SOURCE_MOCK
+    from app.core.database import async_session_maker
+
+    if resolver_source() == SOURCE_MOCK:
+        return await resolve_entity(None, ref)
+    async with async_session_maker() as scratch_db:
+        return await resolve_entity(scratch_db, ref)
+
+
+async def _resolve_all(entity_refs: List[str]) -> Dict[str, Any]:
+    """reference -> resolved entity (or None), bounded-concurrently, each distinct reference once."""
+    semaphore = asyncio.Semaphore(_EVIDENCE_GATHER_CONCURRENCY)
+    distinct = list(dict.fromkeys(entity_refs))
+
+    async def _bounded(ref: str):
+        async with semaphore:
+            return await _resolve_one(ref)
+
+    return dict(zip(distinct, await asyncio.gather(*(_bounded(ref) for ref in distinct))))
+
+
 async def _resolve_and_gather_evidence(ref: str,
                                        timing_log: Optional[str] = None) -> Dict[str, Any]:
     """Phase 1 of `verify_and_classify`: resolve one entity and build its
@@ -763,8 +795,10 @@ async def _resolve_and_gather_evidence(ref: str,
             _f.write(_j.dumps({"ref": ref, "phase": phase,
                               "t": _tt.perf_counter() - _t_start}) + "\n")
 
+    _pre = _PRE_RESOLVED.get()
+    _have_pre = _pre is not None and ref in _pre
     if resolver_source() == SOURCE_MOCK:
-        entity = await resolve_entity(None, ref)
+        entity = _pre[ref] if _have_pre else await resolve_entity(None, ref)
         if entity is None:
             return {"ref": ref, "entity": None, "evidence": None}
         async with async_session_maker() as scratch_db:
@@ -775,7 +809,7 @@ async def _resolve_and_gather_evidence(ref: str,
 
     await _log("start")
     async with async_session_maker() as scratch_db:
-        entity = await resolve_entity(scratch_db, ref)
+        entity = _pre[ref] if _have_pre else await resolve_entity(scratch_db, ref)
         if entity is None:
             return {"ref": ref, "entity": None, "evidence": None}
         service = EvidenceService(local_store=make_local_store(scratch_db))
@@ -855,6 +889,41 @@ def _source_anchor(anchors: Dict[str, List[Any]], ref: str, entity_uuid):
     return source_record_id, LINEAGE_ANCHORED
 
 
+#: The two refusals of `anchored_npi_refusal`, verbatim as `verify_and_classify` has always reported them.
+REFUSAL_SUBMITTED_NPI_DIFFERS = ("submitted NPI differs from the identifier used by source probes; "
+                                 "no record classification written")
+REFUSAL_ENROLLMENT_PROBE_NPI = ("the CMS enrollment and revocation probes used an NPI this record did not "
+                                "submit; no record classification written")
+
+
+def anchored_npi_refusal(entity, selected) -> Optional[str]:
+    """Why an ANCHORED delivered record (`selected`) is refused on identity, or None.
+
+    The two NPI gates `verify_and_classify` applies, factored out unchanged (2026-11-25) so the review cycle can
+    apply THE SAME rule before it asks the sources about a sample member, instead of gathering evidence and
+    discarding it on every call. Reads only its arguments; `selected` None (no anchor) is never refused here.
+
+    1. NPPES / LEIE / SAM key on the registered identifier: it must be exactly the NPI the record delivered.
+    2. ONE NPI for every probe (2026-11-24): the CMS enrollment and revocation probes key on the entity's RCE NPI
+       FIRST (evidence_service.build_evidence: `rce_npi(entity) or identifier`), and another delivery of a shared
+       entity can have set that value. If it is not the NPI this record delivered (compared with `npi_key`, the
+       rule `verification_findings.validated_delivery_context` applies), the enrollment evidence describes a
+       different NPI."""
+    if selected is None:
+        return None
+    from app.Tefca import rce_fields as _rce_fields_gate
+    from app.tefca_registry.rce.verification_findings import npi_key as _npi_key
+    delivered = selected.parsed or {}
+    submitted_npi = str(delivered.get("NPI", selected.npi) or "").strip()
+    registered_npi = _entity_npi(entity)
+    if (registered_npi or "") != submitted_npi:
+        return REFUSAL_SUBMITTED_NPI_DIFFERS
+    enrollment_probe_npi = _rce_fields_gate.rce_npi(entity) or registered_npi or ""
+    if _npi_key(enrollment_probe_npi) != _npi_key(submitted_npi):
+        return REFUSAL_ENROLLMENT_PROBE_NPI
+    return None
+
+
 async def verify_and_classify(
     db,
     entity_refs: List[str],
@@ -922,6 +991,8 @@ async def verify_and_classify(
     tiers: Dict[int, int] = {}
     unresolved: List[str] = []
     resolution_failures: List[Dict[str, str]] = []
+    #: References refused on identity BEFORE any source was asked about them (also in `unresolved`).
+    refused_before_gather: List[str] = []
     #: References reviewed WITHOUT their evidence being appended to the entity evidence store,
     #: because the named delivery does not anchor them to one delivered record (reported, never silent).
     evidence_not_stored: List[Dict[str, str]] = []
@@ -972,9 +1043,36 @@ async def verify_and_classify(
         chunk_refs = entity_refs[_chunk_start:_chunk_start + _GATHER_CHUNK_SIZE]
 
         _dbg_t0 = _dbgtime.perf_counter()
-        gathered = await _gather_all_evidence(chunk_refs, timing_log=_dbg_path)
-        _anchors = await _source_anchors(
-            db, _intake_uuid, [g["ref"] for g in gathered if g["entity"] is not None])
+        # IDENTITY BEFORE EVIDENCE (2026-11-25). Resolve first (local reads), apply the NPI gates to every
+        # reference that resolves to a registry entity and is anchored to one delivered record, and ask the
+        # sources ONLY about the references that pass. A refused record used to have its evidence gathered and
+        # then discarded - on every call of a review cycle, for as long as it stayed unlinked. The gates are the
+        # same function the loop below still applies (`anchored_npi_refusal`), to the same entity object and the
+        # same delivered record, so what is refused, what is reported and what an accepted record receives are
+        # unchanged; only the order is. A reference whose refusal cannot be known beforehand (it does not resolve
+        # here, or resolves without a registry identity) goes to the gatherer exactly as before.
+        _pre = await _resolve_all(chunk_refs)
+        _anchors = await _source_anchors(db, _intake_uuid, list(chunk_refs))
+        _refused_before: Dict[str, str] = {}
+        for _ref, _entity in _pre.items():
+            _eid = (_entity or {}).get("_registry_entity_id")
+            if _eid is None:
+                continue
+            _sid, _ = _source_anchor(_anchors, _ref, _eid)
+            _selected = await db.get(m.RceSourceRecord, _sid) if _sid else None
+            _reason = anchored_npi_refusal(_entity, _selected)
+            if _reason:
+                _refused_before[_ref] = _reason
+        _token = _PRE_RESOLVED.set(_pre)
+        try:
+            _asked = iter(await _gather_all_evidence(
+                [r for r in chunk_refs if r not in _refused_before], timing_log=_dbg_path))
+        finally:
+            _PRE_RESOLVED.reset(_token)
+        # Back in request order; a refused reference carries its entity and NO evidence (none was gathered).
+        gathered = [({"ref": r, "entity": _pre[r], "evidence": None} if r in _refused_before else next(_asked))
+                    for r in chunk_refs]
+        refused_before_gather.extend(r for r in chunk_refs if r in _refused_before)
         _dbg_gather_s = _dbgtime.perf_counter() - _dbg_t0
         if _dbg_path:
             with open(_dbg_path, "a", encoding="utf-8") as _f:
@@ -999,27 +1097,12 @@ async def verify_and_classify(
             delivered = selected.parsed or {} if selected is not None else None
             submitted_npi = ((str(delivered.get("NPI", selected.npi) or "").strip())
                              if selected is not None else (_entity_npi(entity) or ""))
-            registered_npi = _entity_npi(entity)
-            if selected is not None and (registered_npi or "") != submitted_npi:
+            # The two NPI gates (see `anchored_npi_refusal`): a refused record gets nothing classified or persisted.
+            _npi_refusal = anchored_npi_refusal(entity, selected)
+            if _npi_refusal:
                 unresolved.append(ref)
-                resolution_failures.append({"entity_ref": ref,
-                    "reason": "submitted NPI differs from the identifier used by source probes; no record classification written"})
+                resolution_failures.append({"entity_ref": ref, "reason": _npi_refusal})
                 continue
-            # ONE NPI for every probe (2026-11-24). NPPES / LEIE / SAM key on the registered identifier checked
-            # above, but the CMS enrollment and revocation probes key on the entity's RCE NPI FIRST
-            # (evidence_service.build_evidence: `rce_npi(entity) or identifier`), and another delivery of a shared
-            # entity can have set that value. If it is not the NPI this record delivered, the enrollment evidence
-            # describes a different NPI: nothing is classified or persisted for this record. Compared with
-            # `npi_key`, the rule `verification_findings.validated_delivery_context` applies to coverage and rechecks.
-            if selected is not None:
-                from app.Tefca import rce_fields as _rce_fields_gate
-                from app.tefca_registry.rce.verification_findings import npi_key as _npi_key
-                enrollment_probe_npi = _rce_fields_gate.rce_npi(entity) or registered_npi or ""
-                if _npi_key(enrollment_probe_npi) != _npi_key(submitted_npi):
-                    unresolved.append(ref)
-                    resolution_failures.append({"entity_ref": ref,
-                        "reason": "the CMS enrollment and revocation probes used an NPI this record did not submit; no record classification written"})
-                    continue
 
             name_screens_withheld: List[Dict[str, str]] = []
             if selected is not None and not submitted_npi:
@@ -1324,6 +1407,9 @@ async def verify_and_classify(
         # Reviews whose evidence was kept in the review's own snapshot only (see the comment at the
         # evidence write): the named delivery does not anchor the reference to one delivered record.
         "evidence_not_stored_unanchored": evidence_not_stored,
+        # References refused on identity before any source was asked (each is also in `unresolved`, with its
+        # reason in `resolution_failures`).
+        "refused_before_gather": refused_before_gather,
         "separation_note": (
             "Verification result (D1-D6), ARC determination (B1-B4) and review "
             "tier (T1-T3) are stored separately and are not collapsed. A B1 "

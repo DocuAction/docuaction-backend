@@ -9,9 +9,9 @@ that November execution cannot invoke them. ... Test that identity refusals do n
      the review it creates (bucket, rule, tier, status, linkage) is byte-for-byte what it was;
   C. termination: the manual coverage route followed by a client, the scheduler tick across many ticks and across a
      process restart, and the controlled-recheck batch;
-  D. two review-cycle behaviours that are REPRODUCED here and deliberately NOT changed, because changing them
-     decides what a sample member is and when a sample is complete (a methodology decision). The tests pin today's
-     behaviour so it cannot be forgotten or changed by accident; each says what an owner decision would invert.
+  D. the review cycle: a sample member is linked only to a review of its own entity, and a member that cannot be
+     reviewed for identity reasons is reported and walked past - it blocks nobody, the sources are not asked about
+     it again, it gets no stored status, and the sample is never reported complete because of it.
 
 Synthetic data only; every source call is mocked.
 """
@@ -402,7 +402,11 @@ async def test_a_recheck_job_never_revisits_a_refused_item_and_ends(rolled_back_
     assert await _evidence_count(db, *entities) == 0
 
 
-# ═══ D. the review cycle: reproduced, NOT changed (owner / methodology decisions) ════════════════════════════════════
+# ═══ D. the review cycle: a member is linked only to a review of itself, and a refused member blocks nobody ═════════
+#
+# Both defects were reproduced on 2026-11-25 (commit 6480196 pinned them as they stood). They are fixed WITHOUT a
+# stored status and without changing what `remaining` or `complete` mean: a member that cannot be reviewed for
+# identity reasons is reported and walked past; it stays unreviewed, and the sample stays incomplete.
 
 def _stub_cycle_collaborators(monkeypatch, sample_id, members):
     import app.tefca_registry.processing_controls as pc
@@ -445,80 +449,482 @@ async def _members(db, sample_id):
 _CYCLE_USER = SimpleNamespace(id=None, email="cycle@synthetic-test.docuaction.invalid")
 
 
-async def test_reproduced_a_review_about_another_entity_is_linked_to_the_sample_member(rolled_back_db, monkeypatch):
-    """REPRODUCED 2026-11-25, NOT FIXED. The sample member is entity `linked` (what the delivery's curated record
-    links). Its delivered reference resolves, globally, to entity `resolved`. The bulk writer reviews `resolved`
-    (lineage `entity_mismatch`, unanchored) and `review_cycle` then links that review to the member by REFERENCE
-    (`ref_to_entity`, review_cycle.py), so the sample member `linked` is recorded as reviewed by a ReviewRecord whose
-    entity is `resolved`.
+class _Cycle:
+    """One synthetic delivery with a drawn sample, and the two edges a review cycle has: how a delivered reference
+    resolves (`resolves_to`, `registry_npi`) and the source gatherer (counted in `asked`). Nothing here reaches a
+    source: the gatherer is replaced and the resolver is replaced."""
 
-    Not changed here because every repair decides what the sample member's review IS: refuse the link (the member
-    stays unlinked, the cycle never completes - see the next test), or refuse the review (one fewer ReviewRecord).
-    Both change which sample members carry a review. When the owner decides, this test is inverted."""
+    def __init__(self, db, monkeypatch):
+        self.db, self.monkeypatch = db, monkeypatch
+        self.asked: list = []
+        self.resolves_to: dict = {}
+        self.registry_npi: dict = {}
+
+    async def build(self, arc, n, *, delivered_npi=NPI):
+        self.rows = make_rows(n, arc=arc)
+        for r in self.rows:
+            r["NPI"] = delivered_npi
+        self.intake_id, _ = await seed_intake(self.db, self.rows, with_job=False)
+        await _run(self.db, self.intake_id)
+        self.recs = await _records(self.db, self.intake_id)
+        self.entities = sorted([await _entity(self.db, f"m{i}") for i in range(n)])   # selection order
+        self.refs = [r["id"] for r in self.rows]
+        for i, ent in enumerate(self.entities):
+            await _curate(self.db, self.intake_id, self.recs[i + 1], ent)
+            self.resolves_to[self.refs[i]] = ent
+            self.registry_npi[self.refs[i]] = delivered_npi
+        self.sample_id = await _sample(self.db, *self.entities)
+        _stub_cycle_collaborators(self.monkeypatch, self.sample_id, n)
+
+        def _shape(ref):
+            ent = self.resolves_to.get(ref)
+            if ent is None:
+                return None
+            npi = self.registry_npi.get(ref)
+            return {"id": str(ent), "name": f"entity {ref}", "_registry_entity_id": ent, "_rce": {},
+                    "identifier": ([{"system": NPI_SYSTEM, "value": npi}] if npi else []),
+                    "_resolution_source": "test"}
+
+        async def _resolve(_db, ref):
+            return _shape(ref)
+
+        async def _gather_all(refs, timing_log=None):
+            self.asked.extend(refs)                                   # every reference the SOURCES were asked about
+            return [{"ref": ref, "entity": _shape(ref), "evidence": (_evidence() if _shape(ref) else None)}
+                    for ref in refs]
+
+        self.monkeypatch.setattr("app.Tefca.entity_resolution.resolve_entity", _resolve)
+        self.monkeypatch.setattr(ap, "_gather_all_evidence", _gather_all)
+        return self
+
+    async def call(self, **kw):
+        return await rc._create_review_cycle(self.db, self.intake_id, user=_CYCLE_USER, **kw)
+
+    async def linked(self):
+        members = await _members(self.db, self.sample_id)
+        return [members[e].review_id for e in self.entities]
+
+
+async def test_a_review_about_another_entity_is_never_linked_to_the_sample_member(rolled_back_db, monkeypatch):
+    """BEFORE (reproduced, 6480196): the member's delivered reference resolves, globally, to another entity; the
+    bulk writer reviewed THAT entity and the cycle linked the review to the member by reference, so the sample member
+    was recorded as reviewed - and the cycle reported `complete: true` - on a ReviewRecord about a different entity.
+    AFTER: the member is not linked and not marked; it is reported with the reason, the sources are not asked about
+    it, and the sample is NOT complete."""
     db = rolled_back_db
-    rows = make_rows(1, arc="9.99.778.40")
-    intake_id, _ = await seed_intake(db, rows, with_job=False)
-    await _run(db, intake_id)
-    rec = (await _records(db, intake_id))[1]
-    linked, resolved = await _entity(db, "member"), await _entity(db, "elsewhere")
-    await _curate(db, intake_id, rec, linked)
-    sample_id = await _sample(db, linked)
-    _stub_cycle_collaborators(monkeypatch, sample_id, 1)
-    _gather(monkeypatch, {rows[0]["id"]: resolved})
+    cycle = await _Cycle(db, monkeypatch).build("9.99.778.40", 1)
+    member = cycle.entities[0]
+    elsewhere = await _entity(db, "elsewhere")
+    cycle.resolves_to[cycle.refs[0]] = elsewhere
 
-    result = await rc._create_review_cycle(db, intake_id, user=_CYCLE_USER)
+    result = await cycle.call()
 
-    assert result["linked_this_call"] == 1 and result["remaining"] == 0 and result["complete"] is True
-    member = (await _members(db, sample_id))[linked]
-    review = (await db.execute(select(reg.ReviewRecord).where(
-        reg.ReviewRecord.review_id == member.review_id))).scalars().one()
-    assert review.entity_id == resolved and review.entity_id != member.entity_id     # the defect, as it stands
-    assert review.source_record_id is None                                           # and it is unanchored
-    assert await _reviews_of(db, linked) == []                                       # the member itself has none
-    assert await _evidence_count(db, linked, resolved) == 0     # (B) at least no evidence is stored for either now
+    assert await cycle.linked() == [None]                                   # never linked
+    assert (await _members(db, cycle.sample_id))[member].review_status == "pending"     # and given no status
+    assert await _reviews_of(db, member, elsewhere) == []
+    assert result["linked_this_call"] == 0 and result["remaining"] == 1 and result["complete"] is False
+    assert result["not_reviewable_for_identity"] == [{
+        "entity_id": str(member), "entity_ref": cycle.refs[0], "reason": rc.NOT_REVIEWABLE_OTHER_ENTITY}]
+    assert result["no_further_reviews_possible"] is True
+    assert cycle.asked == []                                                # decided before any source was asked
+    assert await _evidence_count(db, member, elsewhere) == 0
 
 
-async def test_reproduced_an_identity_refused_sample_member_is_retried_on_every_call_and_can_stall_the_cycle(
-        rolled_back_db, monkeypatch):
-    """REPRODUCED 2026-11-25, NOT FIXED: the one identity-refusal path that does NOT converge. The bulk writer
-    refuses an anchored record whose delivered NPI is not the NPI the probes used (arc_pipeline, "submitted NPI
-    differs ..."): no review is written, so the sample member is never linked, so `_unlinked_members` returns it on
-    EVERY call - and the sources are asked about it again each time, because evidence is gathered before the
-    refusal. With `batch` such members in front, no later member is ever reached.
-
-    Bounded per call (`batch`), unbounded across calls: `remaining` never reaches 0 and nothing in the response
-    tells the caller to stop. Not changed here: making it converge means giving a sample member a terminal
-    "not reviewable" status, which changes sample completion - the same decision D-15 (`skipped_held`) put behind
-    an owner-approved flag. When the owner decides, this test is inverted."""
+async def test_a_review_the_writer_made_about_another_entity_is_still_not_linked(rolled_back_db, monkeypatch):
+    """Second line of defence: the check before gathering saw the member's own entity, but the writer resolved the
+    reference to another one (the registry changed in between). The review it wrote exists; it is not this member's
+    and is never linked to it."""
     db = rolled_back_db
-    rows = make_rows(2, arc="9.99.778.41")
-    for r in rows:
-        r["NPI"] = NPI
+    cycle = await _Cycle(db, monkeypatch).build("9.99.778.42", 1)
+    member = cycle.entities[0]
+    elsewhere = await _entity(db, "elsewhere2")
+    real_gather = ap._gather_all_evidence
+
+    async def _changed_underneath(refs, timing_log=None):
+        cycle.resolves_to[cycle.refs[0]] = elsewhere                        # ... after the pre-check ran
+        return await real_gather(refs, timing_log=timing_log)
+    monkeypatch.setattr(ap, "_gather_all_evidence", _changed_underneath)
+
+    result = await cycle.call()
+
+    assert await cycle.linked() == [None] and result["linked_this_call"] == 0 and result["complete"] is False
+    listed = result["not_reviewable_for_identity"]
+    assert len(listed) == 1 and listed[0]["reason"] == rc.NOT_REVIEWABLE_OTHER_ENTITY
+    review = (await _reviews_of(db, elsewhere))[0]
+    assert listed[0]["review_not_linked"] == review.review_id and review.sample_id is None
+
+
+async def test_identity_refused_members_in_front_do_not_block_the_members_behind_them(rolled_back_db, monkeypatch):
+    """BEFORE (reproduced, 6480196): a member whose anchored record the NPI gate refuses was never linked, was
+    selected again on every call, had the sources asked about it every time, and with `batch` such members in front
+    no later member was ever reviewed. AFTER: three refused members in front, batch=1 - the first call already
+    reviews a member behind them, the next call reviews the other, and the sources are never asked about a refused
+    member, however often the cycle is called."""
+    db = rolled_back_db
+    cycle = await _Cycle(db, monkeypatch).build("9.99.778.41", 5)
+    for ref in cycle.refs[:3]:
+        cycle.registry_npi[ref] = OTHER_NPI                                 # the probes would use an NPI not delivered
+
+    first = await cycle.call(batch=1)
+    assert first["linked_this_call"] == 1 and first["remaining"] == 4 and first["complete"] is False
+    assert [n["entity_ref"] for n in first["not_reviewable_for_identity"]] == cycle.refs[:3]
+    assert {n["reason"] for n in first["not_reviewable_for_identity"]} == {ap.REFUSAL_SUBMITTED_NPI_DIFFERS}
+    assert first["members_not_examined"] == 1 and first["no_further_reviews_possible"] is False
+
+    second = await cycle.call(batch=1)
+    assert second["linked_this_call"] == 1 and second["remaining"] == 3
+    assert second["walk_exhausted"] is True and second["no_further_reviews_possible"] is False
+
+    later = [await cycle.call(batch=1) for _ in range(4)]                   # a caller that keeps calling
+    for result in later:
+        assert result["linked_this_call"] == 0 and result["remaining"] == 3
+        assert result["complete"] is False                                  # NEVER complete: three are unreviewed
+        assert result["not_reviewable_for_identity_count"] == 3
+        assert result["reviewable_remaining_at_most"] == 0 and result["no_further_reviews_possible"] is True
+
+    linked = await cycle.linked()
+    assert linked[:3] == [None, None, None] and all(linked[3:])
+    assert cycle.asked == cycle.refs[3:]                 # six calls: each valid member asked once, a refused one never
+    members = await _members(db, cycle.sample_id)
+    assert {members[e].review_status for e in cycle.entities[:3]} == {"pending"}        # no stored status
+    assert await _reviews_of(db, *cycle.entities[:3]) == []
+
+
+async def test_every_identity_reason_is_reported_and_none_blocks(rolled_back_db, monkeypatch):
+    """One member per reason, in front of a valid one: no delivered reference, a reference that does not resolve,
+    one that resolves elsewhere, an NPI the record did not deliver. All four are reported with their own reason and
+    the valid member behind them is reviewed in the same call."""
+    db = rolled_back_db
+    cycle = await _Cycle(db, monkeypatch).build("9.99.778.43", 5)
+    elsewhere = await _entity(db, "elsewhere3")
+    curated = (await db.execute(select(m.RceCuratedRecord).where(
+        m.RceCuratedRecord.source_intake_id == cycle.intake_id,
+        m.RceCuratedRecord.canonical_entity_id == cycle.entities[0]))).scalars().one()
+    curated.rce_org_oid = None                                              # member 0: no delivered reference
+    await db.flush()
+    cycle.resolves_to[cycle.refs[1]] = None                                 # member 1: does not resolve
+    cycle.resolves_to[cycle.refs[2]] = elsewhere                            # member 2: resolves elsewhere
+    cycle.registry_npi[cycle.refs[3]] = OTHER_NPI                           # member 3: NPI not delivered
+
+    result = await cycle.call(batch=1)
+
+    assert result["linked_this_call"] == 1 and (await cycle.linked())[4]
+    reasons = {n["entity_id"]: n["reason"] for n in result["not_reviewable_for_identity"]}
+    assert reasons == {str(cycle.entities[0]): rc.NOT_REVIEWABLE_NO_REFERENCE,
+                       str(cycle.entities[1]): rc.NOT_REVIEWABLE_UNRESOLVED,
+                       str(cycle.entities[2]): rc.NOT_REVIEWABLE_OTHER_ENTITY,
+                       str(cycle.entities[3]): ap.REFUSAL_SUBMITTED_NPI_DIFFERS}
+    assert result["remaining"] == 4 and result["complete"] is False
+    # Only the unresolvable reference reached the writer (it cannot be told apart beforehand), and resolving it is
+    # where the writer stops: no source is asked about a reference with no entity.
+    assert cycle.asked == [cycle.refs[1], cycle.refs[4]]
+
+
+async def test_the_walk_is_bounded_and_resumable(rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    cycle = await _Cycle(db, monkeypatch).build("9.99.778.44", 4)
+    for ref in cycle.refs[:3]:
+        cycle.registry_npi[ref] = OTHER_NPI
+    monkeypatch.setattr(rc, "MAX_NOT_REVIEWABLE_PER_CALL", 2)
+
+    capped = await cycle.call(batch=1)
+    assert capped["identity_check_limit_reached"] is True and capped["not_reviewable_for_identity_count"] == 2
+    assert capped["linked_this_call"] == 0 and capped["no_further_reviews_possible"] is False
+    assert capped["members_not_examined"] == 2 and capped["next_after_member_id"]
+
+    resumed = await cycle.call(batch=1, after_member_id=capped["next_after_member_id"])
+    assert resumed["linked_this_call"] == 1 and resumed["not_reviewable_for_identity_count"] == 1
+    assert resumed["walk_exhausted"] is True and resumed["remaining"] == 3 and resumed["complete"] is False
+    assert cycle.asked == [cycle.refs[3]]
+
+
+async def test_a_correctly_identified_members_review_is_what_it_was_before(rolled_back_db, monkeypatch):
+    """An anchored, correctly identified member: the review the cycle links is field-for-field the review the bulk
+    writer produces for the same reference on its own (the writer's classification path is untouched; the NPI gates
+    were only given a name), and the cycle's bookkeeping on it is exactly the old one."""
+    db = rolled_back_db
+    cycle = await _Cycle(db, monkeypatch).build("9.99.778.45", 2)
+    ref, member = cycle.refs[0], cycle.entities[0]
+
+    direct = (await ap.verify_and_classify(db, [ref], intake_id=cycle.intake_id))["outcomes"][0]
+    result = await cycle.call(batch=2)
+
+    assert result["linked_this_call"] == 2 and result["remaining"] == 0 and result["complete"] is True
+    assert result["not_reviewable_for_identity"] == [] and result["no_further_reviews_possible"] is False
+    assert result["verification"]["requested"] == 2 and result["verification"]["verified"] == 2
+    assert result["verification"]["unresolved"] == [] and result["verification"]["execution_status"] == "COMPLETED"
+    members = await _members(db, cycle.sample_id)
+    assert members[member].review_status == "in_review"
+    linked = (await db.execute(select(reg.ReviewRecord).where(
+        reg.ReviewRecord.review_id == members[member].review_id))).scalars().one()
+    baseline = (await db.execute(select(reg.ReviewRecord).where(
+        reg.ReviewRecord.review_id == direct["review_id"]))).scalars().one()
+    for field in ("entity_id", "source_record_id", "classification_bucket", "classification_rule",
+                  "classification_rule_version", "classification_rationale"):
+        assert getattr(linked, field) == getattr(baseline, field), field
+    assert linked.entity_id == member and linked.source_record_id == cycle.recs[1].id      # anchored to its record
+    ours = {k: v for k, v in linked.verification_results.items()
+            if k not in ("source_intake_id", "queue_source", "sample_id")}
+    assert ours == baseline.verification_results                            # same snapshot, same classifier input
+    assert linked.sample_id == cycle.sample_id and baseline.sample_id is None
+    assert linked.verification_results["queue_source"] == rc.QUEUE_SOURCE
+    assert cycle.asked == [ref, ref, cycle.refs[1]]                         # the direct run, then one ask per member
+
+
+def test_the_writers_npi_gates_are_the_same_rule_under_a_name():
+    """`anchored_npi_refusal` is the two gates `verify_and_classify` always applied, with the same refusal texts."""
+    record = SimpleNamespace(parsed={"NPI": NPI}, npi=NPI)
+    fhir = lambda npi: {"identifier": [{"system": NPI_SYSTEM, "value": npi}], "_rce": {}}   # noqa: E731
+    assert ap.anchored_npi_refusal(fhir(NPI), None) is None                 # no anchor: never refused here
+    assert ap.anchored_npi_refusal(fhir(NPI), record) is None
+    assert ap.anchored_npi_refusal(fhir(OTHER_NPI), record) == ap.REFUSAL_SUBMITTED_NPI_DIFFERS
+    assert ap.anchored_npi_refusal({"identifier": [], "_rce": {}}, record) == ap.REFUSAL_SUBMITTED_NPI_DIFFERS
+    assert ap.anchored_npi_refusal({**fhir(NPI), "_rce": {"NPI": OTHER_NPI}}, record) == ap.REFUSAL_ENROLLMENT_PROBE_NPI
+    blank = SimpleNamespace(parsed={"NPI": ""}, npi=None)
+    assert ap.anchored_npi_refusal({"identifier": [], "_rce": {}}, blank) is None
+    assert "submitted NPI differs from the identifier used by source probes" in ap.REFUSAL_SUBMITTED_NPI_DIFFERS
+
+
+# ═══ E. review findings on #245 (R1, R3, R4, R5) ═════════════════════════════════════════════════════════════════════
+
+async def test_the_writer_refuses_on_identity_before_it_asks_any_source(rolled_back_db, monkeypatch):
+    """R1. The NPI gates run BEFORE evidence is gathered: a refused record costs no source call. What is refused and
+    how it is reported is exactly what it was (same `unresolved`, same `resolution_failures` text, same lineage
+    count, no review, nothing stored); the accepted record beside it is asked about once and reviewed."""
+    db = rolled_back_db
+    cycle = await _Cycle(db, monkeypatch).build("9.99.778.50", 3)
+    cycle.registry_npi[cycle.refs[0]] = OTHER_NPI                           # gate 1: registered NPI != delivered NPI
+    real_resolve = cycle.monkeypatch                                        # (kept for readability; see below)
+    shapes = {}
+
+    async def _resolve(_db, ref):
+        ent = cycle.resolves_to[ref]
+        shape = {"id": str(ent), "name": f"entity {ref}", "_registry_entity_id": ent, "_resolution_source": "test",
+                 "identifier": [{"system": NPI_SYSTEM, "value": cycle.registry_npi[ref]}], "_rce": {}}
+        if ref == cycle.refs[1]:
+            shape["_rce"] = {"NPI": OTHER_NPI}                              # gate 2: the CMS probes' NPI differs
+        shapes[ref] = shape
+        return shape
+    monkeypatch.setattr("app.Tefca.entity_resolution.resolve_entity", _resolve)
+    del real_resolve
+
+    res = await ap.verify_and_classify(db, list(cycle.refs), intake_id=cycle.intake_id)
+
+    assert cycle.asked == [cycle.refs[2]]                                   # the sources heard about ONE record
+    assert res["refused_before_gather"] == cycle.refs[:2]
+    assert res["unresolved"] == cycle.refs[:2] and res["verified"] == 1
+    assert res["resolution_failures"] == [
+        {"entity_ref": cycle.refs[0], "reason": ap.REFUSAL_SUBMITTED_NPI_DIFFERS},
+        {"entity_ref": cycle.refs[1], "reason": ap.REFUSAL_ENROLLMENT_PROBE_NPI}]
+    assert res["lineage"][ap.LINEAGE_ANCHORED] == 3                         # counted as before
+    assert res["execution_status"] == "PARTIAL"
+    assert await _reviews_of(db, *cycle.entities[:2]) == []
+    assert await _evidence_count(db, *cycle.entities[:2]) == 0
+    assert [o["entity_ref"] for o in res["outcomes"]] == [cycle.refs[2]]
+
+
+async def test_gating_before_gathering_changes_nothing_for_an_accepted_record(rolled_back_db, monkeypatch):
+    """R1. The same anchored, correctly identified record run (a) with the reference resolvable before the gather -
+    the new order - and (b) with the pre-resolution finding nothing, which is the old order (gates after the
+    gather): bucket, rule, version, tier, lineage, anchor, stored evidence and the review's frozen snapshot are
+    identical, and the evidence was built for the very entity object the gates were applied to."""
+    db = rolled_back_db
+    cycle = await _Cycle(db, monkeypatch).build("9.99.778.51", 1)
+    ref, ent = cycle.refs[0], cycle.entities[0]
+
+    new_order = (await ap.verify_and_classify(db, [ref], intake_id=cycle.intake_id))["outcomes"][0]
+
+    async def _nothing_beforehand(_refs):
+        return {r: None for r in _refs}
+    monkeypatch.setattr(ap, "_resolve_all", _nothing_beforehand)
+    old_order = (await ap.verify_and_classify(db, [ref], intake_id=cycle.intake_id))["outcomes"][0]
+
+    for key in ("bucket", "rule_code", "rule_version", "rule_matched", "tier", "assigned_role", "lineage",
+                "source_record_id", "evidence_stored", "entity_id", "dimensions", "applicability",
+                "entity_marked_verified"):
+        assert new_order[key] == old_order[key], key
+    reviews = {r.review_id: r for r in await _reviews_of(db, ent)}
+    a, b = reviews[new_order["review_id"]], reviews[old_order["review_id"]]
+    assert a.verification_results == b.verification_results and a.classification_rationale == b.classification_rationale
+    assert await _evidence_count(db, ent) == 2 and cycle.asked == [ref, ref]
+
+
+async def test_the_real_gatherer_builds_evidence_for_the_entity_the_gates_saw_and_resolves_once(monkeypatch):
+    """R1. The unpatched gather function uses the entity resolved before the gates (no second resolution)."""
+    entity = {"id": "x", "_registry_entity_id": uuid.uuid4(), "identifier": [], "_rce": {}}
+    resolve = AsyncMock(return_value={"id": "another object"})
+    build = AsyncMock(return_value=_evidence())
+    monkeypatch.setattr("app.Tefca.entity_resolution.resolve_entity", resolve)
+    token = ap._PRE_RESOLVED.set({"ref-1": entity, "ref-2": None})
+    try:
+        with patch("app.Tefca.evidence_service.EvidenceService.build_evidence", new=build):
+            got = await ap._resolve_and_gather_evidence("ref-1")
+            none = await ap._resolve_and_gather_evidence("ref-2")
+    finally:
+        ap._PRE_RESOLVED.reset(token)
+    assert got["entity"] is entity and build.await_args.args[0] is entity and build.await_count == 1
+    assert none == {"ref": "ref-2", "entity": None, "evidence": None}
+    resolve.assert_not_awaited()
+
+
+async def test_the_cycle_response_and_audit_carry_lineage_and_what_was_not_stored(rolled_back_db, monkeypatch):
+    """R3. On the official path the bulk result's `lineage` and `evidence_not_stored_unanchored` were dropped (the
+    cycle copied seven keys and audited none of this). A duplicate delivered id in a sample: the member is reviewed
+    (unanchored, as the methodology has it), its evidence is not stored - and the cycle now SAYS so, in the response
+    and in the audit row."""
+    db = rolled_back_db
+    rows = make_rows(3, arc="9.99.778.52")
+    rows[2]["id"] = rows[0]["id"]                                           # one delivered id on two records
     intake_id, _ = await seed_intake(db, rows, with_job=False)
     await _run(db, intake_id)
     recs = await _records(db, intake_id)
-    first, second = sorted([await _entity(db, "m1"), await _entity(db, "m2")])   # `first` is selected first
-    await _curate(db, intake_id, recs[1], first)
-    await _curate(db, intake_id, recs[2], second)
-    sample_id = await _sample(db, first, second)
+    dup, ok = sorted([await _entity(db, "dup"), await _entity(db, "ok")])
+    await _curate(db, intake_id, recs[1], dup)
+    await _curate(db, intake_id, recs[3], dup)
+    await _curate(db, intake_id, recs[2], ok)
+    sample_id = await _sample(db, dup, ok)
     _stub_cycle_collaborators(monkeypatch, sample_id, 2)
-    gathered = []
-    _gather(monkeypatch, {rows[0]["id"]: first, rows[1]["id"]: second},
-            npi_by_ref={rows[0]["id"]: OTHER_NPI, rows[1]["id"]: NPI})    # the first member's probes used another NPI
-    real = ap._gather_all_evidence
+    _gather(monkeypatch, {rows[0]["id"]: dup, rows[1]["id"]: ok})
 
-    async def counting(refs, timing_log=None):
-        gathered.extend(refs)
-        return await real(refs, timing_log=timing_log)
-    monkeypatch.setattr(ap, "_gather_all_evidence", counting)
+    result = await rc._create_review_cycle(db, intake_id, user=_CYCLE_USER)
 
-    results = [await rc._create_review_cycle(db, intake_id, user=_CYCLE_USER, batch=1) for _ in range(3)]
+    assert result["linked_this_call"] == 2 and result["complete"] is True   # both reviewed, as before
+    verification = result["verification"]
+    assert verification["lineage"][ap.LINEAGE_AMBIGUOUS] == 1 and verification["lineage"][ap.LINEAGE_ANCHORED] == 1
+    assert verification["evidence_not_stored_unanchored_count"] == 1
+    assert verification["evidence_not_stored_unanchored"] == [
+        {"entity_ref": rows[0]["id"], "lineage": ap.LINEAGE_AMBIGUOUS}]
+    audit = (await db.execute(select(reg.TefcaRegAuditLog).where(
+        reg.TefcaRegAuditLog.action == "review_cycle_members_verified")
+        .order_by(reg.TefcaRegAuditLog.created_at.desc()))).scalars().all()
+    meta = next(a.metadata_ for a in audit if (a.metadata_ or {}).get("sample_id") == str(sample_id))
+    assert meta["lineage"][ap.LINEAGE_AMBIGUOUS] == 1 and meta["evidence_not_stored_unanchored"] == 1
+    assert meta["evidence_not_stored_unanchored_refs"] == verification["evidence_not_stored_unanchored"]
+    assert meta["not_reviewable_for_identity"] == 0
 
-    for result in results:                                                # three calls, the same non-answer
-        assert result["linked_this_call"] == 0 and result["remaining"] == 2 and result["complete"] is False
-        assert result["verification"]["unresolved"] == [rows[0]["id"]]
-    assert gathered == [rows[0]["id"]] * 3                                # the refused member, re-asked every call
-    members = await _members(db, sample_id)
-    assert members[first].review_id is None and members[second].review_id is None    # the valid member is starved
-    assert await _reviews_of(db, first, second) == []
-    assert await _evidence_count(db, first, second) == 0                  # the refusal itself persists nothing
+
+async def test_an_unanchored_reference_gets_the_bucket_of_its_anchored_twin_under_an_active_mandatory_policy(
+        rolled_back_db, monkeypatch):
+    """R4. Not storing the evidence of an unanchored reference must not move its classification. With an ACTIVE
+    mandatory sam_gov policy (the configuration in which a missing source answer changes the bucket), an unanchored
+    reference and an anchored twin with identical mocked evidence get the same bucket, rule and tier - and the
+    policy really was the deciding input (without it the same evidence classifies differently)."""
+    from app.tefca_registry.rce import source_policy as sp
+    from app.tefca_registry.bucket_classifier import BucketClassifier
+    from test_mandatory_source_parity_2026_11_11 import _cls, _policy
+    db = rolled_back_db
+    # The rules engine answers B1 for this evidence (stubbed: the rules are not under test), so the mandatory-source
+    # policy is the ONLY thing that can move the bucket - which is the input the stored evidence could have affected.
+    monkeypatch.setattr(BucketClassifier, "classify", lambda self, results, rules=None: _cls("B1"))
+    intake_u, refs_u, by_ref_u, _lineage, _ents = await _bulk_case(db, "ambiguous")
+    rows = make_rows(1, arc="9.99.778.53")
+    intake_a, _ = await seed_intake(db, rows, with_job=False)
+    await _run(db, intake_a)
+    anchored = await _entity(db, "twin")
+    await _curate(db, intake_a, (await _records(db, intake_a))[1], anchored)
+    _gather(monkeypatch, {**by_ref_u, rows[0]["id"]: anchored})
+
+    async def _run_pair():
+        u = (await ap.verify_and_classify(db, refs_u, intake_id=intake_u))["outcomes"][0]
+        a = (await ap.verify_and_classify(db, [rows[0]["id"]], intake_id=intake_a))["outcomes"][0]
+        return u, a
+
+    without_u, without_a = await _run_pair()                                # no policy row active (the shipped state)
+
+    async def _active(_db):
+        return [_policy()]                                                  # mandatory sam_gov, active
+    monkeypatch.setattr(sp, "load_active_policies", _active)
+    with_u, with_a = await _run_pair()
+
+    assert (with_u["lineage"], with_a["lineage"]) == (ap.LINEAGE_AMBIGUOUS, ap.LINEAGE_ANCHORED)
+    assert (with_u["evidence_stored"], with_a["evidence_stored"]) == (False, True)
+    for key in ("bucket", "rule_code", "rule_version", "tier"):
+        assert with_u[key] == with_a[key], key                              # the twin's classification, exactly
+        assert without_u[key] == without_a[key], key
+    assert (with_a["bucket"], with_a["rule_code"]) != (without_a["bucket"], without_a["rule_code"]), (
+        "the active policy did not decide the bucket, so this comparison proves nothing")
+
+
+async def _unresolvable_then_valid(db, arc, *, unresolvable, valid):
+    intake_id, entities, by_ref = await _refused_then_valid(db, arc, refused=0, valid=unresolvable + valid)
+    refs = {str(v["_registry_entity_id"]): k for k, v in by_ref.items()}
+    for ent in entities[:unresolvable]:
+        by_ref[refs[str(ent)]] = None                                       # the reference resolves to nothing
+    return intake_id, entities, by_ref
+
+
+async def test_unresolvable_references_are_stepped_over_and_the_batch_says_when_to_stop(rolled_back_db):
+    """R5. A reference that does not resolve was counted as a lookup: it used the batch budget, so
+    `no_further_lookups_possible` was never true and the scheduler never held the delivery. No source is asked about
+    it, so it is now stepped over like a refusal - the valid record behind it is covered, and a delivery with only
+    unresolvable references left signals the stop."""
+    db = rolled_back_db
+    intake_id, entities, by_ref = await _unresolvable_then_valid(db, "9.99.778.54", unresolvable=2, valid=1)
+
+    async def _resolve(_db, ref):
+        return by_ref[ref]
+    build = AsyncMock(return_value=_evidence())
+    with patch("app.Tefca.entity_resolution.resolve_entity", new=AsyncMock(side_effect=_resolve)), \
+            patch("app.Tefca.evidence_service.EvidenceService.build_evidence", new=build):
+        first = await av.run_coverage_batch(db, intake_id, batch_size=1)
+        again = [await av.run_coverage_batch(db, intake_id, batch_size=1) for _ in range(3)]
+
+    assert first["processed_this_call"] == 1 and first["not_resolved"] == 2 and first["identity_refused"] == 0
+    assert first["by_outcome"] == {av.OUTCOME_NOT_ELIGIBLE: 2, av.OUTCOME_VERIFIED: 1}     # outcome word unchanged
+    assert first["remaining"] == 2 and first["no_further_lookups_possible"] is False
+    for result in again:
+        assert result["processed_this_call"] == 0 and result["not_resolved"] == 2
+        assert result["remaining"] == 2 and result["complete"] is False
+        assert result["candidates_exhausted"] is True and result["no_further_lookups_possible"] is True
+    assert build.await_count == 1
+    assert await _evidence_count(db, *entities[:2]) == 0
+
+
+async def test_a_failed_source_call_is_still_a_lookup_and_is_not_a_stop(rolled_back_db):
+    """R5, the other half, stated rather than hidden: a source that was ASKED and failed (RETRY_PENDING) is worth
+    another call, so it is a lookup, it is not a stop signal, and the scheduler does not hold the delivery for it.
+    That entity is retried on every call until the source answers - by design, and bounded by `batch_size`."""
+    db = rolled_back_db
+    intake_id, _entities, by_ref = await _refused_then_valid(db, "9.99.778.55", refused=0, valid=1)
+
+    async def _resolve(_db, ref):
+        return by_ref[ref]
+    with patch("app.Tefca.entity_resolution.resolve_entity", new=AsyncMock(side_effect=_resolve)), \
+            patch("app.Tefca.evidence_service.EvidenceService.build_evidence",
+                  new=AsyncMock(side_effect=TimeoutError("synthetic outage"))):
+        result = await av.run_coverage_batch(db, intake_id, batch_size=5)
+    assert result["by_outcome"] == {av.OUTCOME_RETRY_PENDING: 1} and result["processed_this_call"] == 1
+    assert result["remaining"] == 1 and result["no_further_lookups_possible"] is False
+
+
+async def test_the_scheduler_holds_a_delivery_whose_leftovers_cannot_be_asked_about(harness):
+    """R5. Leftovers that are unresolvable references, or records with no delivered reference at all (never a
+    candidate, so the batch examines nothing), no longer keep the delivery selected on every tick."""
+    engine, clock = harness
+    for leftovers in ({"not_resolved": 3}, {}):                             # {}: nothing to examine, 3 remain
+        av.reset_coverage_scheduler_state()
+        intake = uuid.uuid4()
+        batch = AsyncMock(return_value=_tick_result(remaining=3, **leftovers))
+        lookup = AsyncMock(side_effect=lambda db, **kw: None if kw.get("exclude_intake_ids") else intake)
+        with patch.object(av, "_next_delivery_needing_coverage", new=lookup), \
+                patch.object(av, "run_coverage_batch", new=batch):
+            for _ in range(100):
+                await av._coverage_tick(now=clock)
+                clock.advance(av.TICK_INTERVAL_SECONDS)
+        assert batch.await_count == 1, leftovers                            # one walk in 100 ticks
+        assert av.coverage_scheduler_status()["deliveries_on_identity_hold"] == 1
+
+
+def test_every_caller_of_the_extract_attempt_names_its_delivery():
+    """R6. `record_sam_extract_attempt` requires `intake_id`; its one application caller passes it."""
+    import pathlib
+    import re
+    root = pathlib.Path(av.__file__).resolve().parents[2]
+    calls = []
+    for path in root.rglob("*.py"):
+        text_ = path.read_text(encoding="utf-8", errors="ignore")
+        for match in re.finditer(r"(?<!def )record_sam_extract_attempt\(", text_):
+            calls.append((path.relative_to(root).as_posix(), text_[match.start():match.start() + 260]))
+    assert [c[0] for c in calls] == ["tefca_registry/rce/automated_verification.py"], calls
+    assert "intake_id=intake_id" in calls[0][1]
+    assert inspect.signature(av.record_sam_extract_attempt).parameters["intake_id"].default is inspect.Parameter.empty

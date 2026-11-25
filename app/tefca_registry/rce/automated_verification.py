@@ -339,6 +339,15 @@ def _identity_refused(ref: str, canonical_entity_id, reason: Optional[str]) -> D
             "persisted": False, "dimensions_recorded": 0}
 
 
+def _not_resolved(ref: str, canonical_entity_id) -> Dict[str, Any]:
+    """The result for a reference that does not resolve to a registry entity. Outcome and reason are what they
+    always were (NOT_ELIGIBLE); `not_resolved` / `persisted` say that no source was asked and nothing was stored,
+    so the batch can step over it like a refusal instead of counting it as a lookup that never happened."""
+    return {"ref": ref, "entity_id": str(canonical_entity_id) if canonical_entity_id else None,
+            "outcome": OUTCOME_NOT_ELIGIBLE, "reason": "entity did not resolve for this reference",
+            "not_resolved": True, "persisted": False, "dimensions_recorded": 0}
+
+
 async def _validate_attempt_identity(db, *, ref: str, canonical_entity_id, intake_id, entity):
     """IDENTITY FIRST, for both coverage scopes: (context, probe_npi, None)
     when the attempt may proceed, (None, None, refusal result) when it may
@@ -390,8 +399,7 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
 
     entity = await resolve_entity(db, ref)
     if entity is None:
-        return {"ref": ref, "outcome": OUTCOME_NOT_ELIGIBLE,
-                "reason": "entity did not resolve for this reference"}
+        return _not_resolved(ref, canonical_entity_id)
 
     context, probe_npi, refused = await _validate_attempt_identity(
         db, ref=ref, canonical_entity_id=canonical_entity_id, intake_id=intake_id, entity=entity)
@@ -493,8 +501,7 @@ async def record_sam_extract_attempt(db, *, ref: str,
 
     entity = await resolve_entity(db, ref)
     if entity is None:
-        return {"ref": ref, "outcome": OUTCOME_NOT_ELIGIBLE,
-                "reason": "entity did not resolve for this reference"}
+        return _not_resolved(ref, canonical_entity_id)
 
     context, _probe_npi, refused = await _validate_attempt_identity(
         db, ref=ref, canonical_entity_id=canonical_entity_id, intake_id=intake_id, entity=entity)
@@ -585,12 +592,16 @@ async def _try_advisory_batch_lock(db, intake_id) -> bool:
 
 def _batch_identity_fields(*, refused: int, exhausted: bool, limit_reached: bool,
                            started_after, last_scanned, remaining: int,
-                           looked_up: int = 0) -> Dict[str, Any]:
+                           looked_up: int = 0, not_resolved: int = 0) -> Dict[str, Any]:
     """The identity-refusal part of a batch result (see `run_coverage_batch`)."""
     return {
         # Entities refused at identity validation in THIS call: nothing was
         # gathered or persisted for them, and they are still in `remaining`.
         "identity_refused": refused,
+        # Entities whose delivered reference does not resolve to a registry
+        # entity: no source was asked, nothing persisted, still in
+        # `remaining`. Stepped over like a refusal; not a lookup.
+        "not_resolved": not_resolved,
         # True when this call walked the not-covered list to its end.
         "candidates_exhausted": exhausted,
         # True when the call stopped stepping over refusals at the per-call
@@ -606,11 +617,13 @@ def _batch_identity_fields(*, refused: int, exhausted: bool, limit_reached: bool
         "remaining_are_all_identity_refused": bool(
             refused and exhausted and started_after is None and remaining == refused),
         # THE STOP SIGNAL for a "call again" loop: the walk reached the end of
-        # the not-covered list and this call could look nothing up. True
-        # whatever is left (refusals, references that do not resolve, records
-        # with no delivered reference); `remaining` says how many, and
-        # `outcomes` / `identity_refused` say why. Calling again from the same
-        # place cannot make progress until the data changes.
+        # the not-covered list and this call asked no source about anything.
+        # True whatever is left that cannot be asked about (identity refusals,
+        # references that do not resolve, records with no delivered
+        # reference); `remaining` says how many, and `outcomes` /
+        # `identity_refused` / `not_resolved` say why. Calling again cannot
+        # make progress until the data changes. NOT set while a source was
+        # asked and failed (RETRY_PENDING): that entity is worth another call.
         "no_further_lookups_possible": bool(exhausted and looked_up == 0),
     }
 
@@ -685,7 +698,7 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
 
     local_store = make_local_store(db)
     outcomes: List[Dict[str, Any]] = []
-    looked_up = refused = 0
+    looked_up = refused = unresolved = 0
     cursor = started_after
     exhausted = limit_reached = False
     # Pages have a fixed minimum size, so a run of refusals costs one
@@ -704,7 +717,7 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
             if looked_up >= batch_size:
                 stop = True
                 break
-            if refused >= MAX_IDENTITY_REFUSALS_PER_CALL:
+            if refused + unresolved >= MAX_IDENTITY_REFUSALS_PER_CALL:
                 stop = limit_reached = True
                 break
             cursor = canonical_entity_id
@@ -725,6 +738,8 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
             outcomes.append(result)
             if result["outcome"] == OUTCOME_IDENTITY_REFUSED:
                 refused += 1
+            elif result.get("not_resolved"):
+                unresolved += 1            # no source was asked: stepped over, not a lookup
             else:
                 looked_up += 1
         else:
@@ -751,14 +766,16 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
         "intake_id": str(intake_id),
         "scope": scope,
         "skipped_lock": False,
-        # Entities this call was allowed to look up (never more than
-        # `batch_size`). Identity refusals are counted separately below;
-        # `by_outcome` and `outcomes` include both.
+        # Entities a source was asked about in this call (never more than
+        # `batch_size`). Identity refusals and references that do not resolve
+        # are counted separately below; `by_outcome` and `outcomes` include
+        # all of them.
         "processed_this_call": looked_up,
         "by_outcome": by_outcome,
         **_batch_identity_fields(refused=refused, exhausted=exhausted, limit_reached=limit_reached,
                                  started_after=started_after, last_scanned=cursor,
-                                 remaining=progress["remaining"], looked_up=looked_up),
+                                 remaining=progress["remaining"], looked_up=looked_up,
+                                 not_resolved=unresolved),
         "ledger_not_recorded": sum(1 for o in outcomes if o.get("ledger_recorded") is False),
         "outcomes": outcomes,
         **progress,
@@ -1156,7 +1173,8 @@ async def _coverage_tick(*, now: Optional[Callable[[], float]] = None):
                     key = str(intake_id)
                     with _state_lock:
                         walk = _identity_walks.setdefault(key, [0, 0])
-                        walk[0] += int(facts.get("identity_refused") or 0)
+                        walk[0] += (int(facts.get("identity_refused") or 0)
+                                    + int(facts.get("not_resolved") or 0))
                         walk[1] += int(facts.get("processed_this_call") or 0)
                         refused, looked_up_in_walk = walk[0], walk[1]
                     if (facts.get("identity_refusal_scan_limit_reached")
@@ -1169,15 +1187,19 @@ async def _coverage_tick(*, now: Optional[Callable[[], float]] = None):
                         with _state_lock:
                             _identity_cursors.pop(key, None)
                             _identity_walks.pop(key, None)
-                        if refused and not looked_up_in_walk:
+                        if not looked_up_in_walk and int(facts.get("remaining") or 0) > 0:
                             # The whole walk reached the end of the list and
-                            # found nothing it may look up. Do not spin on it.
+                            # asked no source about anything, yet entities
+                            # remain: identity refusals, references that do
+                            # not resolve, or records with no delivered
+                            # reference (those are never candidates at all).
+                            # Do not spin on it.
                             until = _hold_delivery_for_identity_refusals(intake_id, clock())
                             logger.warning(
                                 "automated coverage: the walk of delivery %s ended with %d record(s) "
-                                "refused at identity validation and nothing to look up; %s entity(ies) "
-                                "remain NOT covered. The delivery is on hold for the scheduler until %s; "
-                                "nothing was persisted for the refused records.",
+                                "refused at identity validation or not resolvable and nothing to look up; "
+                                "%s entity(ies) remain NOT covered. The delivery is on hold for the "
+                                "scheduler until %s; nothing was persisted for those records.",
                                 intake_id, refused, facts.get("remaining"), _iso(until))
             finally:
                 await _release_tick_lock(conn)

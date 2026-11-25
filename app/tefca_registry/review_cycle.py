@@ -159,6 +159,75 @@ class CycleRefused(RuntimeError):
     """The cycle could not be created, and the reason is stated."""
 
 
+#: Members one call may find NOT reviewable for identity reasons before it stops walking. Each costs local reads
+#: only (no source is asked). A call that reaches it says so and returns `next_after_member_id` to continue.
+MAX_NOT_REVIEWABLE_PER_CALL = 2000
+
+#: Members whose delivered references are read per query while walking.
+_REF_CHUNK = 500
+
+NOT_REVIEWABLE_NO_REFERENCE = ("this delivery's curated records carry no delivered reference for the sample "
+                               "member; nothing can be resolved or verified")
+NOT_REVIEWABLE_UNRESOLVED = "the delivered reference does not resolve to a registry entity"
+NOT_REVIEWABLE_OTHER_ENTITY = ("the delivered reference resolves to a different registry entity than the sample "
+                               "member; a review of that entity is not a review of this member")
+NOT_REVIEWABLE_NO_REVIEW = "verification produced no review for this member"
+
+
+async def _identity_precheck(db, intake_uuid, member_entity_id, ref) -> Optional[str]:
+    """Why a sample member cannot be reviewed for identity reasons, decided BEFORE any source is asked - or None.
+
+    Local reads only. It answers with a reason only on positive knowledge, using the rules the bulk writer itself
+    applies, so it never withholds a member the writer would have reviewed as that member:
+      * the reference resolves to a registry entity that is NOT the sample member (the writer would review that
+        other entity; linking it to this member is the defect this function exists to prevent);
+      * the reference is anchored to one delivered record of this delivery and `arc_pipeline.anchored_npi_refusal`
+        refuses it (the writer gathers evidence first and then refuses the same record, every call).
+    Anything it cannot establish - a reference that does not resolve here, a resolver that supplies no registry
+    identity (the fixture resolver) - is left to the writer, exactly as before."""
+    from app.Tefca.entity_resolution import resolve_entity
+    from app.tefca_registry.rce import arc_pipeline as ap
+
+    entity = await resolve_entity(db, ref)
+    if entity is None:
+        return None
+    resolved_id = entity.get("_registry_entity_id")
+    if resolved_id is None:
+        return None
+    if str(resolved_id) != str(member_entity_id):
+        return NOT_REVIEWABLE_OTHER_ENTITY
+    anchors = await ap._source_anchors(db, intake_uuid, [ref])
+    source_record_id, _lineage = ap._source_anchor(anchors, ref, resolved_id)
+    selected = await db.get(m.RceSourceRecord, source_record_id) if source_record_id else None
+    return ap.anchored_npi_refusal(entity, selected)
+
+
+def _merge_verification(total: Dict[str, Any], part: Dict[str, Any]) -> Dict[str, Any]:
+    """Fold one `verify_and_classify` summary into the call's summary (one call may now verify in several steps)."""
+    if not total.get("requested"):
+        return dict(part)
+    out = dict(total)
+    for key in ("requested", "verified"):
+        out[key] = int(total.get(key) or 0) + int(part.get(key) or 0)
+    out["unresolved"] = list(total.get("unresolved") or []) + list(part.get("unresolved") or [])
+    counts = dict(total.get("bucket_counts") or {})
+    for bucket, n in (part.get("bucket_counts") or {}).items():
+        counts[bucket] = counts.get(bucket, 0) + n
+    out["bucket_counts"] = counts
+    lineage = dict(total.get("lineage") or {})
+    for outcome, n in (part.get("lineage") or {}).items():
+        lineage[outcome] = lineage.get(outcome, 0) + n
+    out["lineage"] = lineage
+    for key in ("evidence_not_stored_unanchored", "refused_before_gather"):
+        out[key] = list(total.get(key) or []) + list(part.get(key) or [])
+    out["execution_status"] = ("PARTIAL" if out["unresolved"] else part.get("execution_status"))
+    return out
+
+
+#: Entries of a per-reference list kept in the cycle response and its audit row; the counts are always exact.
+CYCLE_LIST_CAP = 200
+
+
 def _empty_verification_summary():
     from app.Tefca.entity_resolution import resolver_configuration_warnings, resolver_source
 
@@ -198,6 +267,7 @@ async def create_review_cycle(
     batch: int = DEFAULT_BATCH,
     ip_address: Optional[str] = None,
     full_population: bool = False,
+    after_member_id=None,
 ) -> Dict[str, Any]:
     # Capture the authenticated actor before commit could expire an ORM user.
     actor_id, actor_email = reg_audit.actor_of(user)
@@ -208,7 +278,7 @@ async def create_review_cycle(
             confidence=confidence, margin=margin, proportion=proportion,
             use_fpc=use_fpc, include_held=include_held, seed=seed,
             sample_name=sample_name, batch=batch, ip_address=ip_address,
-            full_population=full_population)
+            full_population=full_population, after_member_id=after_member_id)
 
 
 async def _create_review_cycle(
@@ -220,11 +290,25 @@ async def _create_review_cycle(
     batch: int = DEFAULT_BATCH,
     ip_address: Optional[str] = None,
     full_population: bool = False,
+    after_member_id=None,
 ) -> Dict[str, Any]:
     """Gate → draw (or reuse) the plan → verify unlinked members → link.
 
     Returns the plan, how many members are linked, how many remain, and the
-    verification summary for this call. Call again until `remaining` is 0.
+    verification summary for this call. Call again until `remaining` is 0 or
+    `no_further_reviews_possible` is true.
+
+    MEMBERS THAT CANNOT BE REVIEWED FOR IDENTITY REASONS (2026-11-25). A member
+    is linked only to a review of ITS OWN entity. A member whose delivered
+    reference resolves to another entity, whose anchored record the NPI gates
+    refuse, or for which verification produced no review, is NOT linked and is
+    NOT given a status: it is reported (`not_reviewable_for_identity`, with
+    the reason) and the call walks on to the members behind it, so it cannot
+    hold them up. Where the refusal can be known from local data it is decided
+    BEFORE the sources are asked, so repeating the call does not ask them
+    about that member again. `remaining` keeps its meaning (members with no
+    linked review) and `complete` stays false while any member is unreviewed -
+    a sample is never reported complete because members were walked past.
     """
     from app.tefca_registry.qhin_sampling import SamplingRefused, finalize_plan
     from app.tefca_registry.rce.arc_pipeline import verify_and_classify
@@ -351,41 +435,92 @@ async def _create_review_cycle(
                               "skipped_held": skipped_held})
                 await db.commit()
 
-        this_call = unlinked[:batch]
-
         verified: Dict[str, Any] = _empty_verification_summary()
-        if skipped_held:
-            verified["skipped_held"] = skipped_held
-            verified["skipped_held_reason"] = "VERIFY_SKIPPED_HELD"
         linked = 0
-        if this_call:
-            refs = await _refs_for(db, intake_id,
-                                   [member.entity_id for member in this_call])
+        intake_uuid = intake_id if isinstance(intake_id, uuid.UUID) else uuid.UUID(str(intake_id))
+        # Plain values, read once: the commits inside the loop must never be
+        # able to expire what the walk is iterating over.
+        members = [(member, member.id, member.entity_id) for member in unlinked]
+        position = 0
+        if after_member_id is not None:
+            wanted = str(after_member_id)
+            for index, (_member, member_id, _entity_id) in enumerate(members):
+                if str(member_id) == wanted:
+                    position = index + 1          # continue behind it; an unknown id starts at the front
+                    break
+        not_reviewable: List[Dict[str, Any]] = []
+        limit_reached = False
+        last_examined = None
+        refs: Dict[Any, str] = {}
+        refs_loaded_to = position
 
-            member_by_entity = {member.entity_id: member for member in this_call}
-            ref_to_entity = {ref: eid for eid, ref in refs.items()}
+        def _set_aside(entity_id, ref, reason):
+            not_reviewable.append({"entity_id": str(entity_id), "entity_ref": ref, "reason": reason})
+
+        while linked < batch and position < len(members) and not limit_reached:
+            # ── choose the next members to verify, walking past the ones that
+            #    are known - without asking any source - not to be reviewable ──
+            step: List[Any] = []
+            while position < len(members) and len(step) < batch - linked:
+                if len(not_reviewable) >= MAX_NOT_REVIEWABLE_PER_CALL:
+                    limit_reached = True
+                    break
+                if position >= refs_loaded_to:
+                    chunk = members[position:position + _REF_CHUNK]
+                    refs.update(await _refs_for(db, intake_id, [e for _m, _i, e in chunk]))
+                    refs_loaded_to = position + len(chunk)
+                member, member_id, entity_id = members[position]
+                position += 1
+                last_examined = member_id
+                ref = refs.get(entity_id)
+                if not ref:
+                    _set_aside(entity_id, None, NOT_REVIEWABLE_NO_REFERENCE)
+                    continue
+                reason = await _identity_precheck(db, intake_uuid, entity_id, ref)
+                if reason:
+                    _set_aside(entity_id, ref, reason)
+                    continue
+                step.append((member, entity_id, ref))
+            if not step:
+                break
 
             result = await verify_and_classify(
-                db, list(refs.values()), intake_id=intake_id,
+                db, [ref for _member, _entity_id, ref in step], intake_id=intake_id,
                 actor=actor_email or "SYSTEM")
-            verified = {k: result.get(k) for k in
+            # `lineage` and the references whose evidence was not stored (unanchored) used to be dropped here,
+            # so on the official path - this one - neither was visible to the caller or in the audit trail.
+            verified = _merge_verification(verified, {k: result.get(k) for k in
                         ("requested", "verified", "unresolved", "bucket_counts",
-                         "resolver_source", "configuration_warnings", "execution_status")}
-            if skipped_held:
-                verified["skipped_held"] = skipped_held
-                verified["skipped_held_reason"] = "VERIFY_SKIPPED_HELD"
+                         "resolver_source", "configuration_warnings", "execution_status",
+                         "lineage", "evidence_not_stored_unanchored", "refused_before_gather")})
+            outcome_by_ref = {o.get("entity_ref"): o for o in result.get("outcomes", [])}
+            failure_by_ref = {f.get("entity_ref"): f.get("reason")
+                              for f in result.get("resolution_failures") or []}
+            unresolved_refs = set(result.get("unresolved") or [])
 
-            # verify_and_classify has committed its ReviewRecords. Link them.
-            for outcome in result.get("outcomes", []):
-                entity_id = ref_to_entity.get(outcome.get("entity_ref"))
-                member = member_by_entity.get(entity_id)
-                review_id = outcome.get("review_id")
-                if member is None or not review_id:
+            # verify_and_classify has committed its ReviewRecords. Link them -
+            # each only to the member whose own entity it reviewed.
+            for member, entity_id, ref in step:
+                outcome = outcome_by_ref.get(ref)
+                review_id = outcome.get("review_id") if outcome else None
+                if not review_id:
+                    _set_aside(entity_id, ref, failure_by_ref.get(ref) or (
+                        NOT_REVIEWABLE_UNRESOLVED if ref in unresolved_refs else NOT_REVIEWABLE_NO_REVIEW))
+                    continue
+                reviewed = outcome.get("entity_id")
+                if reviewed is not None and str(reviewed) != str(entity_id):
+                    # The review exists and is about ANOTHER entity (the
+                    # resolution changed between the check above and the
+                    # writer's own, or the writer resolved differently). It is
+                    # never recorded as this member's review.
+                    _set_aside(entity_id, ref, NOT_REVIEWABLE_OTHER_ENTITY)
+                    not_reviewable[-1]["review_not_linked"] = review_id
                     continue
                 record = (await db.execute(
                     select(reg.ReviewRecord)
                     .where(reg.ReviewRecord.review_id == review_id))).scalars().first()
                 if record is None:
+                    _set_aside(entity_id, ref, NOT_REVIEWABLE_NO_REVIEW)
                     continue
                 record.sample_id = sample_id
                 # Replaced, not mutated: SQLAlchemy does not see an in-place
@@ -399,7 +534,18 @@ async def _create_review_cycle(
                 member.review_id = review_id
                 member.review_status = "in_review"
                 linked += 1
+            await db.commit()
 
+        if skipped_held:
+            verified["skipped_held"] = skipped_held
+            verified["skipped_held_reason"] = "VERIFY_SKIPPED_HELD"
+        not_stored = list(verified.get("evidence_not_stored_unanchored") or [])
+        verified["evidence_not_stored_unanchored_count"] = len(not_stored)
+        verified["evidence_not_stored_unanchored"] = not_stored[:CYCLE_LIST_CAP]
+        verified["evidence_not_stored_unanchored_truncated"] = len(not_stored) > CYCLE_LIST_CAP
+        verified.setdefault("lineage", {})
+        walk_exhausted = position >= len(members)
+        if verified.get("requested") or not_reviewable:
             reg_audit.record(
                 db, "review_cycle_members_verified", None, actor_id=actor_id,
                 actor_email=actor_email, ip_address=ip_address,
@@ -409,8 +555,22 @@ async def _create_review_cycle(
                           "verified": verified.get("verified"),
                           "linked": linked,
                           "unresolved": len(verified.get("unresolved") or []),
-                          "skipped_held": skipped_held})
+                          "skipped_held": skipped_held,
+                          # Counted here, listed in the response: members walked
+                          # past for identity reasons. None was linked or marked.
+                          "not_reviewable_for_identity": len(not_reviewable),
+                          "not_reviewable_reasons": sorted({n["reason"] for n in not_reviewable}),
+                          "not_reviewable_members": [
+                              {"entity_id": n["entity_id"], "reason": n["reason"]}
+                              for n in not_reviewable[:CYCLE_LIST_CAP]],
+                          "lineage": verified.get("lineage"),
+                          "evidence_not_stored_unanchored": verified["evidence_not_stored_unanchored_count"],
+                          "evidence_not_stored_unanchored_refs": verified["evidence_not_stored_unanchored"]})
             await db.commit()
+        if not_reviewable:
+            logger.warning(
+                "review cycle %s: %d sample member(s) were not reviewable for identity reasons and "
+                "were walked past; none was linked or given a status", intake_id, len(not_reviewable))
 
         if not plan.get("already_finalized"):
             reg_audit.record(
@@ -451,14 +611,41 @@ async def _create_review_cycle(
         "reconciliation_passed": True,
         "members": plan.get("membership_count"),
         "linked_this_call": linked,
+        # Members with no linked review. Unchanged meaning: it includes the
+        # members this call could not review for identity reasons.
         "remaining": remaining,
+        # False while ANY member is unreviewed - never true because members
+        # were walked past.
         "complete": remaining == 0,
+        # Members this call examined and could not review for identity
+        # reasons, each with its reason. None was linked; none was given a
+        # status; each is still counted in `remaining`.
+        "not_reviewable_for_identity": not_reviewable,
+        "not_reviewable_for_identity_count": len(not_reviewable),
+        # Members this call did not get to (its `batch` was used up, or the
+        # limit below was reached). Their reviewability is not known yet, so
+        # this is the most that can still be reviewable; 0 when the walk
+        # reached the end of the sample.
+        "members_not_examined": len(members) - position,
+        "reviewable_remaining_at_most": len(members) - position,
+        "walk_exhausted": walk_exhausted,
+        "identity_check_limit_reached": limit_reached,
+        "next_after_member_id": (str(last_examined)
+                                 if limit_reached and last_examined is not None else None),
+        # THE STOP SIGNAL: the walk reached the end of the sample, nothing was
+        # linked, and members remain. Everything left is not reviewable as the
+        # data stands; calling again cannot change that. The sample is NOT
+        # complete.
+        "no_further_reviews_possible": bool(walk_exhausted and linked == 0 and remaining > 0),
         "verification": verified,
         "batch": batch,
         "note": ("The sample is frozen; asking again never redraws it. "
                  "Verification runs only for members not yet linked to a "
                  "review case, so repeated calls converge and never duplicate. "
-                 "Call again until remaining is 0."),
+                 "Call again until remaining is 0, or until "
+                 "no_further_reviews_possible is true (members remain that "
+                 "cannot be reviewed for identity reasons; the sample is not "
+                 "complete)."),
     }
 
 
