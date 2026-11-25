@@ -236,6 +236,7 @@ jobs:
             tests/test_recheck_identity_validation_2026_11_16.py \
             tests/test_coverage_identity_gate_2026_11_25.py \
             tests/test_identity_refusal_no_endless_retry_2026_11_25.py \
+            tests/test_review_cycle_identity_precheck_2026_11_25.py \
             tests/test_deferred_disposition_processing_2026_11_18.py \
             tests/test_disposition_followups_schema_2026_11_19.py \
             tests/test_refused_correction_leaves_no_decision_2026_11_19.py \

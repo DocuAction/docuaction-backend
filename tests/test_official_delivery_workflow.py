@@ -695,12 +695,19 @@ class TestReadsStayAtTheViewerFloor:
         """Pinned locally so a future edit fails with an obvious message."""
         from app.tefca_registry import workflow_routes
 
+        # ONE named exception (2026-11-25, owner instruction): the read-only
+        # identity pre-check previews the program_manager-only POST beside it
+        # and carries that role. Anything else above viewer still fails here.
+        above_viewer = {
+            "/api/tefca/workflow/deliveries/{intake_id}/review-cycle/identity-precheck": "program_manager",
+        }
         checked = 0
         for route in workflow_routes.router.routes:
             if "GET" not in getattr(route, "methods", set()):
                 continue
             floors = _role_floors(workflow_routes.router, route.path)
-            assert floors and max(floors) == role_level("viewer"), route.path
+            expected = above_viewer.get(route.path, "viewer")
+            assert floors and max(floors) == role_level(expected), route.path
             checked += 1
         assert checked >= 5
 
