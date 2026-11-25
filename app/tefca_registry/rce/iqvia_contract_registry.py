@@ -431,3 +431,65 @@ def contract_for_validation(registry: Registry, source_system: str,
     if newest is None or binding.get("outcome") == OUTCOME_NO_HEADER:
         return None, "no contract: nothing measured per column"
     return newest, "newest registered contract, by column name (the layout itself is not registered)"
+
+
+# ── can rows of this file be keyed by column name at all? ────────────────────
+
+STOP_NO_HEADER = "NO_HEADER_ROW"
+STOP_HEADER_UNREADABLE = "HEADER_UNREADABLE"
+STOP_DUPLICATE_NAME = "DUPLICATE_HEADER_NAME"       # REF-SCH-003, by exact name
+STOP_BLANK_NAME = "BLANK_HEADER_NAME"
+STOP_REQUIRED_KEY_MISSING = "REQUIRED_KEY_MISSING"  # REF-SCH-001 / REF-SCH-004
+
+
+def structural_stops(registry: Registry, source_system: str, header: Optional[Sequence[str]],
+                     header_error: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The reasons, if any, why NO row of the file can be staged under named
+    columns. Column names appear only where they may (see `_safe_names`); a
+    position is always given."""
+    if header is None:
+        if header_error:
+            return [{"code": STOP_HEADER_UNREADABLE, "reason": header_error}]
+        return [{"code": STOP_NO_HEADER}]
+    header = list(header)
+    safe = _safe_names(registry, source_system, header)
+    stops: List[Dict[str, Any]] = []
+    positions: Dict[str, List[int]] = {}
+    for position, name in enumerate(header, start=1):
+        positions.setdefault(name, []).append(position)
+    duplicated = [(name, where) for name, where in positions.items() if len(where) > 1 and name.strip()]
+    if duplicated:
+        stops.append({"code": STOP_DUPLICATE_NAME, "count": len(duplicated), "columns": [
+            {"name": safe[where[0] - 1], "positions": where[:MAX_DIFF_NAMES]}
+            for name, where in duplicated[:MAX_DIFF_NAMES]]})
+    blank = [position for position, name in enumerate(header, start=1) if not name.strip()]
+    if blank:
+        stops.append({"code": STOP_BLANK_NAME, "count": len(blank), "positions": blank[:MAX_DIFF_NAMES]})
+    missing = [k for k in registry.required_keys(source_system) if k not in header]
+    if missing:
+        stops.append({"code": STOP_REQUIRED_KEY_MISSING, "columns": missing})
+    return stops
+
+
+def structural_stop_message(stops: Sequence[Dict[str, Any]]) -> str:
+    """One actionable sentence per stop. Codes, counts, positions and the
+    column names `structural_stops` allowed - nothing else."""
+    parts = []
+    for stop in stops:
+        code = stop["code"]
+        if code == STOP_NO_HEADER:
+            parts.append("the file has no header row")
+        elif code == STOP_HEADER_UNREADABLE:
+            parts.append(f"the header row cannot be read ({stop['reason']})")
+        elif code == STOP_DUPLICATE_NAME:
+            shown = ", ".join(f"{c['name'] or 'a column'} at positions {c['positions']}"
+                              for c in stop["columns"][:5])
+            parts.append(f"{stop['count']} column name(s) appear more than once ({shown}), so a value "
+                         "cannot be attributed to one column")
+        elif code == STOP_BLANK_NAME:
+            parts.append(f"{stop['count']} column(s) have a blank name (positions {stop['positions'][:10]})")
+        elif code == STOP_REQUIRED_KEY_MISSING:
+            parts.append(f"required key column(s) missing: {', '.join(stop['columns'])}")
+    return ("; ".join(parts) + ". No row was staged and the original file is unchanged. This is a "
+            "property of the file: retrying the same file cannot succeed. Obtain a corrected delivery, "
+            "or have the layout reviewed.")

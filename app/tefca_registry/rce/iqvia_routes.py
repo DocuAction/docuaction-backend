@@ -637,6 +637,11 @@ def _snapshot_summary(snapshot: sm.SourceSnapshot,
         "import_status": metadata.get("import_status"),
         "import_error": metadata.get("import_error"),
         "stored_counters": _stored_counters(metadata),
+        # What was recorded at import, read from the row (no registry read per row). A
+        # snapshot with no binding predates intake-contract validation and is labelled so.
+        "contract_validation_label": (
+            ii.LABEL_BEFORE_CONTRACT_VALIDATION if ii.META_CONTRACT_BINDING not in metadata
+            else f"bound at import: {(metadata.get(ii.META_CONTRACT_BINDING) or {}).get('outcome')}"),
         "matching": _matching_capability(snapshot.source_system, snapshot),
         "affiliation_lookup": {
             "flag": "ENABLE_IQVIA_AFFILIATION_CONSUMPTION",
@@ -859,6 +864,15 @@ async def snapshot_status(
     # was enforced or shadow-only. None for a snapshot imported before it
     # existed -- shown as "not evaluated", never as clear.
     out["reference_preflight"] = (snapshot.metadata_ or {}).get("reference_preflight")
+    # Intake contract (2026-11-25): what the header binds to NOW, the stored
+    # full-file summary and any stop - column names, counts and record numbers
+    # only. A snapshot without a binding is labelled "imported before contract
+    # validation": not validated, not refused, no re-upload asked for.
+    out["contract_validation"] = ii.contract_validation_view(snapshot.source_system, snapshot.metadata_)
+    out["import_validation"] = (snapshot.metadata_ or {}).get(ii.META_IMPORT_VALIDATION)
+    out["intake_stop"] = (snapshot.metadata_ or {}).get(ii.META_INTAKE_STOP)
+    if "reconciliation" in out:
+        out["reconciliation"]["contract_validation_label"] = out["contract_validation"]["label"]
     return out
 
 
@@ -1273,6 +1287,8 @@ async def run_import_job(job_id: str) -> None:
             logger.error("run_import_job: no job %s", job_id)
             return
         importer = _IMPORTER[job.source]
+        # Plain values, read once: after a rollback the ORM objects are expired.
+        job_pk, snapshot_pk, upload_pk, attempt = job.id, job.snapshot_id, job.upload_id, job.attempt_count
 
         async def progress(summary: ii.ImportSummary) -> None:
             await jobs.heartbeat(
@@ -1316,18 +1332,32 @@ async def run_import_job(job_id: str) -> None:
             if job.upload_id is not None:
                 await jobs.mark_upload_staged(db, job.upload_id)
         except Exception as exc:  # noqa: BLE001 -- must not crash the scheduler tick
-            logger.error("IQVIA import job %s failed (snapshot=%s, attempt=%s): %s",
-                        job.id, job.snapshot_id, job.attempt_count, type(exc).__name__,
-                        exc_info=True)
-            reason = f"{type(exc).__name__}: {str(exc)[:300]}"
-            new_state = await jobs.finish_failed_or_requeue(db, job.id, reason)
-            snapshot = await db.get(sm.SourceSnapshot, job.snapshot_id)
+            # NO VALUE IN A REASON OR A LOG LINE (2026-11-25). The text of an
+            # arbitrary exception is not safe to store or log: a database error
+            # quotes the statement parameters, i.e. row values. The stored reason
+            # is `safe_failure_reason`; the log carries the stack FRAMES (file,
+            # line, function) and never the exception text.
+            import traceback
+            reason = ii.safe_failure_reason(exc)
+            logger.error("IQVIA import job %s failed (snapshot=%s, attempt=%s): %s\n%s",
+                         job_pk, snapshot_pk, attempt, reason,
+                         "".join(traceback.format_tb(exc.__traceback__)))
+            # A failed statement leaves the session in an aborted transaction;
+            # without this the bookkeeping below would itself fail and the job
+            # would sit RUNNING until the reaper found it.
+            await db.rollback()
+            if getattr(exc, "non_retryable", False):
+                # A property of the file: fail ONCE. No requeue, no second hash.
+                new_state = await jobs.finish_failed_terminal(db, job_pk, reason)
+            else:
+                new_state = await jobs.finish_failed_or_requeue(db, job_pk, reason)
+            snapshot = await db.get(sm.SourceSnapshot, snapshot_pk)
             if snapshot is not None:
                 if new_state == um.IqviaImportJob.STATE_FAILED:
                     snapshot.metadata_ = {**(snapshot.metadata_ or {}),
                                           "import_status": "failed", "import_error": reason}
-                    if job.upload_id is not None:
-                        await jobs.mark_upload_failed(db, job.upload_id)
+                    if upload_pk is not None:
+                        await jobs.mark_upload_failed(db, upload_pk)
                 else:
                     # Requeued -- still mid-import from the caller's point of
                     # view; the next poller tick resumes it (the importer's

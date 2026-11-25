@@ -1,9 +1,14 @@
-"""What the IQVIA importer does TODAY with awkward files, pinned before the
-intake-contract work changes any of it (2026-11-25).
+"""What the IQVIA importer did with awkward files BEFORE the intake gates
+(2026-11-25) - and still does for any snapshot whose rows were staged before
+them.
 
-Every value is synthetic. Each test states a behaviour, not an opinion of it:
-several of these are defects the later commits on this branch address, and the
-test that pins one is updated in the commit that changes it.
+Every value is synthetic. Each test states a behaviour, not an opinion of it.
+First written against the unchanged importer (commit "pin what the importer
+does today"). The gates then changed several of these for NEW imports only, so
+the tests marked `before the gates` now resume a snapshot that already holds a
+row and carries no gate marker: the old behaviour must be exactly preserved
+there. What a new import does instead is in
+tests/test_iqvia_intake_gates_2026_11_25.py.
 """
 from __future__ import annotations
 
@@ -16,6 +21,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.tefca_registry.rce import iqvia_import as ii
 from app.tefca_registry.rce import snapshot_models as sm
+from iqvia_contract_support import snapshot_staged_before_the_gates as staged_before
 from rce_traceability_support import SYN, rolled_back_db  # noqa: F401
 
 pytestmark = pytest.mark.regression
@@ -50,9 +56,11 @@ class TestHeaderAndRowShapeToday:
         db = rolled_back_db
         f = write_raw(tmp_path / "dup.csv", csv_text(
             ["HCO_HCE_ID", "ORG_NPI", "BUS_NM", "BUS_NM"],
-            [[f"{SYN}-D1", "", "FIRST-CELL", "SECOND-CELL"]]))
-        done = await ii.import_hco_csv(db, file_path=f, label=f"{SYN}-dup", created_by=SYN)
-        assert (done.rows_read, done.rows_staged, done.rows_rejected) == (1, 1, 0)
+            [[f"{SYN}-D0", "", "A", "B"], [f"{SYN}-D1", "", "FIRST-CELL", "SECOND-CELL"]]))
+        before = await staged_before(db, sm.SOURCE_IQVIA_HCO, f)          # before the gates
+        done = await ii.import_hco_csv(db, file_path=f, label="unused", created_by=SYN,
+                                       snapshot_id=before.id)
+        assert (done.rows_read, done.rows_staged, done.rows_already_staged, done.rows_rejected) == (2, 1, 1, 0)
         row = (await hco_rows(db, done.snapshot_id))[f"{SYN}-D1"]
         # Three keys for a four-column record: the first BUS_NM cell is in no stored column.
         assert row.payload == {"HCO_HCE_ID": f"{SYN}-D1", "ORG_NPI": "", "BUS_NM": "SECOND-CELL"}
@@ -66,10 +74,13 @@ class TestHeaderAndRowShapeToday:
         db = rolled_back_db
         f = write_raw(tmp_path / "short.csv",
                       ",".join(HCO_HEADER) + "\r\n"
+                      + f"{SYN}-S0,,,NAME-ZERO,02101\r\n"
                       + f"{SYN}-S1,,,NAME-ONE\r\n"          # 4 cells: ZIP5_CD missing
                       + f"{SYN}-S2,,,NAME-TWO,\r\n")        # 5 cells: ZIP5_CD present and empty
-        done = await ii.import_hco_csv(db, file_path=f, label=f"{SYN}-short", created_by=SYN)
-        assert (done.rows_read, done.rows_staged, done.rows_rejected) == (2, 2, 0)
+        before = await staged_before(db, sm.SOURCE_IQVIA_HCO, f)          # before the gates
+        done = await ii.import_hco_csv(db, file_path=f, label="unused", created_by=SYN,
+                                       snapshot_id=before.id)
+        assert (done.rows_read, done.rows_staged, done.rows_rejected) == (3, 2, 0)
         rows = await hco_rows(db, done.snapshot_id)
         assert "ZIP5_CD" in rows[f"{SYN}-S1"].payload and rows[f"{SYN}-S1"].payload["ZIP5_CD"] is None
         assert rows[f"{SYN}-S2"].payload["ZIP5_CD"] == ""
@@ -82,8 +93,9 @@ class TestHeaderAndRowShapeToday:
                       ",".join(HCO_HEADER) + "\r\n"
                       + f"{SYN}-L1,,,NAME-ONE,02101\r\n"
                       + f"{SYN}-L2,,,NAME-TWO,02101,EXTRA-CELL\r\n")
+        before = await staged_before(db, sm.SOURCE_IQVIA_HCO, f)          # before the gates
         with pytest.raises(TypeError):
-            await ii.import_hco_csv(db, file_path=f, label=f"{SYN}-long", created_by=SYN)
+            await ii.import_hco_csv(db, file_path=f, label="unused", created_by=SYN, snapshot_id=before.id)
 
     async def test_blank_lines_are_skipped_and_reported_lines_are_record_ordinals(
             self, rolled_back_db, tmp_path):
@@ -122,17 +134,20 @@ class TestLiftedIdentifiersToday:
         f = write_raw(tmp_path / "wide.csv", csv_text(HCO_HEADER, [
             [f"{SYN}-W1", "", "", "FITS", "02101"],
             [f"{SYN}-W2", npi, ccn, "TOO-WIDE", "02101"]]))
+        before = await staged_before(db, sm.SOURCE_IQVIA_HCO, f)          # before the gates
         with pytest.raises(DBAPIError) as caught:
-            await ii.import_hco_csv(db, file_path=f, label=f"{SYN}-wide", created_by=SYN)
+            await ii.import_hco_csv(db, file_path=f, label="unused", created_by=SYN, snapshot_id=before.id)
         assert "value too long" in str(caught.value.orig)
         await db.rollback()
 
     async def test_an_over_long_hcp_npi_makes_postgresql_refuse_the_statement(self, rolled_back_db, tmp_path):
         db = rolled_back_db
         f = write_raw(tmp_path / "hcp.csv", csv_text(HCP_HEADER, [
+            [f"{SYN}-P0", "A0", "", "NAME", "02101"],
             [f"{SYN}-P1", "A1", "12345678901", "NAME", "02101"]]))
+        before = await staged_before(db, sm.SOURCE_IQVIA_HCP, f)          # before the gates
         with pytest.raises(DBAPIError):
-            await ii.import_hcp_csv(db, file_path=f, label=f"{SYN}-hcpwide", created_by=SYN)
+            await ii.import_hcp_csv(db, file_path=f, label="unused", created_by=SYN, snapshot_id=before.id)
         await db.rollback()
 
     async def test_the_database_error_text_carries_the_row_values(self, rolled_back_db, tmp_path):
@@ -142,9 +157,11 @@ class TestLiftedIdentifiersToday:
         db = rolled_back_db
         sentinel = "SENTINEL-VALUE-7Q4Z"
         f = write_raw(tmp_path / "leak.csv", csv_text(HCO_HEADER, [
+            [f"{SYN}-K0", "", "", "FITS", "02101"],
             [f"{SYN}-K1", "12345678901", "", sentinel, "02101"]]))
+        before = await staged_before(db, sm.SOURCE_IQVIA_HCO, f)          # before the gates
         with pytest.raises(DBAPIError) as caught:
-            await ii.import_hco_csv(db, file_path=f, label=f"{SYN}-leak", created_by=SYN)
+            await ii.import_hco_csv(db, file_path=f, label="unused", created_by=SYN, snapshot_id=before.id)
         assert sentinel in str(caught.value)
         await db.rollback()
 
@@ -172,7 +189,10 @@ class TestKeyConflictsToday:
         assert rows[f"{SYN}-C1"].payload["BUS_NM"] == "FIRST-CONTENT"   # the second row is in no table
         verdict = await ii.verify_snapshot_staged_completely(db, done.snapshot_id)
         assert verdict["reconciles"] is False
-        assert verdict["refusal_reasons"] == ["staged row count does not equal read-minus-rejected"]
+        # Before the gates this was the ONLY reason, and it did not say why. A new import now
+        # also names the collision (tests/test_iqvia_intake_gates_2026_11_25.py).
+        assert verdict["refusal_reasons"][0] == "staged row count does not equal read-minus-rejected"
+        assert any("cannot hold both rows" in r for r in verdict["refusal_reasons"][1:])
 
     async def test_an_exact_duplicate_row_blocks_reconciliation_the_same_way(self, rolled_back_db, tmp_path):
         db = rolled_back_db

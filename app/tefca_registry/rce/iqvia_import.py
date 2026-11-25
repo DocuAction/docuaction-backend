@@ -54,7 +54,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TextIO
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core import request_context
@@ -137,7 +137,8 @@ def file_sha256(path: Path, *, chunk_bytes: int = 1024 * 1024) -> str:
 #: this module opened the file as "utf-8": a leading UTF-8 byte-order mark,
 #: which the preflight tolerates (REF-SCH-010), stayed in the first column's
 #: name, no row carried the identity column, and every row was rejected.
-from app.tefca_registry.rce.reference_preflight import REFERENCE_FILE_ENCODING  # noqa: E402
+from app.tefca_registry.rce.reference_preflight import (REFERENCE_FILE_ENCODING,  # noqa: E402
+                                                         ReferencePreflightBlocked)
 from app.tefca_registry.rce import iqvia_contract_registry as contract_registry  # noqa: E402
 from app.tefca_registry.rce import iqvia_intake_validation as intake  # noqa: E402
 
@@ -146,6 +147,66 @@ from app.tefca_registry.rce import iqvia_intake_validation as intake  # noqa: E4
 META_SOURCE_HEADER = "source_header"          # ordered header names + digest, as delivered
 META_CONTRACT_BINDING = "contract_binding"    # which registered contract the header binds to, by name
 META_IMPORT_VALIDATION = "import_validation"  # full-file validation summary, written once at the end
+META_INTAKE_GATES = "intake_gates"            # this snapshot is staged under the intake gates (below)
+META_INTAKE_STOP = "intake_stop"              # why a file was stopped before any row was staged
+
+#: THE INTAKE GATES (2026-11-25) apply to a snapshot that carries
+#: META_INTAKE_GATES, and the marker is set only when staging starts on a
+#: snapshot that holds NO row. A snapshot imported, or partly staged, before
+#: this change never gets it: its rows keep the shape and hash they have and a
+#: resume behaves exactly as it did. For a gated snapshot:
+#:   * a file whose header cannot key rows safely is stopped before any row is
+#:     staged, once, without retry (IntakeStructuralStop);
+#:   * a record whose cell count differs from the header is not staged under
+#:     name-keyed columns (its cells cannot be attributed to columns): it is
+#:     quarantined - counted, with its record number - and the original file
+#:     keeps its bytes;
+#:   * an npi / ccn whose text does not fit the lifted column leaves that
+#:     column NULL (never truncated); the text stays in the payload;
+#:   * a key conflict is classified by row hash instead of being assumed to be
+#:     an earlier attempt of the same row.
+#: Every staged row therefore has exactly the header width, so `payload` and
+#: `record_sha256` are built exactly as before.
+INTAKE_GATES_VERSION = "1"
+#: How many genuine key collisions are compared column by column (names only).
+_MAX_COLLISIONS_COMPARED = 50
+
+
+class ImportRefused(ValueError):
+    """A resume that cannot proceed (no such snapshot, not PENDING, another
+    file). Its text is written by this module and holds ids and digests only."""
+
+
+class IntakeStructuralStop(ReferencePreflightBlocked):
+    """The file cannot be keyed by column name: a duplicate or blank header
+    name, a missing required processing key, or no readable header row. No row
+    was staged. Deterministic for these bytes, so the job fails ONCE and is not
+    requeued (`non_retryable`). The text names codes and column names only."""
+
+    non_retryable = True
+
+    def __init__(self, message: str, stops: List[Dict[str, Any]]):
+        super().__init__(message)
+        self.stops = stops
+
+
+def safe_failure_reason(exc: BaseException) -> str:
+    """What may be stored as a job / snapshot failure reason. An arbitrary
+    exception text is NOT safe: a database error quotes the statement
+    parameters, i.e. row values. Only this package's own refusals, whose text
+    is built from codes, ids and column names, are passed through; anything
+    else is reduced to its type (and, for a database error, the driver error
+    type and SQLSTATE)."""
+    if isinstance(exc, (ReferencePreflightBlocked, ReaderChangeRefused, ImportRefused)):
+        return f"{type(exc).__name__}: {str(exc)[:600]}"
+    parts = [type(exc).__name__]
+    orig = getattr(exc, "orig", None)
+    if orig is not None:
+        parts.append(type(orig).__name__)
+        state = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+        if isinstance(state, str) and state.isalnum():
+            parts.append(state)
+    return ":".join(parts) + " (error text withheld: it can quote row values)"
 
 
 #: Which reader staged a snapshot's rows, recorded in the snapshot's metadata
@@ -243,6 +304,103 @@ def _reference_cells(path):
         yield from csv.reader(fh)
 
 
+#: The table unique key of each observation table (with source_snapshot_id).
+_ROW_KEY_COLUMNS = {
+    sm.IqviaHcoObservation: ("source_record_key",),
+    sm.IqviaHcpObservation: ("source_record_key",),
+    sm.IqviaAffiliationObservation: ("hcp_record_key", "hco_record_key", "affiliation_type"),
+}
+
+
+class _KeyConflicts:
+    """What the rows that `ON CONFLICT DO NOTHING` skipped actually were.
+
+    A conflict is on the table unique key. The stored row with that key is
+    compared by `record_sha256`:
+      * the same hash - the same row again. On a snapshot that held no row when
+        this run started it can only be an exact duplicate row IN THE FILE; on a
+        resumed snapshot it is a row an earlier attempt staged (or a duplicate -
+        the two cannot be told apart then, and the summary says so).
+      * a different hash - a KEY COLLISION: two different rows of the file claim
+        one key and the table can hold only the first. Never merged, never
+        relabelled; it blocks reconciliation. For the first few, the NAMES of the
+        stored columns in which the two rows differ are tallied, so that an
+        owner can see what a wider key would have to include.
+    Rows with different keys (another address of one practitioner, another
+    organisation or relationship type) are not conflicts and never come here."""
+
+    def __init__(self, model, snapshot_id, had_rows_at_start: bool):
+        self.model, self.snapshot_id, self.had_rows_at_start = model, snapshot_id, had_rows_at_start
+        self.key_columns = _ROW_KEY_COLUMNS[model]
+        self.identical = intake.Finding()
+        self.different = intake.Finding()
+        self.unresolved = intake.Finding()
+        self.compared = 0
+        self.only_unstored_columns_differ = 0
+        self.differing_columns: Dict[str, int] = {}
+
+    async def classify(self, db, rows: List[Dict[str, Any]], record_numbers: List[int]) -> None:
+        model, cols = self.model, [getattr(self.model, c) for c in self.key_columns]
+        keys = [tuple(r[c] for c in self.key_columns) for r in rows]
+        stored: Dict[tuple, tuple] = {}
+        for start in range(0, len(keys), 1000):
+            part = keys[start:start + 1000]
+            match = (cols[0].in_([k[0] for k in part]) if len(cols) == 1 else tuple_(*cols).in_(part))
+            found = await db.execute(select(*cols, model.id, model.record_sha256).where(
+                model.source_snapshot_id == self.snapshot_id, match))
+            for *key, row_id, sha in found.all():
+                stored[tuple(key)] = (row_id, sha)
+        collided: List[tuple] = []
+        for row, key, record_no in zip(rows, keys, record_numbers):
+            hit = stored.get(key)
+            if hit is None:
+                self.unresolved.add(record_no)
+            elif hit[0] == row["id"]:
+                continue                                    # inserted by this statement
+            elif hit[1] == row["record_sha256"]:
+                self.identical.add(record_no)
+            else:
+                self.different.add(record_no)
+                if self.compared + len(collided) < _MAX_COLLISIONS_COMPARED:
+                    collided.append((hit[0], row["payload"]))
+        if collided:
+            payloads = dict((await db.execute(select(model.id, model.payload).where(
+                model.id.in_([c[0] for c in collided])))).all())
+            for row_id, incoming in collided:
+                kept = payloads.get(row_id) or {}
+                names = [n for n in sorted(set(kept) | set(incoming), key=str)
+                         if isinstance(n, str) and kept.get(n) != incoming.get(n)]
+                self.compared += 1
+                if not names:
+                    self.only_unstored_columns_differ += 1
+                for name in names:
+                    self.differing_columns[name] = self.differing_columns.get(name, 0) + 1
+
+    def as_metadata(self) -> Dict[str, Any]:
+        duplicate, present = (self.identical, intake.Finding()) if not self.had_rows_at_start \
+            else (intake.Finding(), self.identical)
+        return {
+            "classified_by": "record_sha256 of the stored row with the same table unique key",
+            "table_unique_key": ["source_snapshot_id", *self.key_columns],
+            "snapshot_had_rows_at_start": self.had_rows_at_start,
+            "identical_row_already_present": present.count,
+            "identical_note": ("on a resumed snapshot an identical conflict is a row an earlier attempt "
+                               "staged, or an exact duplicate row in the file; the two cannot be told "
+                               "apart" if self.had_rows_at_start else None),
+            "exact_duplicate_rows_in_file": duplicate.count,
+            "exact_duplicate_record_numbers": list(duplicate.records),
+            "key_collisions_different_content": self.different.count,
+            "key_collision_record_numbers": list(self.different.records),
+            "collisions_compared_by_column": self.compared,
+            "collision_columns_that_differ": [
+                {"column": n, "collisions": c}
+                for n, c in sorted(self.differing_columns.items(), key=lambda kv: (-kv[1], kv[0]))],
+            "collisions_differing_only_in_columns_not_stored": self.only_unstored_columns_differ,
+            "unresolved_conflicts": self.unresolved.count,
+            "unresolved_record_numbers": list(self.unresolved.records),
+        }
+
+
 #: Which delivered column each lifted identifier column is taken from.
 _LIFTED_SOURCE_COLUMNS = {
     sm.SOURCE_IQVIA_HCO: {"npi": "ORG_NPI", "ccn": "ORG_CCN_ID"},
@@ -302,6 +460,31 @@ async def _off_loop(fn, *args, heartbeat_cb=None, phase: str = ""):
     finally:
         stop.set()
         await beat
+
+
+#: Preflight findings whose text or evidence repeats cells of the first row.
+_FINDINGS_QUOTING_THE_FIRST_ROW = ("REF-SCH-003", "REF-SCH-009", "REF-SCH-011")
+
+
+def _storable_findings(findings, names_are_names: bool):
+    """The preflight findings as they may be stored. The preflight quotes
+    column names (duplicates, a sample of extra columns, a one-field header).
+    When the first row does not carry the source's key columns it is not
+    recognisably a header - a file delivered WITHOUT a header row has data
+    there - so for such a file those quotations are withheld: the code, the
+    disposition and the counts stay."""
+    if names_are_names:
+        return findings
+    kept = []
+    for f in findings:
+        if f["code"] in _FINDINGS_QUOTING_THE_FIRST_ROW:
+            f = {**f,
+                 "description": f"{f['code']}: details withheld - the first row of the file is not "
+                                "recognisably a header row, so its cells may be data.",
+                 "evidence": {k: v for k, v in f["evidence"].items()
+                              if isinstance(v, (int, bool)) and not isinstance(v, str)}}
+        kept.append(f)
+    return kept
 
 
 def _preflight_and_header(path, source_system: str):
@@ -394,13 +577,13 @@ async def _import_csv(
     if snapshot_id is not None:
         snapshot = await db.get(sm.SourceSnapshot, snapshot_id)
         if snapshot is None:
-            raise ValueError(f"no snapshot {snapshot_id} to resume into")
+            raise ImportRefused(f"no snapshot {snapshot_id} to resume into")
         if snapshot.status != sm.SNAPSHOT_PENDING:
-            raise ValueError(
+            raise ImportRefused(
                 f"snapshot {snapshot_id} is {snapshot.status}, not PENDING -- "
                 "an approved/rejected snapshot is never resumed into")
         if snapshot.sha256 != sha:
-            raise ValueError(
+            raise ImportRefused(
                 f"file at {path} (sha256 {sha[:12]}...) does not match the "
                 f"snapshot being resumed (sha256 {snapshot.sha256[:12]}...); "
                 "refusing to mix two different files under one snapshot id")
@@ -439,11 +622,37 @@ async def _import_csv(
     # Nothing here refuses, and no row's stored content depends on it.
     registry = contract_registry.get_registry()
     source_header = contract_registry.describe_header(registry, source_system, header)
+    # Do the cells of the first row name columns, or is the first row data?
+    names_are_names = header is not None and contract_registry.header_is_recognised(
+        registry, source_system, header)
     if header_error:
         source_header["unreadable"] = header_error
     binding = contract_registry.bind_header(registry, source_system, header)
-    snapshot.metadata_ = {**(snapshot.metadata_ or {}),
-                          META_SOURCE_HEADER: source_header, META_CONTRACT_BINDING: binding,
+    # THE INTAKE GATES: decided once, when staging starts on an empty snapshot.
+    had_rows_at_start = (await db.execute(
+        select(model.id).where(model.source_snapshot_id == snapshot.id).limit(1))).first() is not None
+    before = dict(snapshot.metadata_ or {})
+    gates = before.get(META_INTAKE_GATES)
+    if gates is None and not had_rows_at_start:
+        gates = {"version": INTAKE_GATES_VERSION,
+                 "row_shape": "only records of exactly the header width are staged; "
+                              "payload and record_sha256 are built as before",
+                 "established_at": datetime.now(timezone.utc).isoformat()}
+    stops = (contract_registry.structural_stops(registry, source_system, header, header_error)
+             if gates else [])
+    before.pop(META_INTAKE_STOP, None)
+    snapshot.metadata_ = {**before,
+                          **({META_INTAKE_GATES: gates} if gates else {}),
+                          **({META_INTAKE_STOP: {
+                              "code": "STRUCTURAL_STOP", "stops": stops, "rows_staged": 0,
+                              "retryable": False,
+                              "operator_message": contract_registry.structural_stop_message(stops)}}
+                             if stops else {}),
+                          # The binding is what the reconciliation gate keys on, so only a
+                          # snapshot staged under the gates carries it; one whose rows predate
+                          # them stays "imported before contract validation".
+                          META_SOURCE_HEADER: source_header,
+                          **({META_CONTRACT_BINDING: binding} if gates else {}),
                           "reference_preflight": {
         "gate": preflight["gate"], "schema_version": preflight["schema_version"],
         "preflight_version": preflight["preflight_version"],
@@ -451,9 +660,19 @@ async def _import_csv(
         "bound": preflight["bound"], "held_checks": preflight["held_checks"],
         "findings": [{k: f[k] for k in ("code", "field_name", "applicability",
                                         "execution", "disposition", "description",
-                                        "evidence")} for f in preflight["findings"]],
+                                        "evidence")}
+                     for f in _storable_findings(preflight["findings"], names_are_names)],
     }}
     await db.commit()
+    if stops:
+        # Independent of ENABLE_PREFLIGHT_ENFORCEMENT: rows of this file cannot
+        # be keyed by name at all. Recorded above; nothing was staged.
+        blocked = sorted({f["code"] for f in preflight["findings"]
+                          if f["disposition"] == _rp.pm.DISP_BLOCKED})
+        raise IntakeStructuralStop(
+            f"intake stopped {source_system} snapshot {snapshot.id} before any row was staged: "
+            + contract_registry.structural_stop_message(stops)
+            + (f" Reference preflight findings: {', '.join(blocked)}." if blocked else ""), stops)
     if enforce and preflight["gate"] == _rp.pm.GATE_BLOCKED:
         codes = sorted({f["code"] for f in preflight["findings"]
                         if f["disposition"] == _rp.pm.DISP_BLOCKED})
@@ -473,7 +692,22 @@ async def _import_csv(
                        for c in ("npi", "ccn") if c in model.__table__.c},
         lifted_sources=_LIFTED_SOURCE_COLUMNS.get(source_system, {}))
 
+    gated = bool(gates)
+    conflicts = _KeyConflicts(model, snapshot.id, had_rows_at_start) if gated else None
+
+    async def flush(rows: List[Dict[str, Any]], record_numbers: List[int]) -> None:
+        staged = await _stage_rows(db, snapshot_id=snapshot.id, model=model, rows=rows)
+        summary.rows_staged += staged
+        summary.rows_already_staged += len(rows) - staged
+        if conflicts is not None and staged < len(rows):
+            # Only when the insert came back short: which rows conflicted, and
+            # is the stored row the same row or a different one?
+            await conflicts.classify(db, rows, record_numbers)
+        await db.commit()
+        await _notify_progress(progress_cb, summary)
+
     buffer: List[Dict[str, Any]] = []
+    buffer_records: List[int] = []
     for record_no, cells in _iter_reference_records(path, validation):
         line_no = record_no + 1               # what enumerate(DictReader, start=2) called the line
         summary.rows_read += 1
@@ -481,6 +715,13 @@ async def _import_csv(
             validation.measure(record_no, cells)
         else:
             validation.width_differs(record_no, cells)
+            if gated:
+                # Not staged: a record of another width cannot be attributed to
+                # columns. Counted among the rejected so that read - rejected
+                # still equals what should be in the table.
+                validation.quarantine(record_no)
+                summary.rows_rejected += 1
+                continue
         row = intake.legacy_row(validation.header, cells)
         built = build_payload_and_keys(row)
         # `built is None` is the one universal rejection signal every
@@ -496,7 +737,12 @@ async def _import_csv(
             if len(summary.rejected_sample_lines) < _MAX_SAMPLE_REJECTED_LINES:
                 summary.rejected_sample_lines.append(line_no)
             continue
-        validation.lifted(record_no, built)
+        for column in validation.lifted(record_no, built):
+            if gated:
+                # The text does not fit the lifted column: leave it NULL rather
+                # than truncate it or fail the file. The payload keeps the text.
+                built[column] = None
+        buffer_records.append(record_no)
         buffer.append({
             "id": uuid.uuid4(), "source_snapshot_id": snapshot.id,
             "record_sha256": _row_sha256(row), "observed_at": datetime.now(timezone.utc),
@@ -504,18 +750,10 @@ async def _import_csv(
             **{k: v for k, v in built.items()},
         })
         if len(buffer) >= chunk_size:
-            staged = await _stage_rows(db, snapshot_id=snapshot.id, model=model, rows=buffer)
-            summary.rows_staged += staged
-            summary.rows_already_staged += len(buffer) - staged
-            await db.commit()
-            buffer = []
-            await _notify_progress(progress_cb, summary)
+            await flush(buffer, buffer_records)
+            buffer, buffer_records = [], []
     if buffer:
-        staged = await _stage_rows(db, snapshot_id=snapshot.id, model=model, rows=buffer)
-        summary.rows_staged += staged
-        summary.rows_already_staged += len(buffer) - staged
-        await db.commit()
-        await _notify_progress(progress_cb, summary)
+        await flush(buffer, buffer_records)
 
     # Correct record_count to the real total now that the file has been read
     # in full, and persist the rejected count alongside it -- the exact
@@ -533,7 +771,11 @@ async def _import_csv(
                           META_IMPORT_VALIDATION: validation.as_metadata(rows={
                               "read": summary.rows_read, "inserted": summary.rows_staged,
                               "already_present": summary.rows_already_staged,
-                              "rejected": summary.rows_rejected})}
+                              "rejected": summary.rows_rejected},
+                              extra=({"intake_gates_applied": True,
+                                      "key_conflicts": conflicts.as_metadata()}
+                                     if conflicts is not None else
+                                     {"intake_gates_applied": False}))}
     await db.commit()
 
     summary.completed = True
@@ -678,6 +920,84 @@ async def import_affiliation_csv(db, *, file_path, label: str, created_by: str,
         progress_cb=progress_cb, heartbeat_cb=heartbeat_cb)
 
 
+LABEL_BEFORE_CONTRACT_VALIDATION = "imported before contract validation"
+
+
+def contract_validation_view(source_system: str, metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """What the intake-contract checks say about a snapshot NOW, from what the
+    importer stored on it. Pure read: no query, no write.
+
+    A snapshot with no `contract_binding` was imported before these checks
+    existed. It is labelled so - never described as validated - and nothing is
+    refused: its approvals and behaviour are untouched and no re-upload is
+    asked for. For a snapshot that carries the binding, the STORED header is
+    bound again against the contracts registered now, so registering a reviewed
+    contract is what lifts an "unregistered" refusal."""
+    metadata = metadata or {}
+    if META_CONTRACT_BINDING not in metadata:
+        return {"status": "not_evaluated", "label": LABEL_BEFORE_CONTRACT_VALIDATION,
+                "validated": False, "refusal_reasons": [],
+                "note": "This snapshot was imported before intake-contract validation existed. It has "
+                        "no contract binding and no full-file validation summary; it is not described "
+                        "as validated against any contract, and nothing here blocks it."}
+    reasons: List[str] = []
+    stored = metadata.get(META_SOURCE_HEADER) or {}
+    registry = contract_registry.get_registry()
+    if stored.get("present") and stored.get("names_verbatim"):
+        binding = contract_registry.bind_header(registry, source_system, stored.get("names") or [])
+    else:
+        binding = contract_registry.bind_header(registry, source_system, None)
+        reasons.append("the stored header cannot be bound to a contract (no header row was read, or "
+                       "its first row was not a header); the file needs review before any re-delivery")
+    if binding["outcome"] == contract_registry.OUTCOME_UNREGISTERED:
+        diff = binding.get("diff") or {}
+        detail = ("" if not diff else
+                  f" Against {diff['against']['contract_id']}: {diff['added']['count']} added, "
+                  f"{diff['missing']['count']} missing, "
+                  f"{diff['reordered']['columns_out_of_position']} out of position.")
+        reasons.append(binding["operator_message"] + detail)
+    validation = metadata.get(META_IMPORT_VALIDATION) or {}
+    width = validation.get("record_width") or {}
+    quarantined = int(width.get("quarantined_records") or 0)
+    if quarantined:
+        reasons.append(
+            f"{quarantined} record(s) were quarantined: their cell count differs from the header, so "
+            "they were not staged under named columns (ambiguous row structure). The original file "
+            "is preserved. Reconciliation stays blocked until the owner decides what happens to them; "
+            "record numbers are in import_validation.record_width.")
+    conflicts = validation.get("key_conflicts") or {}
+    collisions = int(conflicts.get("key_collisions_different_content") or 0)
+    if collisions:
+        columns = [c["column"] for c in conflicts.get("collision_columns_that_differ") or []][:12]
+        reasons.append(
+            f"{collisions} row(s) share a table unique key with a DIFFERENT row of the same file: the "
+            "stored row grain cannot hold both rows, and the later one is in no table (the original "
+            "file keeps it). Nothing was merged or relabelled. "
+            + (f"Stored columns in which the colliding rows differ: {', '.join(columns)}. "
+               if columns else "")
+            + (f"{conflicts.get('collisions_differing_only_in_columns_not_stored')} of the compared "
+               "collisions differ only in columns that are not stored. "
+               if conflicts.get("collisions_differing_only_in_columns_not_stored") else "")
+            + "A wider key is a schema change and an owner decision.")
+    if int(conflicts.get("unresolved_conflicts") or 0):
+        reasons.append(f"{conflicts['unresolved_conflicts']} key conflict(s) could not be classified")
+    return {
+        "status": binding["outcome"], "validated": binding["outcome"] in (
+            contract_registry.OUTCOME_EXACT, contract_registry.OUTCOME_REORDERED) and not reasons,
+        "label": {contract_registry.OUTCOME_EXACT: "bound to a registered contract",
+                  contract_registry.OUTCOME_REORDERED: "bound to a registered contract (columns reordered)",
+                  contract_registry.OUTCOME_UNREGISTERED: "unregistered contract",
+                  contract_registry.OUTCOME_NO_HEADER: "no header"}[binding["outcome"]],
+        "contract": binding.get("contract"), "diff": binding.get("diff"),
+        "registry": binding.get("registry"),
+        "bound_at_import": (metadata.get(META_CONTRACT_BINDING) or {}).get("outcome"),
+        "intake_gates_applied": bool(metadata.get(META_INTAKE_GATES)),
+        "quarantined_records": quarantined, "key_collisions_different_content": collisions,
+        "exact_duplicate_rows_in_file": int(conflicts.get("exact_duplicate_rows_in_file") or 0),
+        "refusal_reasons": reasons,
+    }
+
+
 async def verify_snapshot_staged_completely(db, snapshot_id) -> Dict[str, Any]:
     """Reconciliation gate: does the observation table actually hold
     `record_count` rows for this snapshot? Run this BEFORE approving --
@@ -730,7 +1050,13 @@ async def verify_snapshot_staged_completely(db, snapshot_id) -> Dict[str, Any]:
     if (snapshot.metadata_ or {}).get("reference_reader_refused"):
         reasons.append("rows were staged by an earlier reader and the resume was refused "
                        "(READER_CHANGED_AFTER_STAGING); this snapshot cannot be completed")
+    # INTAKE CONTRACT (2026-11-25). Each refusal below fires only on the
+    # metadata the new importer writes; a snapshot without it is reported as
+    # "imported before contract validation" and is refused nothing here.
+    contract_validation = contract_validation_view(snapshot.source_system, snapshot.metadata_)
+    reasons.extend(contract_validation["refusal_reasons"])
     return {
+        "contract_validation": contract_validation,
         "snapshot_id": str(snapshot_id), "source_system": snapshot.source_system,
         "declared_record_count": snapshot.record_count, "rows_rejected": rejected,
         "expected_staged_count": expected, "staged_row_count": staged,

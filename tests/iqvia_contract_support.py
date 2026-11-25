@@ -245,3 +245,29 @@ class StageUser:
         self.role = role
         self.email = f"iqvia-intake-{role}@synthetic-test.docuaction.invalid"
         self.id = None
+
+
+async def snapshot_staged_before_the_gates(db, source_system: str, path, *, staged_rows: int = 1):
+    """A PENDING snapshot as the importer left one BEFORE the intake gates: its
+    first `staged_rows` rows are in the table, and it carries no gate marker
+    and no contract binding. A resume into it must behave exactly as the
+    importer always did."""
+    from datetime import datetime, timezone
+
+    from app.tefca_registry.rce import iqvia_import as ii
+    from app.tefca_registry.rce.source_matching import register_snapshot
+
+    builder = {HCO: ii._hco_payload_and_keys, HCP: ii._hcp_payload_and_keys,
+               AFFIL: ii._affiliation_payload_and_keys}[source_system]
+    snapshot = await register_snapshot(
+        db, source_system=source_system, label=f"SYNTHETIC-TRACE-before-{path.stem}",
+        sha256=ii.file_sha256(path), record_count=0, received_at=datetime.now(timezone.utc),
+        created_by="SYNTHETIC-TRACE",
+        metadata={"original_path": str(path), "reference_reader": ii.REFERENCE_READER})
+    rows = [row for _line, row in ii.iter_reference_rows(path)][:staged_rows]
+    await ii._stage_rows(db, snapshot_id=snapshot.id, model=MODELS[source_system], rows=[
+        {"id": _uuid.uuid4(), "source_snapshot_id": snapshot.id, "record_sha256": ii._row_sha256(r),
+         "observed_at": datetime.now(timezone.utc), "correlation_id": "before-the-gates", "payload": r,
+         **builder(r)} for r in rows])
+    await db.commit()
+    return snapshot

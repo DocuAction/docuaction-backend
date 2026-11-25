@@ -181,7 +181,8 @@ class TestWhatIsRecordedAboutTheFile:
         assert validation["measured_against"]["contract_id"] == contract.contract_id
         assert validation["record_width"] == {"header_columns": len(contract.names), "short_records": 0,
                                               "short_record_numbers": [], "long_records": 0,
-                                              "long_record_numbers": []}
+                                              "long_record_numbers": [], "quarantined_records": 0,
+                                              "quarantined_record_numbers": []}
         assert validation["lifted_identifiers"]["npi"]["lifted"] == 6
         # Not inside anything the staging token reads.
         assert "import_validation" not in json.dumps(meta.get("import_summary") or {})

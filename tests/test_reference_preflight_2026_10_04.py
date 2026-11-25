@@ -147,28 +147,35 @@ async def _staged(db, snapshot_id) -> int:
 @pytest.mark.asyncio
 async def test_flag_off_a_renamed_identity_column_no_longer_reconciles_as_an_empty_snapshot(
         rolled_back_db, tmp_path):
-    """The false pass, reproduced on the unenforced (default) path."""
+    """The false pass, reproduced on the unenforced (default) path.
+
+    Changed 2026-11-25 (intake gate C): a NEW import whose required key column
+    is missing is stopped before any row is read, whatever the enforcement
+    flag says, instead of completing with every row rejected. The preflight is
+    still recorded as shadow (`enforced` False) and the snapshot still cannot
+    reconcile."""
     db = rolled_back_db
     assert settings.ENABLE_PREFLIGHT_ENFORCEMENT is False
     header = ["hco_hce_id" if h == "HCO_HCE_ID" else h for h in HCO_HEADER]
     f = write_csv(tmp_path / "renamed.csv", header, GOOD_ROWS)
 
-    summary = await ii.import_hco_csv(db, file_path=f, label=f"{SYN}-ref-pf-off", created_by=SYN)
-    # Unchanged legacy behaviour with the flag off: the import completes,
-    # every row rejected, nothing staged.
-    assert summary.completed and summary.rows_read == 2 and summary.rows_rejected == 2
-    assert await _staged(db, summary.snapshot_id) == 0
+    with pytest.raises(ii.IntakeStructuralStop, match="REF-SCH-004"):
+        await ii.import_hco_csv(db, file_path=f, label=f"{SYN}-ref-pf-off", created_by=SYN)
+    snapshot = (await db.execute(select(sm.SourceSnapshot).where(
+        sm.SourceSnapshot.snapshot_label == f"{SYN}-ref-pf-off"))).scalars().one()
+    assert await _staged(db, snapshot.id) == 0
+    assert "rows_rejected" not in snapshot.metadata_           # no row was read, so none was rejected
 
-    snapshot = await db.get(sm.SourceSnapshot, summary.snapshot_id)
     recorded = snapshot.metadata_["reference_preflight"]
     assert recorded["gate"] == pm.GATE_BLOCKED and recorded["enforced"] is False
     assert any(x["code"] == "REF-SCH-004" for x in recorded["findings"])
+    assert snapshot.metadata_["intake_stop"]["stops"] == [
+        {"code": "REQUIRED_KEY_MISSING", "columns": ["HCO_HCE_ID"]}]
 
     # Before 2026-10-04 this read reconciles=True (0 expected == 0 staged).
-    check = await ii.verify_snapshot_staged_completely(db, summary.snapshot_id)
+    check = await ii.verify_snapshot_staged_completely(db, snapshot.id)
     assert check["expected_staged_count"] == 0 and check["staged_row_count"] == 0
     assert check["reconciles"] is False
-    assert len(check["refusal_reasons"]) == 2
 
 
 @pytest.mark.asyncio
@@ -193,6 +200,7 @@ async def test_flag_on_a_blocked_extract_is_refused_before_any_row_is_staged(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("iqvia_narrow_test_layouts_bind")      # 2026-11-25: see conftest.py
 async def test_flag_on_a_clean_extract_imports_and_reconciles(rolled_back_db, tmp_path, monkeypatch):
     db = rolled_back_db
     monkeypatch.setattr(settings, "ENABLE_PREFLIGHT_ENFORCEMENT", True)

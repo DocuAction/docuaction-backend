@@ -32,7 +32,8 @@ from test_iqvia_routes import (  # noqa: F401  (fixtures + helpers shared with t
     HCO_HEADER, _created_snapshot_ids, _iqvia_drop_dir_is_tmp_path, _iqvia_sources, _reconcile,
     _run_one_queued_job, _stage_and_complete, _User, db, write_csv)
 
-pytestmark = pytest.mark.regression
+# 2026-11-25: these files predate intake contracts; see the fixture in conftest.py.
+pytestmark = [pytest.mark.regression, pytest.mark.usefixtures("iqvia_narrow_test_layouts_bind")]
 
 REVIEWER = lambda: _User("reviewer")  # noqa: E731
 

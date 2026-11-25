@@ -24,7 +24,8 @@ from app.tefca_registry.rce import iqvia_upload_models as um
 from app.tefca_registry.rce import snapshot_models as sm
 from rce_traceability_support import SYN  # noqa: F401
 
-pytestmark = pytest.mark.regression
+# 2026-11-25: these files predate intake contracts; see the fixture in conftest.py.
+pytestmark = [pytest.mark.regression, pytest.mark.usefixtures("iqvia_narrow_test_layouts_bind")]
 
 _created_snapshot_ids: list = []
 _created_upload_ids: list = []

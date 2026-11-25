@@ -72,7 +72,7 @@ def legacy_row(header: Sequence[str], cells: Sequence[str]) -> Dict[Any, Any]:
     return row
 
 
-class _Finding:
+class Finding:
     __slots__ = ("count", "records", "max_characters")
 
     def __init__(self) -> None:
@@ -110,19 +110,24 @@ class FullFileValidation:
                 self._length_checks.append((index, spec.vendor_length))
             if spec.vendor_type == "Numeric":
                 self._numeric_checks.append(index)
-        self._over_length: Dict[int, _Finding] = {}
-        self._not_decimal: Dict[int, _Finding] = {}
-        self._short, self._long = _Finding(), _Finding()
+        self._over_length: Dict[int, Finding] = {}
+        self._not_decimal: Dict[int, Finding] = {}
+        self._short, self._long = Finding(), Finding()
+        self._quarantined = Finding()
         self.blank_lines = 0
         self.records_measured = 0
         self._lifted_limits = dict(lifted_limits)
         self._lifted_sources = dict(lifted_sources)
-        self._lifted = {col: {"lifted": 0, "blank": 0, "longer_than_column": _Finding(),
+        self._lifted = {col: {"lifted": 0, "blank": 0, "longer_than_column": Finding(),
                               "not_a_valid_npi": 0} for col in self._lifted_limits}
 
     # ── per record ───────────────────────────────────────────────────────────
     def width_differs(self, record_number: int, cells: Sequence[str]) -> None:
         (self._short if len(cells) < self.width else self._long).add(record_number)
+
+    def quarantine(self, record_number: int) -> None:
+        """A record of another width that was NOT staged."""
+        self._quarantined.add(record_number)
 
     def measure(self, record_number: int, cells: Sequence[str]) -> None:
         """Per-column checks for a record whose width equals the header's (in a
@@ -133,7 +138,7 @@ class FullFileValidation:
             if characters > limit:
                 finding = self._over_length.get(index)
                 if finding is None:
-                    finding = self._over_length[index] = _Finding()
+                    finding = self._over_length[index] = Finding()
                 finding.add(record_number)
                 if characters > finding.max_characters:
                     finding.max_characters = characters
@@ -144,7 +149,7 @@ class FullFileValidation:
             if cell.strip() and _PLAIN_DECIMAL.fullmatch(cell) is None:
                 finding = self._not_decimal.get(index)
                 if finding is None:
-                    finding = self._not_decimal[index] = _Finding()
+                    finding = self._not_decimal[index] = Finding()
                 finding.add(record_number)
 
     def lifted(self, record_number: int, built: Dict[str, Any]) -> List[str]:
@@ -169,7 +174,7 @@ class FullFileValidation:
         return too_long
 
     # ── the stored summary ───────────────────────────────────────────────────
-    def _columns(self, findings: Dict[int, _Finding], *, with_length: bool) -> Dict[str, Any]:
+    def _columns(self, findings: Dict[int, Finding], *, with_length: bool) -> Dict[str, Any]:
         limits = dict(self._length_checks)
         rows = []
         for index in sorted(findings):
@@ -205,7 +210,9 @@ class FullFileValidation:
             "record_width": {
                 "header_columns": self.width,
                 "short_records": self._short.count, "short_record_numbers": list(self._short.records),
-                "long_records": self._long.count, "long_record_numbers": list(self._long.records)},
+                "long_records": self._long.count, "long_record_numbers": list(self._long.records),
+                "quarantined_records": self._quarantined.count,
+                "quarantined_record_numbers": list(self._quarantined.records)},
             "blank_lines_skipped": self.blank_lines,
             "records_measured_per_column": self.records_measured,
             "over_vendor_length": self._columns(self._over_length, with_length=True),
