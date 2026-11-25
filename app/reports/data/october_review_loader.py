@@ -70,8 +70,12 @@ ASSESSMENT RUN AND EVIDENCE CUTOFF
     against the intake - never "the latest run in the table". The evidence cutoff
     is REQUIRED and explicit: no evidence, review or comment newer than it is
     read. ONE EXCEPTION: curated status and hold reasons (`rce_curated_records`,
-    one mutable row per record with no status history) are read as they are at
-    generation; the dataset states this as `curated_status_basis`. No completed
+    one mutable row per record with no status history) are read as they are when
+    the loader runs; the dataset states this as `curated_status_basis`. The
+    export job loads ONCE per delivery + run + cutoff and freezes the result
+    (`record_review_freeze`): every format states the freeze time, and the
+    status is the status at that time, never the status at the cutoff. A row
+    count that does not match the delivery's recorded count is a refusal. No completed
     run, or no cutoff, is a refusal.
 
 REVIEW LINEAGE (review_records.source_record_id)
@@ -883,6 +887,15 @@ async def load_record_facts(
         .where(m.RceSourceRecord.source_intake_id == intake_uuid))).scalar() or 0)
     if len(facts) != total:
         raise LoaderRefused(f"loaded {len(facts)} facts for {total} source records")
+    # ENFORCED (2026-11-25): `row_count_matches` used to be computed and reported, and a report was produced
+    # anyway. A dataset that does not reconcile with the delivery's own recorded count is refused with the two
+    # numbers; nothing is rendered or frozen from it.
+    if intake.record_count is not None and int(intake.record_count) != len(facts):
+        raise LoaderRefused(
+            f"row count mismatch: the delivery records {int(intake.record_count)} record(s) "
+            f"(rce_source_intake.record_count) but {len(facts)} source record(s) were loaded for it. No report "
+            f"is produced from a dataset that does not reconcile with the delivery; resolve the difference "
+            f"(or correct the recorded count) and request the export again")
 
     rejected_annotations = sorted(a for a in annotations if a not in seen)
     rejected_comments = sorted(c for c in comments if c not in seen)

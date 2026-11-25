@@ -78,7 +78,7 @@ import io
 import re
 from typing import Any, Dict, Iterable, List, Optional
 
-DATASET_VERSION = "1.3.0"
+DATASET_VERSION = "1.4.0"
 BUCKETS = ("B1", "B2", "B3", "B4")
 STATUS_HELD = "HELD"
 USPS_UNAVAILABLE = "Not checked—unavailable"
@@ -96,6 +96,12 @@ DRAFT_BANNER = ("CURRENT REVIEW / DRAFT / NOT FINAL - INDEPENDENT QA PENDING. "
                 "Automated checks are not QA approval.")
 #: Wording removed by the 2026-11-11 report corrections; refused in PECOS cells.
 PROHIBITED_PECOS_PHRASES = ("lost-identifier/outage family",)
+
+#: Summary rows of a rendering built from a frozen dataset (record_review_freeze).
+FROZEN_SHA_ROW = "Frozen dataset SHA-256 (same in every format)"
+FROZEN_ID_ROW = "Frozen dataset id"
+FROZEN_AT_ROW = "Dataset frozen at (UTC)"
+FROZEN_STATUS_ROW = "Curated / hold status captured (UTC; status at the freeze, NOT at the evidence cutoff)"
 
 SAM_EXTRACT_COLUMN = "SAM Public Extract (supplementary; candidate only)"
 #: The persisted automated bucket, kept beside the reporting "Bucket" (2026-11-16).
@@ -525,7 +531,14 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                   classification: str = "DRAFT",
                   load_meta: Optional[Dict[str, Any]] = None,
                   stored_comments: Optional[Dict[str, Dict[str, Any]]] = None,
+                  frozen: Optional[Dict[str, Any]] = None,
                   ) -> Dict[str, Any]:
+    # `frozen` = {"sha256", "dataset_id", "frozen_at", "capture_started_at"} when the facts come from a stored,
+    # hashed dataset (the export job: record_review_freeze). The banner (first CSV line, every sheet note, the
+    # PDF) and the Summary rows then state the hash and the freeze time, and curated status is labelled as
+    # captured at the freeze - not at generation, which may be days later, and never as of the evidence cutoff.
+    if frozen is not None and not (frozen.get("sha256") and frozen.get("frozen_at") and frozen.get("dataset_id")):
+        raise DatasetRefused("a frozen dataset must state its sha256, dataset_id and frozen_at")
     # `stored_comments` is the loader's statement of which comments it read from
     # the append-only store: {AGT_Record_ID: {kind: comment id}}. Only those are
     # exported under the stored-comment rule (verbatim, marked when their source
@@ -639,7 +652,16 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
             f"record; the comment text was not altered.")
         banner += " LIMITATION: " + limitations[0]
     held_or_rejected = any(str(f.get("status") or "").strip().upper() in ("HELD", "REJECTED") for f in facts)
-    if held_or_rejected:
+    if frozen is not None:
+        # Always stated, HELD records or not: a record held at the cutoff and released before the freeze shows no
+        # HELD here, which is exactly when the reader needs the basis.
+        banner += (f" FROZEN DATASET: SHA-256 {frozen['sha256']}, frozen {frozen['frozen_at']} "
+                   f"({frozen['dataset_id']}). Every format of this delivery, assessment run and evidence cutoff "
+                   f"is rendered from that one stored dataset. CURATED STATUS: status and hold reasons are as "
+                   f"captured when the dataset was frozen ({_s(frozen.get('capture_started_at')) or 'start not recorded'}"
+                   f" to {frozen['frozen_at']}), NOT as of the evidence cutoff (no curated-status history is "
+                   f"stored).")
+    elif held_or_rejected:
         # RceCuratedRecord is one mutable row with no status history, so the loader cannot bind curated status
         # to the evidence cutoff. The report says so (banner, every rendering) instead of implying a cutoff-time
         # status; it is not a provenance limitation, so it stays out of `limitations`.
@@ -682,7 +704,9 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
         # Always stated: curated status is read at generation whether or not any record is HELD or REJECTED now. A
         # record held at the cutoff and released since shows no HELD here, and that is exactly the case in which a
         # reader needs to know the basis. (Was "not_applicable" when nothing was HELD or REJECTED at generation.)
-        "curated_status_basis": "generation_time",
+        "curated_status_basis": "freeze_time" if frozen is not None else "generation_time",
+        "curated_status_captured_at": frozen["frozen_at"] if frozen is not None else None,
+        "frozen_dataset": dict(frozen) if frozen is not None else None,
     }
     summary_rows = ([[b, str(counts[b])] for b in BUCKETS]
                     + [["Total (unique records)", str(len(rows))],
@@ -706,7 +730,13 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                            f"{unstructured} (applied and flagged in the Flag column: {unstructured_applied}; "
                            f"not applied: {unstructured - unstructured_applied})"]]
                        + [[f"Limitation {i}", text] for i, text in enumerate(move_limitations, 1)]
-                       if reclassified or moves_not_applied else []))
+                       if reclassified or moves_not_applied else [])
+                    + ([[FROZEN_SHA_ROW, frozen["sha256"]],
+                        [FROZEN_ID_ROW, frozen["dataset_id"]],
+                        [FROZEN_AT_ROW, frozen["frozen_at"]],
+                        [FROZEN_STATUS_ROW,
+                         f"{_s(frozen.get('capture_started_at')) or 'start not recorded'} to {frozen['frozen_at']}"]]
+                       if frozen is not None else []))
     sheets: Dict[str, Any] = {
         "Summary": {"columns": ["Measure", "Value"], "rows": summary_rows,
                     "note": banner},

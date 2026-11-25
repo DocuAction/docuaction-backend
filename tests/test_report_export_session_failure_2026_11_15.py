@@ -35,7 +35,7 @@ async def test_a_failed_statement_inside_the_run_still_ends_the_job_failed_with_
 
     async def poisoned(session, **_kw):
         await session.execute(text("select 1/0"))      # a failed statement: the transaction is now aborted
-    monkeypatch.setattr(loader, "load_dataset", poisoned)
+    monkeypatch.setattr(loader, "load_record_facts", poisoned)   # 2026-11-25: the runner loads the facts to freeze
 
     state = await run_record_review_export_job(db, job)
 

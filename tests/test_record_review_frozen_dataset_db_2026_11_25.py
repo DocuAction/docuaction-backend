@@ -1,0 +1,454 @@
+"""Record-review export: ONE frozen dataset per delivery + assessment run + evidence cutoff (2026-11-25).
+
+Before this change every format was its own job that re-read the database, and curated / hold status has no
+history, so a hold released between the CSV and the Excel request gave two files with different totals for the
+same delivery and cutoff. `row_count_matches` was computed and not enforced.
+
+Real here: the request route (called directly, as in test_october_review_export_db), the job table, the runner,
+the loader, the dataset, the CSV / XLSX renderers, `finalize_artifact`, the registry table and a
+LocalFilesystemArtifactStore in pytest's tmp_path. The PDF renderer is replaced by its own HTML source in the one
+test that needs a third format (WeasyPrint does not render on this platform; the real PDF path runs in CI).
+
+Database-backed (rolled-back transaction); every row is synthetic.
+"""
+from __future__ import annotations
+
+import csv
+import hashlib
+import io
+import json
+import shutil
+import uuid
+from datetime import datetime
+from types import SimpleNamespace
+
+import openpyxl
+import pytest
+from fastapi import HTTPException
+from sqlalchemy import select
+
+from app.reports import routes as report_routes
+from app.reports.data import artifact_registry
+from app.reports.data import october_review_dataset as ds_mod
+from app.reports.data import october_review_loader as ld
+from app.reports.data import record_review_freeze as freeze
+from app.reports.data.artifact_registry import ReportArtifact
+from app.reports.data.export_job_model import ReportExportJob
+from app.reports.export_runner import RECORD_REVIEW_CONTENT_TYPES, run_record_review_export_job
+from app.tefca_registry import models as reg
+from app.tefca_registry.rce import models as m
+from rce_traceability_support import (  # noqa: F401
+    SYN, make_rows, rolled_back_db, seed_entity, seed_intake,
+)
+
+CUTOFF_ISO = "2026-11-09T00:00:00"
+T_OLD = datetime(2026, 11, 8, 10, 0, 0)
+T_AFTER_CUTOFF = datetime(2026, 11, 10, 9, 0, 0)
+QA = SimpleNamespace(email="qalead@synthetic-test.docuaction.invalid", role="qalead")
+HDR = ds_mod.RECORD_COLUMNS
+
+
+@pytest.fixture(autouse=True)
+def store(tmp_path, monkeypatch):
+    """A local artifact store in tmp_path, installed as the process-wide store."""
+    from app.core.storage import artifact_store
+
+    monkeypatch.setattr(artifact_store, "_store",
+                        artifact_store.LocalFilesystemArtifactStore(str(tmp_path / "artifacts")))
+    return tmp_path / "artifacts"
+
+
+async def _seed(db, arc, n=4):
+    """#1 CLEAN B1, #2 HELD, #3 CLEAN B4, #4 CLEAN B3; a completed assessment run."""
+    intake_id, _ = await seed_intake(db, make_rows(n, arc=arc), with_job=False)
+    db.add(m.RceIngestionRun(
+        id=uuid.uuid4(), source_intake_id=intake_id, rule_set_version="test", rule_config_hash="0" * 64,
+        started_at=datetime(2026, 11, 7, 8), completed_at=datetime(2026, 11, 8, 9), run_status="COMPLETE",
+        assessment_metadata={"assessment_date": "2026-11-08", "source": "pinned_param"}))
+    recs = {r.line_number - 1: r for r in (await db.execute(select(m.RceSourceRecord).where(
+        m.RceSourceRecord.source_intake_id == intake_id))).scalars().all()}
+    for i, (status, bucket) in {1: ("CLEAN", "B1"), 2: ("HELD", None), 3: ("CLEAN", "B4"), 4: ("CLEAN", "B3")}.items():
+        ent = await seed_entity(db, oid=f"{SYN}-FRZ-{uuid.uuid4().hex[:10]}", name=f"{SYN} frozen {i}") if bucket else None
+        db.add(m.RceCuratedRecord(
+            id=uuid.uuid4(), source_intake_id=intake_id, source_record_id=recs[i].id, record_status=status,
+            status_reason=None if bucket else "blocking identity issue", rce_org_oid=recs[i].source_rce_id,
+            transformation_version="test", canonical_entity_id=ent))
+        if bucket:
+            db.add(reg.ReviewRecord(
+                id=uuid.uuid4(), review_id=f"REV-{uuid.uuid4().int % 10**4:04d}-{uuid.uuid4().int % 10**6:06d}",
+                entity_id=ent, source_record_id=recs[i].id, classification_bucket=bucket,
+                classification_rule="RULE-001", classification_rule_version=2, created_at=T_OLD))
+    await db.flush()
+    return intake_id, recs
+
+
+async def _release_hold(db, rec):
+    """What happens in the application between two export requests: the hold on one record is released."""
+    held = (await db.execute(select(m.RceCuratedRecord).where(
+        m.RceCuratedRecord.source_record_id == rec.id))).scalar_one()
+    ent = await seed_entity(db, oid=f"{SYN}-FRZ-{uuid.uuid4().hex[:10]}", name=f"{SYN} released")
+    held.record_status, held.status_reason, held.canonical_entity_id = "CLEAN", None, ent
+    await db.flush()
+
+
+def _req(intake_id, fmt, **kw):
+    return report_routes.RecordReviewExportRequest(
+        intake_id=str(intake_id), evidence_cutoff=kw.pop("cutoff", CUTOFF_ISO), format=fmt, **kw)
+
+
+async def _request(db, intake_id, fmt, **kw):
+    return await report_routes.export_record_review(_req(intake_id, fmt, **kw), db=db, user=QA)
+
+
+async def _run(db, out):
+    job = await db.get(ReportExportJob, uuid.UUID(out["job_id"]))
+    state = await run_record_review_export_job(db, job)
+    return await db.get(ReportExportJob, job.id), state
+
+
+async def _export(db, intake_id, fmt, **kw):
+    out = await _request(db, intake_id, fmt, **kw)
+    job, state = await _run(db, out)
+    assert state == ReportExportJob.STATE_SUCCEEDED, job.error_reason
+    got = await artifact_registry.retrieve_artifact(
+        db, job.report_id, content_type=RECORD_REVIEW_CONTENT_TYPES[fmt])
+    return out, job, got["content"], got["artifact"]
+
+
+def _csv(content):
+    lines = list(csv.reader(io.StringIO(content.decode("utf-8-sig"))))
+    return lines[0][0], lines[2:]
+
+
+def _xlsx(content):
+    wb = openpyxl.load_workbook(io.BytesIO(content))
+    ws = wb["Records"]
+    hdr = next(i for i, r in enumerate(ws.iter_rows(values_only=True), 1) if r and r[0] == "Source_Line")
+    rows = [["" if v is None else str(v) for v in r] for r in ws.iter_rows(min_row=hdr + 1, values_only=True)]
+    summary = {str(r[0]): "" if r[1] is None else str(r[1])
+               for r in wb["Summary"].iter_rows(values_only=True) if r and r[0] is not None and len(r) > 1}
+    return str(ws.cell(row=1, column=1).value), rows, summary
+
+
+def _totals(rows):
+    out = {}
+    for r in rows:
+        out[r[HDR.index("Bucket")]] = out.get(r[HDR.index("Bucket")], 0) + 1
+    return out, sum(1 for r in rows if r[HDR.index("Status")] == "HELD")
+
+
+async def _datasets(db, intake_id):
+    return (await db.execute(select(ReportArtifact).where(
+        ReportArtifact.review_cycle_id == str(intake_id),
+        ReportArtifact.content_type == freeze.DATASET_CONTENT_TYPE))).scalars().all()
+
+
+# ── the defect: a hold released between two formats ────────────────────────────────────────────────────────────
+
+async def test_a_hold_released_between_csv_and_xlsx_gives_identical_totals_and_the_same_dataset_hash(rolled_back_db):
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, "9.99.779.10")
+    out_csv, job_csv, csv_bytes, csv_art = await _export(db, intake_id, "csv")
+    await _release_hold(db, recs[2])                                 # between the two requests
+    out_xl, job_xl, xl_bytes, xl_art = await _export(db, intake_id, "xlsx")
+
+    banner, csv_rows = _csv(csv_bytes)
+    note, xl_rows, summary = _xlsx(xl_bytes)
+    assert xl_rows == csv_rows and len(csv_rows) == 4                # cell for cell
+    assert _totals(csv_rows) == _totals(xl_rows) == ({"B1": 1, "B4": 2, "B3": 1}, 1)   # still HELD in both
+    # one dataset, one hash - on the registry rows, on the jobs, and PRINTED in both files
+    datasets = await _datasets(db, intake_id)
+    assert len(datasets) == 1
+    sha = datasets[0].rendered_sha256
+    assert csv_art["report_data_hash"] == xl_art["report_data_hash"] == sha
+    assert f"SHA-256 {sha}" in banner and f"SHA-256 {sha}" in note
+    assert summary[ds_mod.FROZEN_SHA_ROW] == sha
+    assert summary[ds_mod.FROZEN_ID_ROW] == datasets[0].report_id == freeze.dataset_report_id(job_csv.id)
+    assert job_csv.request_parameters["dataset_sha256"] == job_xl.request_parameters["dataset_sha256"] == sha
+    # the second request was told it reuses the frozen dataset
+    assert out_csv["dataset_reused"] is False and out_csv["dataset_state"] == "pending"
+    assert out_xl["dataset_reused"] is True and out_xl["dataset_state"] == "frozen"
+    assert out_xl["dataset_job_id"] == out_csv["dataset_job_id"] == str(job_csv.id) and out_xl["dataset_sha256"] == sha
+    # each format keeps its own report id: RECORD-REVIEW-<its job UUID>
+    assert job_csv.report_id == f"RECORD-REVIEW-{str(job_csv.id).upper()}"
+    assert job_xl.report_id == f"RECORD-REVIEW-{str(job_xl.id).upper()}" != job_csv.report_id
+
+
+async def test_the_stated_hash_is_the_sha256_of_the_downloadable_dataset_and_status_is_labelled_freeze_time(
+        rolled_back_db, monkeypatch):
+    db = rolled_back_db
+    intake_id, _ = await _seed(db, "9.99.779.11")
+    # third format: the PDF's own HTML source stands in for the bytes WeasyPrint would render from it
+    monkeypatch.setattr(ds_mod, "to_pdf", lambda d: ds_mod.to_html(d).encode("utf-8"))
+    _, job, csv_bytes, _ = await _export(db, intake_id, "csv")
+    _, pdf_job, pdf_source, pdf_art = await _export(db, intake_id, "pdf")
+    stored = await artifact_registry.retrieve_artifact(
+        db, freeze.dataset_report_id(job.id), content_type=freeze.DATASET_CONTENT_TYPE)
+    sha = hashlib.sha256(stored["content"]).hexdigest()
+    frozen = json.loads(stored["content"])
+    banner, _rows = _csv(csv_bytes)
+    html = pdf_source.decode("utf-8")
+    assert f"SHA-256 {sha}" in banner and f"SHA-256 {sha}" in html and pdf_art["report_data_hash"] == sha
+    assert frozen["schema"] == freeze.FROZEN_SCHEMA and frozen["curated_status_basis"] == "freeze_time"
+    assert frozen["evidence_cutoff"] == CUTOFF_ISO and len(frozen["facts"]) == 4
+    # hold / curated status is labelled with the time it was captured - not the cutoff, not "generation"
+    for text in (banner, html):
+        assert "as captured when the dataset was frozen" in text and frozen["frozen_at"] in text
+        assert "NOT as of the evidence cutoff" in text and "as of report generation" not in text
+    assert frozen["frozen_at"] != CUTOFF_ISO and frozen["frozen_at"].endswith("Z")
+    # the status route names the dataset, its hash, its freeze time and where to download it
+    payload = await report_routes.export_job_status(str(pdf_job.id), db=db, user=QA)
+    assert payload["dataset_job_id"] == str(job.id) and payload["dataset_sha256"] == sha
+    assert payload["dataset_frozen_at"] == frozen["frozen_at"] and payload["curated_status_basis"] == "freeze_time"
+    assert payload["dataset_download"].startswith(f"/api/reports/artifacts/{freeze.dataset_report_id(job.id)}/download")
+    assert payload["download"].endswith("content_type=application/pdf")
+
+
+# ── concurrency ────────────────────────────────────────────────────────────────────────────────────────────────
+
+async def test_two_formats_requested_before_either_runs_name_one_freeze_and_register_one_dataset(rolled_back_db):
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, "9.99.779.12")
+    out_csv = await _request(db, intake_id, "csv")
+    out_xl = await _request(db, intake_id, "xlsx")
+    again = await _request(db, intake_id, "csv")                     # same user, same format: the same job
+    assert out_xl["dataset_job_id"] == out_csv["dataset_job_id"] == out_csv["job_id"]
+    assert out_xl["dataset_state"] == "pending" and out_xl["dataset_reused"] is True
+    assert again["job_id"] == out_csv["job_id"] and again["reused_existing_job"] is True
+    job_xl, state = await _run(db, out_xl)                           # the SECOND request runs first and freezes it
+    assert state == ReportExportJob.STATE_SUCCEEDED
+    await _release_hold(db, recs[2])
+    job_csv, state = await _run(db, out_csv)
+    assert state == ReportExportJob.STATE_SUCCEEDED
+    datasets = await _datasets(db, intake_id)
+    assert len(datasets) == 1 and datasets[0].report_id == freeze.dataset_report_id(out_csv["job_id"])
+    assert job_csv.request_parameters["dataset_sha256"] == job_xl.request_parameters["dataset_sha256"]
+    got = await artifact_registry.retrieve_artifact(db, job_csv.report_id, content_type="text/csv")
+    assert _totals(_csv(got["content"])[1])[1] == 1                  # the released hold did not reach the CSV
+
+
+async def test_a_job_that_loses_the_race_discards_its_own_load_and_renders_the_registered_dataset(
+        rolled_back_db, monkeypatch):
+    """Two workers, one freeze: both find nothing registered and both load. The first to register wins; the
+    other re-checks under the lock, drops what it loaded and renders the registered bytes."""
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, "9.99.779.13")
+    out_a = await _request(db, intake_id, "csv")
+    out_b = await _request(db, intake_id, "xlsx")
+    real_load = ld.load_record_facts
+    state_b = {}
+
+    async def racing_load(db_, **kw):
+        loaded = await real_load(db_, **kw)                           # A's own load: record 2 still HELD
+        if not state_b:
+            state_b["running"] = True
+            await _release_hold(db_, recs[2])
+            state_b["job"], state_b["state"] = await _run(db_, out_b)  # B loads (hold released) and registers first
+        return loaded
+
+    monkeypatch.setattr(ld, "load_record_facts", racing_load)
+    job_a, state_a = await _run(db, out_a)
+    assert state_a == state_b["state"] == ReportExportJob.STATE_SUCCEEDED
+    assert len(await _datasets(db, intake_id)) == 1                   # never two datasets for one freeze
+    sha = state_b["job"].request_parameters["dataset_sha256"]
+    assert job_a.request_parameters["dataset_sha256"] == sha
+    got = await artifact_registry.retrieve_artifact(db, job_a.report_id, content_type="text/csv")
+    banner, rows = _csv(got["content"])
+    assert f"SHA-256 {sha}" in banner and _totals(rows)[1] == 0       # B's dataset, not A's own load
+
+
+# ── a deliberate new freeze; naming an existing one ────────────────────────────────────────────────────────────
+
+async def test_new_freeze_takes_a_new_dataset_and_leaves_the_earlier_one_and_its_artifacts_untouched(rolled_back_db):
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, "9.99.779.14")
+    _, first_job, first_csv, first_art = await _export(db, intake_id, "csv")
+    first_sha = first_job.request_parameters["dataset_sha256"]
+    await _release_hold(db, recs[2])
+
+    out_new, new_job, new_csv, _ = await _export(db, intake_id, "csv", new_freeze=True)
+    assert out_new["dataset_reused"] is False and out_new["dataset_job_id"] == str(new_job.id) != str(first_job.id)
+    new_sha = new_job.request_parameters["dataset_sha256"]
+    assert new_sha != first_sha and _totals(_csv(new_csv)[1])[1] == 0     # status captured again, now
+    # later default requests use the NEW freeze; nobody is stuck on the earlier one
+    out_default, default_job, default_xl, _ = await _export(db, intake_id, "xlsx")
+    assert out_default["dataset_job_id"] == str(new_job.id) and out_default["dataset_sha256"] == new_sha
+    assert _totals(_xlsx(default_xl)[1])[1] == 0
+    # the earlier freeze can still be named, and still renders what it froze
+    out_old, old_job, old_xl, _ = await _export(db, intake_id, "xlsx", dataset_job_id=str(first_job.id))
+    assert out_old["dataset_reused"] is True and old_job.request_parameters["dataset_sha256"] == first_sha
+    assert _totals(_xlsx(old_xl)[1])[1] == 1
+    # nothing earlier was regenerated or altered
+    again = await artifact_registry.retrieve_artifact(db, first_job.report_id, content_type="text/csv")
+    assert again["content"] == first_csv and again["artifact"]["id"] == first_art["id"]
+    assert again["artifact"]["artifact_version"] == 1
+    assert sorted(d.rendered_sha256 for d in await _datasets(db, intake_id)) == sorted([first_sha, new_sha])
+    # a different cutoff is a different freeze without any flag
+    out_moved = await _request(db, intake_id, "csv", cutoff="2026-11-09T12:00:00")
+    assert out_moved["dataset_reused"] is False and out_moved["dataset_job_id"] == out_moved["job_id"]
+
+
+async def test_a_named_dataset_is_refused_unless_it_is_this_deliverys_and_this_cutoffs(rolled_back_db):
+    db = rolled_back_db
+    intake_id, _ = await _seed(db, "9.99.779.15")
+    other_id, _ = await _seed(db, "9.99.779.16")
+    _, job, _, _ = await _export(db, intake_id, "csv")
+    jobs_before = len((await db.execute(select(ReportExportJob.id).where(
+        ReportExportJob.source_intake_id.in_([intake_id, other_id])))).all())
+    for request, needle in (
+            (_req(intake_id, "xlsx", dataset_job_id=str(uuid.uuid4())), "no usable frozen dataset"),
+            (_req(other_id, "xlsx", dataset_job_id=str(job.id)), "no usable frozen dataset"),
+            (_req(intake_id, "xlsx", dataset_job_id="not-a-uuid"), "not a UUID"),
+            (_req(intake_id, "xlsx", dataset_job_id=str(job.id), cutoff="2026-11-09T12:00:00"),
+             "a different cutoff is a different dataset")):
+        with pytest.raises(HTTPException) as exc:
+            await report_routes.export_record_review(request, db=db, user=QA)
+        assert exc.value.status_code == 409 and needle in exc.value.detail
+    with pytest.raises(HTTPException) as exc:
+        await report_routes.export_record_review(
+            _req(intake_id, "xlsx", dataset_job_id=str(job.id), new_freeze=True), db=db, user=QA)
+    assert exc.value.status_code == 422
+    assert len((await db.execute(select(ReportExportJob.id).where(
+        ReportExportJob.source_intake_id.in_([intake_id, other_id])))).all()) == jobs_before   # nothing queued
+
+
+# ── stored bytes gone or altered: fail closed, never rebuild under the same id ─────────────────────────────────
+
+async def test_a_frozen_dataset_whose_bytes_are_gone_fails_the_job_and_is_never_rebuilt_under_its_id(
+        rolled_back_db, store):
+    db = rolled_back_db
+    intake_id, recs = await _seed(db, "9.99.779.17")
+    _, first_job, _, _ = await _export(db, intake_id, "csv")
+    out_xl = await _request(db, intake_id, "xlsx")                    # names the freeze while it is readable
+    assert out_xl["dataset_state"] == "frozen"
+    shutil.rmtree(store)                                              # the non-durable store loses its files
+    await _release_hold(db, recs[2])
+    job_xl, state = await _run(db, out_xl)
+    assert state == ReportExportJob.STATE_FAILED and job_xl.artifact_id is None and job_xl.report_id is None
+    assert job_xl.error_reason.startswith(freeze.UNAVAILABLE_MARK) and "new_freeze=true" in job_xl.error_reason
+    datasets = await _datasets(db, intake_id)
+    assert len(datasets) == 1 and datasets[0].rendered_sha256 == first_job.request_parameters["dataset_sha256"]
+    # the dead freeze is not offered again: the next default request opens a new one, and it succeeds
+    out_next, next_job, next_csv, _ = await _export(db, intake_id, "csv")
+    assert out_next["dataset_reused"] is False and out_next["dataset_job_id"] == str(next_job.id)
+    assert _totals(_csv(next_csv)[1])[1] == 0
+    with pytest.raises(HTTPException) as exc:                         # and it cannot be named either
+        await _request(db, intake_id, "xlsx", dataset_job_id=str(first_job.id))
+    assert exc.value.status_code == 409 and "no usable frozen dataset" in exc.value.detail
+
+
+async def test_a_frozen_dataset_whose_bytes_were_altered_fails_the_integrity_check_and_the_job(rolled_back_db, store):
+    db = rolled_back_db
+    intake_id, _ = await _seed(db, "9.99.779.18")
+    await _export(db, intake_id, "csv")
+    out_xl = await _request(db, intake_id, "xlsx")
+    # the stored dataset bytes (the store keeps a small sidecar record beside them)
+    target = next(p for p in store.rglob("artifact.bin") if "RECORD-REVIEW-DATASET" in str(p))
+    target.write_bytes(target.read_bytes().replace(b'"HELD"', b'"CLEAN"'))
+    job_xl, state = await _run(db, out_xl)
+    assert state == ReportExportJob.STATE_FAILED
+    assert job_xl.error_reason.startswith(freeze.UNAVAILABLE_MARK)
+    assert "no longer hash to the registered SHA-256" in job_xl.error_reason
+    out_next = await _request(db, intake_id, "csv")                   # a job already found it unreadable
+    assert out_next["dataset_reused"] is False
+
+
+# ── row count is enforced ──────────────────────────────────────────────────────────────────────────────────────
+
+async def test_a_row_count_mismatch_fails_the_job_with_the_two_numbers_and_registers_nothing(rolled_back_db):
+    db = rolled_back_db
+    intake_id, _ = await _seed(db, "9.99.779.19")
+    intake = await db.get(m.RceSourceIntake, intake_id)
+    intake.record_count = 5                                           # the delivery says 5; 4 records were stored
+    await db.flush()
+    with pytest.raises(ld.LoaderRefused, match="row count mismatch"):
+        await ld.load_record_facts(db, intake_id=intake_id, evidence_cutoff=CUTOFF_ISO)
+    out = await _request(db, intake_id, "csv")
+    job, state = await _run(db, out)
+    assert state == ReportExportJob.STATE_FAILED and job.artifact_id is None
+    assert "row count mismatch" in job.error_reason and "records 5 record(s)" in job.error_reason
+    assert "4 source record(s) were loaded" in job.error_reason
+    assert await _datasets(db, intake_id) == []                       # nothing frozen, nothing rendered
+    assert (await db.execute(select(ReportArtifact).where(
+        ReportArtifact.review_cycle_id == str(intake_id)))).scalars().all() == []
+
+
+# ── historical jobs and artifacts ──────────────────────────────────────────────────────────────────────────────
+
+async def test_a_job_made_before_freezes_existed_is_never_reused_re_rendered_or_altered(rolled_back_db):
+    db = rolled_back_db
+    intake_id, _ = await _seed(db, "9.99.779.20")
+    run_id = (await db.execute(select(m.RceIngestionRun.id).where(
+        m.RceIngestionRun.source_intake_id == intake_id))).scalar_one()
+    old_id = uuid.uuid4()
+    old_params = {"format": "csv", "evidence_cutoff": CUTOFF_ISO, "run_id": str(run_id)}
+    old_report = f"RECORD-REVIEW-{str(old_id).upper()}"
+    old_artifact = await artifact_registry.finalize_artifact(
+        db, report_id=old_report, report_type="record_review:csv", content=b"historical csv bytes",
+        content_type="text/csv", review_cycle_id=str(intake_id), generated_by=QA.email)
+    db.add(ReportExportJob(
+        id=old_id, identity="0" * 64, export_type="record_review:csv", source_intake_id=intake_id,
+        classification="DEVELOPMENT_TEST", generator_version=freeze.generator_version(),
+        state=ReportExportJob.STATE_SUCCEEDED, active_marker=None, requested_by=QA.email,
+        created_at=datetime(2026, 11, 20), completed_at=datetime(2026, 11, 20), attempt_count=1,
+        request_parameters=dict(old_params), report_id=old_report, artifact_id=old_artifact["artifact_id"],
+        artifact_version=1, rendered_sha256=old_artifact["rendered_sha256"], size_bytes=20))
+    await db.flush()
+
+    out, job, _, _ = await _export(db, intake_id, "csv")
+    assert out["dataset_reused"] is False and out["dataset_job_id"] == str(job.id) != str(old_id)
+    old = await db.get(ReportExportJob, old_id)
+    assert old.request_parameters == old_params and old.state == ReportExportJob.STATE_SUCCEEDED
+    assert old.rendered_sha256 == old_artifact["rendered_sha256"] and old.report_id == old_report
+    rows = (await db.execute(select(ReportArtifact).where(ReportArtifact.report_id == old_report))).scalars().all()
+    assert [(r.content_type, r.artifact_version, r.rendered_sha256) for r in rows] == [
+        ("text/csv", 1, old_artifact["rendered_sha256"])]
+    assert (await artifact_registry.retrieve_artifact(db, old_report, content_type="text/csv"))["content"] \
+        == b"historical csv bytes"
+    # its status names no dataset: nothing is claimed about a report that was not rendered from one
+    payload = await report_routes.export_job_status(str(old_id), db=db, user=QA)
+    assert payload["dataset_job_id"] is None and payload["dataset_sha256"] is None
+    assert payload["curated_status_basis"] is None and payload["dataset_download"] is None
+
+
+# ── the dataset function itself (pure) ─────────────────────────────────────────────────────────────────────────
+
+def _fact(i, **kw):
+    base = {"agt_record_id": f"00000000-0000-0000-0000-{i:012d}", "source_line": i + 1, "bucket": "B1",
+            "status": "CLEAN"}
+    base.update(kw)
+    return base
+
+
+def test_a_dataset_built_from_a_frozen_copy_states_the_hash_and_the_freeze_time_in_every_rendering():
+    frozen = {"sha256": "ab" * 32, "dataset_id": "RECORD-REVIEW-DATASET-X", "frozen_at": "2026-11-25T10:00:05Z",
+              "capture_started_at": "2026-11-25T10:00:00Z"}
+    facts = [_fact(1), _fact(2, bucket=None, status="HELD", held_reason="blocker")]
+    built = ds_mod.build_dataset(facts, report_id="R-1", frozen=frozen)
+    assert built["summary"]["curated_status_basis"] == "freeze_time"
+    assert built["summary"]["curated_status_captured_at"] == "2026-11-25T10:00:05Z"
+    assert built["summary"]["frozen_dataset"] == frozen
+    rows = dict(built["sheets"]["Summary"]["rows"])
+    assert rows[ds_mod.FROZEN_SHA_ROW] == "ab" * 32 and rows[ds_mod.FROZEN_AT_ROW] == "2026-11-25T10:00:05Z"
+    assert rows[ds_mod.FROZEN_STATUS_ROW] == "2026-11-25T10:00:00Z to 2026-11-25T10:00:05Z"
+    for text in (built["banner"], ds_mod.to_csv(built).decode("utf-8-sig"), ds_mod.to_html(built)):
+        assert "SHA-256 " + "ab" * 32 in text and "2026-11-25T10:00:05Z" in text
+        assert "as of report generation" not in text
+    # the statement is made with or without a HELD record
+    assert "FROZEN DATASET" in ds_mod.build_dataset([_fact(1)], report_id="R-2", frozen=frozen)["banner"]
+    # a dataset built straight from the database (scripts) still says what it is
+    direct = ds_mod.build_dataset(facts, report_id="R-3")
+    assert direct["summary"]["curated_status_basis"] == "generation_time" and "FROZEN DATASET" not in direct["banner"]
+    assert "as of report generation" in direct["banner"]
+    with pytest.raises(ds_mod.DatasetRefused):
+        ds_mod.build_dataset(facts, report_id="R-4", frozen={"sha256": "ab" * 32})
+
+
+def test_the_dataset_has_its_own_id_and_content_type_never_a_formats():
+    job_id = uuid.uuid4()
+    assert freeze.dataset_report_id(job_id) == f"RECORD-REVIEW-DATASET-{str(job_id).upper()}"
+    assert len(freeze.dataset_report_id(job_id)) <= 64
+    assert freeze.DATASET_CONTENT_TYPE not in RECORD_REVIEW_CONTENT_TYPES.values()
+    assert artifact_registry.ARTIFACT_SUFFIXES[freeze.DATASET_CONTENT_TYPE] == "json"
+    a = freeze.canonical_bytes({"b": 1, "a": ["x", {"d": 2, "c": None}]})
+    assert a == freeze.canonical_bytes({"a": ["x", {"c": None, "d": 2}], "b": 1})       # one serialisation

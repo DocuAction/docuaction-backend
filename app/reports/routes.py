@@ -2099,6 +2099,18 @@ class RecordReviewExportRequest(BaseModel):
         default=None,
         description="A completed assessment run OF THIS DELIVERY. Omit for the "
                     "delivery's own current completed run.")
+    dataset_job_id: Optional[str] = Field(
+        default=None,
+        description="Render from the frozen dataset an earlier record-review job of THIS "
+                    "delivery and cutoff used (the `dataset_job_id` its response returned). "
+                    "Omit to use the current freeze for the delivery, run and cutoff, or to "
+                    "open the first one.")
+    new_freeze: bool = Field(
+        default=False,
+        description="true = deliberately take a NEW freeze of the delivery for this run and "
+                    "cutoff (curated / hold status is captured again, now). Later requests "
+                    "without dataset_job_id then use the new freeze. Cannot be combined with "
+                    "dataset_job_id.")
 
 
 RECORD_REVIEW_FORMATS = ("xlsx", "csv", "pdf")
@@ -2121,9 +2133,18 @@ async def export_record_review(
     can never succeed does not become a failed job. The export is DRAFT: it may
     be INCOMPLETE (records with no persisted classification are listed, never
     given a bucket), and it carries no QA approval.
+
+    ONE FROZEN DATASET PER DELIVERY + RUN + CUTOFF. Every format is rendered from
+    one stored, hashed dataset (`record_review_freeze`); the response names it
+    (`dataset_job_id`, `dataset_id`, `dataset_state`). The freeze is chosen here,
+    under a transaction-scoped advisory lock, so two formats requested at the
+    same moment name the same one. Curated / hold status in it is the status
+    when it was frozen - never the status at the evidence cutoff. `new_freeze`
+    deliberately opens a new one; `dataset_job_id` names an existing one.
     """
     from app.reports.data import october_review_dataset as ds
     from app.reports.data import october_review_loader as loader
+    from app.reports.data import record_review_freeze as freeze
     from app.reports.data.export_audit import (ACTION_REQUESTED, ACTION_REUSED,
                                                record_export_event)
     from app.reports.data.export_jobs import (RECORD_REVIEW_EXPORT_TYPE_PREFIX,
@@ -2133,12 +2154,34 @@ async def export_record_review(
 
     if request.format not in RECORD_REVIEW_FORMATS:
         raise HTTPException(422, f"format must be one of {list(RECORD_REVIEW_FORMATS)}")
+    if request.new_freeze and request.dataset_job_id:
+        raise HTTPException(422, "new_freeze and dataset_job_id cannot be combined: name an existing "
+                                 "frozen dataset or take a new one")
     generated_by = getattr(user, "email", None) or "SYSTEM"
+    named_status, named_jobs, run_id = None, [], request.run_id
     try:
         intake_uuid = loader._uuid(request.intake_id, "intake_id")
         cutoff = loader._cutoff(request.evidence_cutoff)
         intake = await loader._intake(db, intake_uuid)
-        assessment = await resolve_assessment_date(db, intake_uuid, run_id=request.run_id)
+        if request.dataset_job_id:
+            named_id = str(loader._uuid(request.dataset_job_id, "dataset_job_id"))
+            named_status, named_jobs = await freeze.named_freeze(db, intake_uuid=intake_uuid, freeze_id=named_id)
+            # One answer for "unknown", "another delivery's" and "no longer readable": the id is not an oracle.
+            if named_status is None:
+                raise loader.LoaderRefused(
+                    f"no usable frozen dataset {named_id} exists for this delivery (unknown, not this "
+                    f"delivery's, or its stored bytes are no longer available). Omit dataset_job_id to use "
+                    f"the current freeze, or send new_freeze=true to take a new one")
+            opened = dict(named_jobs[0].request_parameters or {})
+            if opened.get("evidence_cutoff") != cutoff.isoformat():
+                raise loader.LoaderRefused(
+                    f"frozen dataset {named_id} was frozen for evidence_cutoff {opened.get('evidence_cutoff')}, "
+                    f"not {cutoff.isoformat()}; a different cutoff is a different dataset")
+            if run_id and str(run_id) != str(opened.get("run_id")):
+                raise loader.LoaderRefused(
+                    f"frozen dataset {named_id} was frozen for assessment run {opened.get('run_id')}, not {run_id}")
+            run_id = opened.get("run_id")
+        assessment = await resolve_assessment_date(db, intake_uuid, run_id=run_id)
         if not assessment.from_run:
             raise loader.LoaderRefused(
                 "the delivery has no completed assessment run, so there is no "
@@ -2150,28 +2193,52 @@ async def export_record_review(
 
     classification = await _export_classification(db)
     export_type = f"{RECORD_REVIEW_EXPORT_TYPE_PREFIX}{request.format}"
+    generator_version = freeze.generator_version()
+    # Read once, before request_job(): the losing side of a duplicate-request race rolls the session back, which
+    # expires every ORM instance loaded earlier (review finding, #233, 2026-11-15).
+    delivery_label = intake.delivery_label
+    if named_status is not None and any(
+            j.classification != classification or j.generator_version != generator_version for j in named_jobs):
+        raise HTTPException(409, (
+            f"frozen dataset {named_status['dataset_job_id']} was frozen under classification "
+            f"{named_jobs[0].classification} by {named_jobs[0].generator_version}; this request is "
+            f"{classification} by {generator_version}. Send new_freeze=true to take a new freeze"))
+    # WHICH FROZEN DATASET. Chosen under a transaction-scoped advisory lock that is held until request_job()
+    # commits the new job, so a second request for the same delivery, run and cutoff sees this one's job and
+    # names the same freeze. The new job's id is assigned here because a job that opens a freeze names itself.
+    new_job_id = freeze.new_freeze_id()
+    await freeze.lock(db, freeze.selection_key(
+        intake_id=intake_uuid, run_id=assessment.run_id, cutoff_iso=cutoff.isoformat(),
+        classification=classification))
+    chosen = named_status
+    if chosen is None and not request.new_freeze:
+        chosen = await freeze.current_freeze(
+            db, intake_uuid=intake_uuid, run_id=str(assessment.run_id), cutoff_iso=cutoff.isoformat(),
+            classification=classification)
+    dataset_job_id = chosen["dataset_job_id"] if chosen is not None else str(new_job_id)
     identity = job_identity(
         intake_id=str(intake_uuid),
         workbook_version=f"dataset {ds.DATASET_VERSION} / loader {loader.LOADER_VERSION}",
         # The requester is part of the identity: the status route only lets the requester (or a supervising
         # role) read a job, so a shared in-flight job would be returned to someone who then gets a 404.
+        # The freeze is part of it too: a request for a NEW freeze, or for another named dataset, must never be
+        # answered with an in-flight job that renders a different one.
         engine_version=(f"{request.format}|run={assessment.run_id}|"
-                        f"cutoff={cutoff.isoformat()}|by={generated_by.strip().lower()}"),
+                        f"cutoff={cutoff.isoformat()}|by={generated_by.strip().lower()}|"
+                        f"dataset={dataset_job_id}"),
         classification=classification, export_type=export_type)
-    # Read once, before request_job(): the losing side of a duplicate-request race rolls the session back, which
-    # expires every ORM instance loaded earlier (review finding, #233, 2026-11-15).
-    delivery_label = intake.delivery_label
     before = await active_job(db, identity)
     try:
         job = await request_job(
             db, identity=identity, export_type=export_type,
             intake_id=str(intake_uuid), classification=classification,
-            generator_version=(f"record-review dataset {ds.DATASET_VERSION} / "
-                               f"loader {loader.LOADER_VERSION}"),
+            generator_version=generator_version,
             requested_by=generated_by,
             request_parameters={"format": request.format,
                                 "evidence_cutoff": cutoff.isoformat(),
-                                "run_id": assessment.run_id})
+                                "run_id": assessment.run_id,
+                                "dataset_job_id": dataset_job_id},
+            job_id=new_job_id)
     except ExportJobConflict as exc:
         raise HTTPException(409, str(exc))
     # ONE cause behind two review findings (#233): `request_job()` (duplicate-request race) and
@@ -2190,10 +2257,23 @@ async def export_record_review(
         extra={"delivery": delivery_label, "intake_id": str(intake_uuid),
                "classification": classification, "format": request.format,
                "assessment_run_id": assessment.run_id,
-               "evidence_cutoff": cutoff.isoformat()})
+               "evidence_cutoff": cutoff.isoformat(),
+               "dataset_job_id": dataset_job_id,
+               "dataset_reused": chosen is not None,
+               "new_freeze_requested": bool(request.new_freeze)})
     return {
         **job_payload,
         "reused_existing_job": reused,
+        # The ONE dataset every format of this delivery + run + cutoff is rendered from.
+        "dataset_job_id": dataset_job_id,
+        "dataset_id": freeze.dataset_report_id(dataset_job_id),
+        # "frozen": already stored and hashed. "pending": the first job of this freeze to run will freeze it.
+        "dataset_state": chosen["state"] if chosen is not None else "pending",
+        "dataset_reused": chosen is not None,
+        "dataset_sha256": chosen.get("dataset_sha256") if chosen is not None else None,
+        "dataset_frozen_at": chosen.get("dataset_frozen_at") if chosen is not None else None,
+        "dataset_storage_durable": chosen.get("dataset_durable") if chosen is not None else None,
+        "curated_status_basis": freeze.STATUS_BASIS,
         "delivery": delivery_label,
         "format": request.format,
         "assessment_run_id": assessment.run_id,
@@ -2201,6 +2281,29 @@ async def export_record_review(
         "evidence_cutoff": cutoff.isoformat(),
         "status": "DRAFT / NOT FINAL / INDEPENDENT QA PENDING",
         "status_url": f"/api/reports/exports/jobs/{job_id}",
+    }
+
+
+def _record_review_dataset_fields(job) -> Dict[str, Any]:
+    """What a record-review job says about the frozen dataset it renders. Read from the job row only."""
+    from urllib.parse import quote
+
+    from app.reports.data import record_review_freeze as freeze
+
+    params = job.request_parameters or {}
+    named = params.get("dataset_job_id")
+    sha = params.get("dataset_sha256")
+    dataset_id = params.get("dataset_id") or (freeze.dataset_report_id(named) if named else None)
+    return {
+        "dataset_job_id": named,
+        "dataset_id": dataset_id,
+        "dataset_sha256": sha,
+        "dataset_frozen_at": params.get("dataset_frozen_at"),
+        # Curated / hold status in the dataset is the status when it was frozen, not at the evidence cutoff.
+        "curated_status_basis": freeze.STATUS_BASIS if named else None,
+        "dataset_download": (f"/api/reports/artifacts/{dataset_id}/download"
+                             f"?content_type={quote(freeze.DATASET_CONTENT_TYPE, safe='')}"
+                             if sha and dataset_id else None),
     }
 
 
@@ -2266,6 +2369,12 @@ async def export_job_status(
         raise HTTPException(404, "No such export job.")
 
     payload = job.to_dict()
+    from app.reports.data.export_jobs import RECORD_REVIEW_EXPORT_TYPE_PREFIX as _RR_PREFIX
+    if (job.export_type or "").startswith(_RR_PREFIX):
+        # Stated for every record-review job, whatever its state: which frozen dataset it names, and - once the
+        # job has read or written it - that dataset's hash and freeze time. Jobs created before freezes existed
+        # name none; every field is then null.
+        payload.update(_record_review_dataset_fields(job))
     if job.state == job.STATE_SUCCEEDED and job.report_id:
         # The link must name the content type the artifact was REGISTERED under:
         # the download route looks the artifact up by (report_id, content_type),

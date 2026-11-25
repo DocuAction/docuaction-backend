@@ -126,7 +126,8 @@ async def request_job(db, *, identity: str, export_type: str, intake_id,
                       classification: str, generator_version: str,
                       requested_by: str,
                       report_type: Optional[str] = None,
-                      request_parameters: Optional[Dict[str, Any]] = None) -> Any:
+                      request_parameters: Optional[Dict[str, Any]] = None,
+                      job_id: Any = None) -> Any:
     """Return the job for this identity, creating one only if none is active.
 
     THE THREE OUTCOMES, AND WHY EACH IS RIGHT
@@ -153,6 +154,9 @@ async def request_job(db, *, identity: str, export_type: str, intake_id,
         return existing
 
     job = ReportExportJob(
+        # `job_id` lets a caller name the row before it exists (a record-review job that opens a dataset freeze
+        # records its own id in `request_parameters`). Omitted: the column default assigns one, as before.
+        **({"id": job_id} if job_id is not None else {}),
         identity=identity, export_type=export_type,
         source_intake_id=intake_id, classification=classification,
         generator_version=generator_version,
@@ -232,6 +236,22 @@ async def heartbeat(db, job_id, phase: Optional[str] = None) -> None:
     job.heartbeat_at = datetime.utcnow()
     if phase:
         job.phase = phase
+    await db.commit()
+
+
+async def note_request_parameters(db, job_id, extra: Dict[str, Any]) -> None:
+    """Add facts the run established to the job's own `request_parameters` (e.g. which frozen dataset a
+    record-review job rendered, and its hash). Keys already present are never overwritten: what was requested
+    stays what was requested."""
+    from app.reports.data.export_job_model import ReportExportJob
+
+    job = await db.get(ReportExportJob, job_id)
+    if job is None:
+        return
+    merged = dict(job.request_parameters or {})
+    for key, value in extra.items():
+        merged.setdefault(key, value)
+    job.request_parameters = merged
     await db.commit()
 
 
