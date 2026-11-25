@@ -174,7 +174,8 @@ async def test_candidate_writes_one_idempotent_ledger_finding(covered_three):
     with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
                new=AsyncMock(return_value=_screen(True))):
         again = await av.record_sam_extract_attempt(
-            db, ref=first.rce_org_oid, canonical_entity_id=first.canonical_entity_id)
+            db, ref=first.rce_org_oid, canonical_entity_id=first.canonical_entity_id,
+            intake_id=intake_id)
     assert again["candidate_match"] is True
     assert len(await _issues(db, intake_id)) == 1
 
@@ -203,7 +204,8 @@ async def test_enumeration_is_entity_grained_and_reconciles(covered_three):
     with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
                new=AsyncMock(return_value=_screen(True))):
         await av.record_sam_extract_attempt(
-            db, ref=first.rce_org_oid, canonical_entity_id=first.canonical_entity_id)
+            db, ref=first.rce_org_oid, canonical_entity_id=first.canonical_entity_id,
+            intake_id=intake_id)
     summary = await se.extract_summary(db, intake_id)
     assert summary["current_outcomes"]["candidate"] == 1
     assert summary["entities_with_extract_row"] == 2

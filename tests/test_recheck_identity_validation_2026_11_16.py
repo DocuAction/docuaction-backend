@@ -14,9 +14,10 @@ Rules proved here:
   * a failure inside the ledger write rolls back to a savepoint (no orphan identifier change, session still usable);
   * a job whose every item was refused FAILS with a reason and reports the count; it never reads SUCCEEDED.
 
-Coverage (`automated_verification`) has no attempt marker other than the entity's evidence rows, so it cannot refuse
-an attempt without being reselected forever; there the shared validation gates only the NPI ledger write and the
-identifier change it carries (flagged in the result and counted in the batch summary).
+Coverage (`automated_verification`) applies the same rule since 2026-11-25: a refused attempt asks no source and
+persists nothing, is reported as IDENTITY_REFUSED and counted in the batch (`identity_refused`). Coverage still has no
+attempt marker other than the entity's evidence rows, so a refused entity stays not-covered; the batch walks past
+refusals and the scheduler holds a delivery that has only refusals left (tests/test_coverage_identity_gate_2026_11_25.py).
 
 Deliberately NOT implemented (it contradicts the refusal rule): a review nitpick asked the refusal test to assert that
 `record_from_evidence` is awaited with `source_record_id=None`; a refused recheck must not reach outcome recording.
@@ -399,6 +400,7 @@ async def _coverage(db, *, ref, ent, intake, resolved, evidence=None):
 
 @pytest.mark.parametrize("case", ["another_entity", "no_registry_id", "reference_not_in_this_delivery", "npi_differs"])
 async def test_coverage_without_a_validated_context_writes_no_npi_outcome_and_changes_no_identifier(rolled_back_db, case):
+    from app.tefca_registry.rce import automated_verification as av
     db = rolled_back_db
     ent, (intake_a, rec_a), (intake_b, rec_b) = await _two_deliveries(db, a_promoted_later=True)
     other = await seed_entity(db, oid=f"{SYN}-OTHER-{uuid.uuid4().hex[:8]}", name=f"{SYN} other entity", npi=OTHER_NPI)
@@ -411,11 +413,14 @@ async def test_coverage_without_a_validated_context_writes_no_npi_outcome_and_ch
         resolved = _resolved(ent, OTHER_NPI)                 # the probes would ask about an NPI delivery B did not submit
     else:
         ref = rec_a.source_rce_id
-    out, _build = await _coverage(db, ref=ref, ent=ent, intake=intake_b, resolved=resolved)
-    assert out["npi_outcome_not_anchored"]                                  # flagged, with the reason
-    for e in (ent, other):
-        st = await _state(db, e, rec_a, rec_b)
-        assert st["issues"] == [] and vf.INACTIVE_PENDING_REVIEW not in st["identifier"]
+    out, build = await _coverage(db, ref=ref, ent=ent, intake=intake_b, resolved=resolved)
+    # 2026-11-25: refused outright, with the reason - no source asked, nothing persisted for either entity.
+    assert out["outcome"] == av.OUTCOME_IDENTITY_REFUSED and out["reason"] and out["persisted"] is False
+    build.assert_not_awaited()
+    _untouched(await _state(db, ent, rec_a, rec_b))
+    other_state = await _state(db, other, rec_a, rec_b)
+    assert other_state["evidence"] == 0 and other_state["issues"] == []
+    assert vf.INACTIVE_PENDING_REVIEW not in other_state["identifier"] and other_state["entity_status"] == "not_verified"
 
 
 async def test_a_failed_coverage_ledger_write_is_flagged_and_leaves_no_flip(rolled_back_db, monkeypatch):
@@ -434,9 +439,12 @@ async def test_a_failed_coverage_ledger_write_is_flagged_and_leaves_no_flip(roll
 
 
 async def test_coverage_terminates_when_more_entities_lack_a_validated_context_than_fit_in_a_batch(rolled_back_db):
-    """The regression this guards: refusing a coverage attempt without persisting anything reselects the same
-    entities every batch. Three entities whose probes would use an NPI the delivery did not submit, batch size 2:
-    the second batch must advance and coverage must complete."""
+    """The regression this guards: a refused coverage attempt persists nothing, so the same entities are in the
+    not-covered set on every call. Three entities whose probes would use an NPI the delivery did not submit, batch
+    size 2: ONE call must walk past all three (refusals do not use the lookup budget), look nothing up, write
+    nothing, and say that everything left is refused - the caller's stop signal. `remaining` stays 3 and `complete`
+    stays False on purpose: the entities are NOT covered. (Until 2026-11-25 the batch "advanced" by storing evidence
+    for them; that was the defect.)"""
     from app.tefca_registry.rce import automated_verification as av
     db = rolled_back_db
     rows = make_rows(3, arc="9.99.777.87")
@@ -456,15 +464,22 @@ async def test_coverage_terminates_when_more_entities_lack_a_validated_context_t
 
     async def _resolve(_db, ref):
         return by_ref[ref]
+    build = AsyncMock(return_value=_not_found_evidence())
     with patch("app.Tefca.entity_resolution.resolve_entity", new=AsyncMock(side_effect=_resolve)), \
-            patch("app.Tefca.evidence_service.EvidenceService.build_evidence",
-                  new=AsyncMock(return_value=_not_found_evidence())):
+            patch("app.Tefca.evidence_service.EvidenceService.build_evidence", new=build):
         first = await av.run_coverage_batch(db, intake_id, batch_size=2)
         second = await av.run_coverage_batch(db, intake_id, batch_size=2)
-    assert first["processed_this_call"] == 2 and first["remaining"] == 1 and first["complete"] is False
-    assert second["processed_this_call"] == 1 and second["remaining"] == 0 and second["complete"] is True
-    assert first["npi_outcome_not_anchored"] == 2 and second["npi_outcome_not_anchored"] == 1
+    for result in (first, second):                                          # the second call is the same honest answer
+        assert result["processed_this_call"] == 0 and result["identity_refused"] == 3
+        assert result["by_outcome"] == {av.OUTCOME_IDENTITY_REFUSED: 3}
+        assert result["remaining"] == 3 and result["covered"] == 0 and result["complete"] is False
+        assert result["candidates_exhausted"] is True and result["remaining_are_all_identity_refused"] is True
+        assert all(o["reason"] and o["persisted"] is False for o in result["outcomes"])
+    build.assert_not_awaited()                                              # no source was asked
     assert (await db.execute(select(m.RceIssue).where(m.RceIssue.source_intake_id == intake_id))).scalars().all() == []
+    entity_ids = [str(v["_registry_entity_id"]) for v in by_ref.values()]
+    assert (await db.execute(select(TEFCADimensionEvidence).where(
+        TEFCADimensionEvidence.entity_id.in_(entity_ids)))).scalars().all() == []
 
 
 @pytest.mark.parametrize("a_promoted_later", [True, False])
@@ -635,26 +650,22 @@ async def test_a_failed_preflight_read_fails_one_item_and_the_batch_session_stay
     assert ok["evidence"] > 0 and [i.source_record_id for i in ok["issues"]] == [rec_ok.id]
 
 
-# -- 2026-11-24: KNOWN GAP, pinned so it cannot be forgotten or silently "fixed" by halves --
-# Without a validated delivered-record context the coverage attempt still gathers evidence and stores it under the
-# resolved entity, and still moves the entity to in_review. That is the only thing that stops the candidate query
-# re-selecting the entity on every batch (it has no other attempt marker). Refusing to store without first adding
-# a durable attempt marker would starve the scheduler: it takes ONE delivery per tick. The marker needs new schema
-# (owner decision, not made). Until then: keep ENABLE_AUTOMATED_VERIFICATION_COVERAGE off and do not run the
-# coverage route for the official delivery. When the marker exists, this test must be inverted.
+# -- 2026-11-24 KNOWN GAP, CLOSED 2026-11-25 (this test was pinned to the gap and is now inverted) --
+# Until 2026-11-25 a coverage attempt without a validated delivered-record context still gathered evidence, stored
+# it under the resolved entity and moved the entity to in_review, because the evidence row was the only thing that
+# stopped the candidate query re-selecting the entity. The note that stood here said refusing would need a durable
+# attempt marker (new schema) or the scheduler would starve. The refusal is now made WITHOUT a marker and without
+# schema: the batch walks past refused entities (keyset; refusals do not use the lookup budget) and the scheduler
+# puts a delivery with only refusals left on a process-local hold (automated_verification._identity_holds). What a
+# marker would still add - a durable record of each refusal, no re-validation per call - remains an owner decision.
 
-async def test_known_gap_coverage_without_a_validated_context_still_stores_evidence_and_flips_status(rolled_back_db):
-    from app.tefca_registry import models as reg
+async def test_coverage_without_a_validated_context_asks_no_source_and_persists_nothing(rolled_back_db):
+    from app.tefca_registry.rce import automated_verification as av
 
     db = rolled_back_db
     ent, (_intake_a, rec_a), (intake_b, rec_b) = await _two_deliveries(db, a_promoted_later=True)
-    before = (await _state(db, ent, rec_a, rec_b))["evidence"]
     out, build = await _coverage(db, ref=rec_b.source_rce_id, ent=ent, intake=intake_b,
                                  resolved=_resolved(ent, OTHER_NPI))     # probes would use an NPI delivery B did not submit
-    assert out["npi_outcome_not_anchored"]
-    assert build.await_count == 1                                          # the sources WERE asked
-    after = await _state(db, ent, rec_a, rec_b)
-    assert after["evidence"] > before                                      # and the rows WERE stored under the entity
-    assert after["issues"] == []                                           # only the ledger row is withheld
-    row = await db.get(reg.TefcaRegEntity, ent)
-    assert row.verification_status == "in_review"                         # and the status WAS changed
+    assert out["outcome"] == av.OUTCOME_IDENTITY_REFUSED and "did not submit" in out["reason"]
+    build.assert_not_awaited()                                             # the sources were NOT asked
+    _untouched(await _state(db, ent, rec_a, rec_b))                        # no evidence, ledger row, identifier or status change
