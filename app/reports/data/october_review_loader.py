@@ -42,27 +42,35 @@ NO JOIN FAN-OUT, NO CROSS-DELIVERY LEAKAGE
     foreign newest row over an older `uei=` row yields "Not attributed". A
     name-keyed row is withheld whenever the queried name is not the delivered
     name, including a screen run on the entity's name for this same record.
-    NPPES AND CMS PPEF ENROLLMENT (2026-11-25, loader 1.5.0) are judged by the
+    NPPES AND CMS PPEF ENROLLMENT (2026-11-25) are compared by the
     NPI the STORED row carries (`_stored_evidence_npis`), because neither
     stores an `npi=` query identifier: NPPES rows have a NULL query identifier
     and carry the NPI of the stored answer (`source_record_identifier` /
     `original_values.npi`: the NPI NPPES returned, or the NPI asked about for a
     not-found answer); CMS rows carry `<dataset>:<component>:NPI=<npi>` when
     answered by the CMS data API and `snapshot:<id>` when answered from an
-    ingested edition, plus the NPI on each returned enrolment record. A cell
-    of these two sources is shown as the record's ONLY when that stored NPI
-    equals the record's submitted NPI. A stored NPI that differs (or any stored
-    NPI for a record that submitted none) is another identifier's answer: the
-    record's own newest row is used instead, else the cell says "Not
-    attributed" and shows no result. A row that stores NO NPI at all (every
-    UNAVAILABLE row; a CMS not-found answered from an ingested edition; rows
-    older than the fields) cannot be shown to be the record's: the cell says so
-    and then quotes what is stored, labelled as the entity's and NOT the
-    record's - never dropped, never promoted to the record. An attributed row
-    observed before this delivery was received, or recorded under a review of a
-    different delivered record, is kept and labelled "carried from" that check
-    with its observation date. This is presentation only: no bucket, rule,
-    classification or stored evidence row is read differently or changed.
+    ingested edition, plus the NPI on each returned enrolment record. A result
+    of these two sources is placed in a record's cell ONLY when that stored NPI
+    equals the record's submitted NPI, and the cell then says "NPI match only
+    [N1]". THAT IS AN IDENTIFIER MATCH, NOT RECORD ATTRIBUTION: stored evidence
+    carries no delivery id and no delivered-record id, so an equal NPI does not
+    establish that the check was run for this delivery or for this delivered
+    row. A stored NPI that differs (or any stored NPI for a record that
+    submitted none) is another identifier's answer: the newest row whose stored
+    NPI equals the submitted one is used instead, else the cell says "Not
+    attributed to this record [N2]" and shows no result. A row that stores NO
+    NPI at all (every UNAVAILABLE row; a CMS not-found answered from an
+    ingested edition; rows older than the fields) is "Not attributed to this
+    record [N3]" followed by what is stored, as the entity's - never dropped,
+    never promoted to the record. An NPI-matching row written more than a day
+    before the delivery's recorded receipt date, or recorded under a review of
+    a different delivered record, is kept and labelled "carried from ... [N4]"
+    with its observation date; a row written after receipt by another
+    delivery's run cannot be told apart and gets no such label. The markers
+    are explained once, in `meta.evidence_notes` (`EVIDENCE_NOTES`), which
+    every rendering prints; [N5] states that the OIG LEIE / SAM cells are not
+    compared this way. Presentation only: no bucket, rule, classification or
+    stored evidence row is read differently or changed.
 
 ASSESSMENT RUN AND EVIDENCE CUTOFF
     The assessment date comes from the selected run (explicit `run_id`, else the
@@ -119,7 +127,7 @@ QHIN NUMBER
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from sqlalchemy import and_, exists, func, or_, select, text
@@ -127,7 +135,7 @@ from sqlalchemy import and_, exists, func, or_, select, text
 from app.reports.data import reviewed_disposition as rd
 from app.reports.data.october_review_dataset import STORED_COMMENT_KEY
 
-LOADER_VERSION = "1.5.0"
+LOADER_VERSION = "1.6.0"
 BATCH_SIZE = 2000
 BUCKETS = ("B1", "B2", "B3", "B4")
 
@@ -164,20 +172,45 @@ NOT_ATTRIBUTED = ("Not attributed to this record: the evidence on file for the l
 OWN_ROW_LOOKBACK = 200
 NO_ANCHORED_REVIEW = "no review anchored to this source record at or before the cutoff"
 
-#: Sources whose rows are attributed to a delivered record by the NPI the STORED row carries (they store no
-#: `npi=` query identifier, so the query-identifier rule above cannot judge them). source -> label used in cells.
+#: Sources whose rows are compared with a delivered record by the NPI the STORED row carries (they store no
+#: `npi=` query identifier, so the query-identifier rule above cannot judge them). source -> label.
 NPI_ANSWER_SOURCES = {"NPPES": "NPPES", "CMS_PPEF_ENROLLMENT": "CMS PPEF enrolment"}
-NOT_ATTRIBUTED_ANSWER = ("Not attributed to this record: the {label} evidence on file for the linked entity at or "
-                         "before the cutoff concerns {why} ({basis}). It is not established to be this record's "
-                         "result and is not shown as this one's (evidence row observed {observed}; listed in Evidence Reference). "
-                         "This does not show the source was never checked for this record elsewhere")
-NOT_ATTRIBUTED_UNRECORDED = ("Not attributed to this record: the newest {label} evidence row on file for the linked "
-                             "entity at or before the cutoff does not record the identifier it was queried by, so "
-                             "it cannot be shown to be this record's result. Stored for the ENTITY, quoted as "
-                             "recorded and NOT established as this record's (observed {observed}): {stored}")
-CARRIED_BEFORE_RECEIPT = ("carried from an earlier check: observed {observed}, before this delivery was received "
-                          "({received})")
-CARRIED_OTHER_RECORD = "carried from a check recorded for a different delivered record: observed {observed}"
+#: Cell texts are short and carry a marker; each marker is explained ONCE in `EVIDENCE_NOTES`, which every
+#: rendering prints (first CSV line, the Excel "Evidence Notes" sheet, the PDF, the frozen JSON meta).
+NPI_MATCH_ONLY = "NPI match only [N1]"
+NOT_ATTRIBUTED_ANSWER = ("Not attributed to this record [N2]: the stored row concerns {why} ({basis}); "
+                         "observed {observed} UTC")
+NOT_ATTRIBUTED_UNRECORDED = ("Not attributed to this record [N3]: no identifier stored on the row; entity-level, as "
+                             "recorded (observed {observed} UTC): {stored}")
+CARRIED_BEFORE_RECEIPT = ("carried from an earlier check [N4]: observed {observed} UTC, more than a day before the "
+                          "recorded receipt date {received}")
+CARRIED_OTHER_RECORD = ("carried from a check recorded for a different delivered record [N4]: observed {observed} "
+                        "UTC")
+#: An evidence row is called "before receipt" only when it was written more than this long before the recorded
+#: receipt value. `rce_source_intakes.received_at` is the operator-stated receipt date (often a bare date) with no
+#: time zone, while evidence `created_at` is UTC; a full day covers every time zone the date could have meant.
+RECEIPT_MARGIN = timedelta(days=1)
+EVIDENCE_NOTES = (
+    ("N1", "Identifier match only. The NPI stored on the NPPES / CMS PPEF enrolment evidence row equals the NPI "
+           "submitted on this record. This does NOT establish that the check was run for this delivery or for "
+           "this delivered row: stored evidence is keyed by the linked entity and carries no delivery or record "
+           "id."),
+    ("N2", "The evidence row on file for the linked entity at or before the cutoff stores a different NPI than "
+           "this record submitted (or an NPI where this record submitted none). It is not established to be this "
+           "record's result, so no result is shown; the row is listed in Evidence Reference. This does not show "
+           "the source was never checked for this record elsewhere."),
+    ("N3", "The newest evidence row on file for the linked entity at or before the cutoff stores no identifier "
+           "(an unavailable answer, or a CMS not-found answered from an ingested edition). Its recorded status "
+           "is quoted without interpretation as the ENTITY's; it is NOT established as this record's result."),
+    ("N4", "Carried evidence: the row was written more than a day before this delivery's recorded receipt date "
+           "(the receipt date carries no time zone; evidence times are UTC), or is recorded under a review of a "
+           "different delivered record. LIMIT: a row written after receipt by another delivery's coverage or "
+           "recheck run cannot be told apart and carries NO carried label."),
+    ("N5", "OIG LEIE, SAM.gov and SAM public-extract cells are NOT compared with the NPI of a stored answer and "
+           "never carry N1 or N4. They are withheld only when the recorded query identifier names another NPI or "
+           "organisation name; a row with no recorded identifier, or keyed by a UEI, is shown without any "
+           "attribution check."),
+)
 
 
 def _stored_evidence_npis(source: str, row: Any) -> tuple:
@@ -211,10 +244,12 @@ def _stored_evidence_npis(source: str, row: Any) -> tuple:
 
 
 def _answer_attribution(source: str, row: Any, submitted_npi: str) -> tuple:
-    """("own" | "foreign" | "unrecorded", reason, basis) for a row of an `NPI_ANSWER_SOURCES` source.
+    """("npi_match" | "foreign" | "unrecorded", reason, basis) for a row of an `NPI_ANSWER_SOURCES` source.
 
-    own: the stored NPI is exactly this record's submitted NPI. foreign: the row stores an NPI and it is not
-    (or the record submitted none). unrecorded: the row stores no NPI, so neither can be shown."""
+    npi_match: the stored NPI is exactly this record's submitted NPI - an IDENTIFIER match and nothing more (the
+    row carries no delivery or record id, so it does not show the check was run for this delivered row).
+    foreign: the row stores an NPI and it is not (or the record submitted none). unrecorded: the row stores no
+    NPI, so neither can be shown."""
     npis, basis = _stored_evidence_npis(source, row)
     submitted = _s(submitted_npi).strip()
     if not npis:
@@ -222,7 +257,7 @@ def _answer_attribution(source: str, row: Any, submitted_npi: str) -> tuple:
     if not submitted:
         return "foreign", "an NPI although this record's submitted NPI is blank", basis
     if npis == {submitted}:
-        return "own", "", basis
+        return "npi_match", "", basis
     return "foreign", "a different NPI than this record's submitted NPI", basis
 
 
@@ -233,25 +268,35 @@ def _observed(row: Any) -> str:
 
 def _carried_note(row: Any, *, received_at: Any, record_id: Any, review_anchor: Mapping[str, Any]) -> str:
     """'' unless the stored row shows the check was not made for this delivered record: it is recorded under a
-    review anchored to a DIFFERENT delivered record, or it was written before this delivery was received.
-    Evidence rows carry no delivery or run id, so a row written after receipt by a coverage or recheck run of
-    another delivery cannot be told apart here and gets no note (stated in `meta.notes`)."""
+    review anchored to a DIFFERENT delivered record, or it was written more than `RECEIPT_MARGIN` before this
+    delivery's recorded receipt value. Evidence rows carry no delivery or run id, so a row written after receipt
+    by a coverage or recheck run of another delivery cannot be told apart here and gets no note (note N4).
+
+    TIME ZONES, EXPLICITLY. Evidence `created_at` is written by the application as naive UTC. `received_at` is
+    the operator-stated receipt date with no zone recorded (a value that does carry an offset is converted to
+    UTC). The two are therefore not compared as instants: the label needs a full day of clearance, which no
+    time-zone reading of the receipt date can close. Neither the database's nor the server's time zone is used."""
     anchor = review_anchor.get(_s(row.review_id)) if row.review_id else None
     if anchor is not None and anchor != record_id:
         return CARRIED_OTHER_RECORD.format(observed=_observed(row))
-    if isinstance(row.created_at, datetime) and isinstance(received_at, datetime) and row.created_at < received_at:
-        return CARRIED_BEFORE_RECEIPT.format(observed=_observed(row), received=received_at.date().isoformat())
+    if isinstance(row.created_at, datetime) and isinstance(received_at, datetime):
+        received = (received_at.astimezone(timezone.utc).replace(tzinfo=None)
+                    if received_at.tzinfo is not None else received_at)
+        written = (row.created_at.astimezone(timezone.utc).replace(tzinfo=None)
+                   if row.created_at.tzinfo is not None else row.created_at)
+        if written < received - RECEIPT_MARGIN:
+            return CARRIED_BEFORE_RECEIPT.format(observed=_observed(row), received=received.date().isoformat())
     return ""
 
 
 async def _own_answer_row(db, E, *, entity_id: str, source: str, dimension: str, cutoff, submitted_npi: str):
-    """The newest row of this entity and source, at or before the cutoff, whose STORED NPI is this record's
-    submitted NPI, or None. Used only after the entity's newest row was found to be another NPI's answer."""
+    """The newest row of this entity and source, at or before the cutoff, whose STORED NPI equals this record's
+    submitted NPI (an identifier match only), or None. Used only after the entity's newest row was found to be another NPI's answer."""
     for row in (await db.execute(
             select(E).where(E.entity_id == entity_id, E.source == source,
                             E.evidence_dimension == dimension, E.created_at <= cutoff)
             .order_by(E.created_at.desc(), E.id.desc()).limit(OWN_ROW_LOOKBACK))).scalars().all():
-        if _answer_attribution(source, row, submitted_npi)[0] == "own":
+        if _answer_attribution(source, row, submitted_npi)[0] == "npi_match":
             return row
     return None
 
@@ -541,6 +586,7 @@ async def load_record_facts(
              "records_with_multiple_reviews": 0, "evidence_rows_used": 0,
              "evidence_rows_not_attributed": 0, "evidence_rows_reselected_for_record": 0,
              "evidence_rows_identifier_not_recorded": 0, "evidence_rows_carried_from_another_check": 0,
+             "evidence_rows_npi_match_only": 0,
              "records_with_unanchored_entity_reviews": 0,
              "stored_comments": {"QA_ORIGINAL": 0, "QA_IZAAN": 0, "REPORT_CLARIFICATION": 0},
              "records_with_multiple_current_comments_of_one_kind": 0,
@@ -675,7 +721,9 @@ async def load_record_facts(
                     reasons = f"{reasons} | Hold reason: {hold}" if reasons else hold
 
             cells: Dict[str, str] = {}
-            own_rows: Dict[str, Any] = {}      # source -> the evidence row attributed to THIS record
+            # source -> the evidence row whose recorded identifier MATCHES this record's (identifier match only:
+            # evidence carries no delivery or record id, so no row is established as "this record's check")
+            own_rows: Dict[str, Any] = {}
             withheld_sources: List[str] = []   # sources whose row at the cutoff was NOT attributed to this record
             ev_refs: List[str] = []
             nppes_row = None
@@ -688,8 +736,8 @@ async def load_record_facts(
                     cells[key] = NO_EVIDENCE
                     continue
                 if source in NPI_ANSWER_SOURCES:
-                    # NPPES / CMS: attributed only by the NPI the STORED row carries (see the module docstring).
-                    label = NPI_ANSWER_SOURCES[source]
+                    # NPPES / CMS: compared by the NPI the STORED row carries. An equal NPI is an identifier
+                    # match only - never record attribution (see the module docstring and note N1).
                     limitation = _s(ann.get("pecos_limitation")) if key == "pecos" else ""
                     verdict, why, basis = _answer_attribution(source, row, submitted)
                     if verdict == "unrecorded":
@@ -700,7 +748,7 @@ async def load_record_facts(
                         ev_refs.append(f"{source}:{row.id}@{_s(row.generation_timestamp)} (not attributed to this "
                                        f"record: no identifier recorded)")
                         cells[key] = NOT_ATTRIBUTED_UNRECORDED.format(
-                            label=label, observed=_observed(row),
+                            observed=_observed(row),
                             stored=_evidence_cell(key, row, limitation, interpret=False))
                         continue
                     if verdict == "foreign":
@@ -713,7 +761,7 @@ async def load_record_facts(
                             ev_refs.append(f"{source}:{foreign_row.id}@{_s(foreign_row.generation_timestamp)} "
                                            f"(not attributed to this record: other identifier)")
                             cells[key] = NOT_ATTRIBUTED_ANSWER.format(
-                                label=label, why=why, basis=basis, observed=_observed(foreign_row))
+                                why=why, basis=basis, observed=_observed(foreign_row))
                             continue
                         stats["evidence_rows_reselected_for_record"] += 1
                         await _anchors_for([row.review_id])
@@ -722,7 +770,8 @@ async def load_record_facts(
                     ev_refs.append(f"{source}:{row.id}@{_s(row.generation_timestamp)}")
                     if key == "nppes":
                         nppes_row = row
-                    cells[key] = _evidence_cell(key, row, limitation)
+                    stats["evidence_rows_npi_match_only"] += 1
+                    cells[key] = f"{_evidence_cell(key, row, limitation)} | {NPI_MATCH_ONLY}"
                     carried = _carried_note(row, received_at=intake.received_at, record_id=rec.id,
                                             review_anchor=review_anchor)
                     if carried:
@@ -771,7 +820,7 @@ async def load_record_facts(
             if approved["bucket"] == "B1" and bucket == "B4":
                 b1 = rd.b1_evidence_verdict(
                     rev, rules=await _rules_at(rev.classification_rule_version), policy_active=policy_active,
-                    # Only rows ATTRIBUTED to this record are evaluated. A source whose row at the cutoff was
+                    # Only rows whose recorded identifier matches this record's are evaluated. A source whose row at the cutoff was
                     # another identifier's is named as not evaluated - never read as "no candidate".
                     cutoff_rows={"SAM_GOV": own_rows.get("SAM_GOV"), "OIG_LEIE": own_rows.get("OIG_LEIE"),
                                  "SAM extract": own_rows.get("SAM_EXTRACT_SUPPLEMENTARY")} if ent else None,
@@ -915,6 +964,8 @@ async def load_record_facts(
         "comment_store": ("applied" if store_applied else
                           "not_applied" if include_stored_comments else "not_requested"),
         "stats": stats,
+        # Printed by every rendering; the cell markers [N1]..[N4] refer to these, [N5] is a standing limitation.
+        "evidence_notes": [{"marker": marker, "text": text_} for marker, text_ in EVIDENCE_NOTES],
         "rejected_annotation_ids": rejected_annotations,
         "rejected_comment_ids": rejected_comments,
         "notes": [
@@ -944,16 +995,14 @@ async def load_record_facts(
             "store exists; caller-supplied annotations/comments are inputs from retained "
             "files. Comments are commentary only and decide nothing.",
             "No persisted USPS validation exists; USPS reads Not checked-unavailable.",
-            "NPPES and CMS PPEF enrolment cells are shown as a record's result only when the NPI stored on the "
-            "evidence row equals the record's submitted NPI. Evidence is stored under the linked entity, which "
-            "other deliveries share: a row that stores a different NPI is not shown as this record's, and a row "
-            "that stores no NPI (an unavailable answer; a CMS not-found answered from an ingested edition) is "
-            "quoted as stored and labelled as the entity's, not the record's. An attributed row observed before "
-            "this delivery was received, or recorded under a review of a different delivered record, is labelled "
-            "'carried from' that check with its observation date. Evidence rows carry no delivery or run id, so "
-            "a row written after receipt by another delivery's coverage or recheck run is not distinguishable and "
-            "carries no such label. The observation date is the day the evidence row was written. No bucket or "
-            "classification depends on these labels."],
+            "Evidence cells are NOT record-attributed. Evidence is stored under the linked entity and carries no "
+            "delivery or record id. For NPPES and CMS PPEF enrolment a result is placed in a record's cell only "
+            "when the NPI stored on the evidence row equals the record's submitted NPI, and the cell says 'NPI "
+            "match only [N1]': an identifier match, which does not establish that the check was run for this "
+            "delivery or this delivered row. See evidence_notes N1-N5 for the markers and the standing limits "
+            "(no carried label for another delivery's later run; OIG LEIE / SAM cells are not compared this "
+            "way). The observation date is the UTC day the evidence row was written. No bucket or classification "
+            "depends on these labels."],
     }
     return {"facts": facts, "meta": meta,
             "assessment_date": assessment.value.isoformat(),

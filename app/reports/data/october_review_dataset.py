@@ -78,7 +78,7 @@ import io
 import re
 from typing import Any, Dict, Iterable, List, Optional
 
-DATASET_VERSION = "1.4.0"
+DATASET_VERSION = "1.5.0"
 BUCKETS = ("B1", "B2", "B3", "B4")
 STATUS_HELD = "HELD"
 USPS_UNAVAILABLE = "Not checked—unavailable"
@@ -96,6 +96,11 @@ DRAFT_BANNER = ("CURRENT REVIEW / DRAFT / NOT FINAL - INDEPENDENT QA PENDING. "
                 "Automated checks are not QA approval.")
 #: Wording removed by the 2026-11-11 report corrections; refused in PECOS cells.
 PROHIBITED_PECOS_PHRASES = ("lost-identifier/outage family",)
+
+#: The loader's evidence notes (markers [N1]..[N5] used in the source cells), printed by every rendering: the
+#: first CSV line, this Excel sheet, a PDF section. They state what an evidence cell does NOT establish.
+EVIDENCE_NOTES_SHEET = "Evidence Notes"
+EVIDENCE_NOTES_HEADING = "Evidence notes (what a source cell does and does not establish)"
 
 #: Summary rows of a rendering built from a frozen dataset (record_review_freeze).
 FROZEN_SHA_ROW = "Frozen dataset SHA-256 (same in every format)"
@@ -744,6 +749,13 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                     "text_columns": TEXT_COLUMNS, "note": banner},
     }
     order = ["Summary", "Records"]
+    evidence_notes = [{"marker": _s(n.get("marker")), "text": _s(n.get("text"))}
+                      for n in ((load_meta or {}).get("evidence_notes") or []) if isinstance(n, dict)]
+    if evidence_notes:
+        sheets[EVIDENCE_NOTES_SHEET] = {
+            "columns": ["Marker", "Note"], "text_columns": [0, 1], "note": banner,
+            "rows": [[f"[{n['marker']}]", n["text"]] for n in evidence_notes]}
+        order.append(EVIDENCE_NOTES_SHEET)
     if incomplete:
         sheets["Unclassified"] = {
             "columns": ["AGT_Record_ID", "Source_Line", "Status"],
@@ -755,6 +767,7 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
         "summary": summary, "sheet_order": order, "sheets": sheets,
         "load_meta": load_meta or {},
         "not_applied_moves": not_applied_moves,
+        "evidence_notes": evidence_notes,
     }
 
 
@@ -781,7 +794,8 @@ def to_csv(dataset: Dict[str, Any]) -> bytes:
         "Field findings counted separately: "
         + (FINDINGS_NOT_INCLUDED.lower() if dataset['summary']['field_findings'] is None
            else str(dataset['summary']['field_findings'])) + ". "
-        "Skip this first line on import."])
+        + ("".join(f"[{n['marker']}] {n['text']} " for n in dataset.get("evidence_notes") or []))
+        + "Skip this first line on import."])
     rec = dataset["sheets"]["Records"]
     w.writerow(rec["columns"])
     for r in rec["rows"]:
@@ -1168,6 +1182,11 @@ def to_html(dataset: Dict[str, Any]) -> str:
                       + "".join(f"<th scope='col'>{e(c)}</th>" for c in u["columns"])
                       + f"</tr></thead><tbody>{urows}</tbody></table>")
 
+    ev_notes = dataset.get("evidence_notes") or []
+    evidence_notes_html = (
+        f"<h2>{e(EVIDENCE_NOTES_HEADING)}</h2>"
+        + "".join(f"<p class='note'><strong>[{e(n['marker'])}]</strong> {e(n['text'])}</p>" for n in ev_notes)
+        if ev_notes else "")
     synthetic_html = ("<p class='synthetic'>SYNTHETIC TEST DATA - not a delivered Government record; "
                       "produced for layout verification only</p>" if synthetic else "")
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
@@ -1180,6 +1199,7 @@ def to_html(dataset: Dict[str, Any]) -> str:
             f"<th scope='col'>Value</th></tr></thead><tbody>{srows}</tbody></table>"
             f"<p class='note'>HELD records are counted once, inside B4, with their status and "
             f"reasons retained. Field findings are a separate grain and are not in these totals.</p>"
+            f"{evidence_notes_html}"
             f"<h2>Records ({len(rec['rows'])})</h2>"
             f"<p class='note'>Compact view; the full column set is in the Excel/CSV from the "
             f"same dataset. Source-result cells are the loader's recorded text; a numbered note "

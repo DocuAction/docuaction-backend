@@ -336,7 +336,7 @@ async def test_actual_source_statuses_and_cause_specific_limitations_are_preserv
         str(rec.id): {"pecos_limitation": "confirmed missing key (no submitted NPI)"}})
     f = out["facts"][0]
     # 2026-11-25: an UNAVAILABLE CMS row stores no NPI, so it is quoted as stored and labelled as the entity's
-    assert f["pecos"].startswith("Not attributed to this record") and "NOT established as this record's" in f["pecos"]
+    assert f["pecos"].startswith("Not attributed to this record [N3]") and "entity-level, as recorded" in f["pecos"]
     assert "UNAVAILABLE | retrieved 2026-11-08" in f["pecos"]
     assert "recorded note: key missing" in f["pecos"]
     assert "Limitation: confirmed missing key" in f["pecos"]

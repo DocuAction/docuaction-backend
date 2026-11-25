@@ -1,11 +1,14 @@
-"""Record-review dataset: NPPES and CMS PPEF enrolment cells are a record's result only when the NPI stored on
-the evidence row equals the record's submitted NPI (2026-11-25, loader 1.5.0).
+"""Record-review dataset: an NPPES / CMS PPEF enrolment result is placed in a record's cell only when the NPI
+stored on the evidence row equals the record's submitted NPI - and the cell says that this is an IDENTIFIER MATCH
+ONLY (2026-11-25).
 
-Evidence is stored under the canonical ENTITY, which other deliveries and coverage / recheck runs share. Before
-this change the loader showed the entity's newest NPPES / CMS row in every linked record's cell, whatever NPI it
-answered. These tests pin: a different NPI's answer is never shown as the record's; a row that stores no NPI is
-quoted as stored and labelled as the entity's; an attributed row from an earlier check is kept and labelled with
-its observation date; nothing after the cutoff is read; no bucket depends on any of it.
+Evidence is stored under the canonical ENTITY, which other deliveries and coverage / recheck runs share, and it
+carries no delivery or record id. Before this change the loader showed the entity's newest NPPES / CMS row in
+every linked record's cell, whatever NPI it answered. These tests pin: a different NPI's answer is never shown in
+the record's cell; a row that stores no NPI is quoted as stored and labelled as the entity's; an NPI-matching row
+is marked "NPI match only [N1]" and is never described as attributed to the delivered record; one from an earlier
+check is kept and labelled with its observation date; the notes that state these limits are printed in every
+format; nothing after the cutoff is read; no bucket depends on any of it.
 
 Database-backed (rolled-back transaction); every row is synthetic.
 """
@@ -126,14 +129,14 @@ def test_the_npi_is_read_only_from_what_the_row_stores():
 
 def test_attribution_needs_the_stored_npi_to_equal_the_submitted_npi_exactly():
     a = ld._answer_attribution
-    assert a("NPPES", _row(source_record_identifier=NPI_A), NPI_A)[0] == "own"
+    assert a("NPPES", _row(source_record_identifier=NPI_A), NPI_A)[0] == "npi_match"
     assert a("NPPES", _row(source_record_identifier=NPI_B), NPI_A)[:2] == (
         "foreign", "a different NPI than this record's submitted NPI")
     assert a("NPPES", _row(source_record_identifier=NPI_B), "")[:2] == (
         "foreign", "an NPI although this record's submitted NPI is blank")
     assert a("NPPES", _row(), NPI_A)[0] == "unrecorded"
     # surrounding whitespace is ignored; any other formatting difference is NOT normalised away (exact compare)
-    assert a("NPPES", _row(source_record_identifier=f" {NPI_A} "), f"{NPI_A} ")[0] == "own"
+    assert a("NPPES", _row(source_record_identifier=f" {NPI_A} "), f"{NPI_A} ")[0] == "npi_match"
     assert a("NPPES", _row(source_record_identifier=NPI_A), f"{NPI_A[:5]}-{NPI_A[5:]}")[0] == "foreign"
     # two different NPIs on the stored enrolment records never establish one record's NPI
     mixed = _row(query_identifier="snapshot:abc", original_values={"records": [{"npi": NPI_A}, {"npi": NPI_B}]})
@@ -172,7 +175,8 @@ async def test_the_records_own_older_nppes_answer_is_used_instead_of_a_newer_one
     own = await _ev(db, ent, NPPES, "REVIEW", T_OLD, answer_npi=NPI_A)
     other = await _ev(db, ent, NPPES, "PASS", T_NEW, answer_npi=NPI_B)
     facts, out = await _facts(db, intake_id)
-    assert facts[1]["nppes"].startswith("REVIEW")                             # its own answer, not the newer PASS
+    assert facts[1]["nppes"].startswith("REVIEW")                             # the matching NPI's answer, not the newer PASS
+    assert facts[1]["nppes"].endswith("NPI match only [N1]")                  # and it is called no more than that
     assert f"NPPES:{own.id}@" in facts[1]["evidence_reference"]
     assert str(other.id) not in facts[1]["evidence_reference"]
     assert out["meta"]["stats"]["evidence_rows_reselected_for_record"] == 1
@@ -205,9 +209,8 @@ async def test_an_nppes_row_that_stores_no_npi_is_quoted_as_stored_and_labelled_
     newest = await _ev(db, ent, NPPES, "UNAVAILABLE", T_NEW)                  # the newest stores no NPI
     facts, out = await _facts(db, intake_id)
     cell = facts[1]["nppes"]
-    assert cell.startswith("Not attributed to this record")
-    assert "does not record the identifier it was queried by" in cell
-    assert "NOT established as this record's (observed 2026-11-08): UNAVAILABLE" in cell
+    assert cell.startswith("Not attributed to this record [N3]: no identifier stored on the row")
+    assert "entity-level, as recorded (observed 2026-11-08 UTC): UNAVAILABLE" in cell
     assert not cell.startswith("PASS") and "PASS" not in cell                 # no clearance from the older row
     assert f"NPPES:{newest.id}@" in facts[1]["evidence_reference"]
     assert "(not attributed to this record: no identifier recorded)" in facts[1]["evidence_reference"]
@@ -249,8 +252,8 @@ async def test_a_cms_not_found_from_an_ingested_edition_stores_no_npi_and_is_lab
     row = await _ev(db, ent, CMS, "NOT_FOUND", T_OLD, query_identifier="snapshot:" + str(uuid.uuid4()), records=[])
     facts, out = await _facts(db, intake_id)
     cell = facts[1]["pecos"]
-    assert cell.startswith("Not attributed to this record: the newest CMS PPEF enrolment evidence row")
-    assert "Stored for the ENTITY" in cell and cell.endswith("NOT_FOUND | retrieved 2026-11-08")
+    assert cell.startswith("Not attributed to this record [N3]")
+    assert "entity-level, as recorded" in cell and cell.endswith("NOT_FOUND | retrieved 2026-11-08")
     assert f"CMS_PPEF_ENROLLMENT:{row.id}@" in facts[1]["evidence_reference"]
     assert out["meta"]["stats"]["evidence_rows_identifier_not_recorded"] == 1
 
@@ -267,10 +270,12 @@ async def test_valid_evidence_from_before_this_delivery_was_received_is_kept_and
         await _ev(db, ent, NPPES, "PASS", when, answer_npi=NPI_A)
         await _ev(db, ent, CMS, "PASS", when, query_identifier=CMS_API_KEY.format(npi=NPI_A))
     facts, out = await _facts(db, intake_id)
-    note = "carried from an earlier check: observed 2026-10-02, before this delivery was received (2026-11-01)"
+    note = ("NPI match only [N1] | carried from an earlier check [N4]: observed 2026-10-02 UTC, more than a day "
+            "before the recorded receipt date 2026-11-01")
     for key in ("nppes", "pecos"):
         assert facts[1][key].startswith("PASS") and facts[1][key].endswith(note)   # kept, dated, labelled
         assert facts[2][key].startswith("PASS") and "carried from" not in facts[2][key]
+        assert facts[2][key].endswith("NPI match only [N1]")
     assert out["meta"]["stats"]["evidence_rows_carried_from_another_check"] == 2
 
 
@@ -285,7 +290,8 @@ async def test_evidence_recorded_under_a_review_of_a_different_delivered_record_
     fa, fb = (await _facts(db, a_id))[0][1], (await _facts(db, b_id))[0][1]
     assert fa["nppes"].startswith("PASS") and "carried from" not in fa["nppes"]        # its own review's check
     assert fb["nppes"].startswith("PASS")
-    assert fb["nppes"].endswith("carried from a check recorded for a different delivered record: observed 2026-11-08")
+    assert fb["nppes"].endswith(
+        "carried from a check recorded for a different delivered record [N4]: observed 2026-11-08 UTC")
 
 
 async def test_nothing_observed_after_the_cutoff_is_attributed_or_quoted(rolled_back_db):
@@ -326,4 +332,93 @@ async def test_attribution_labels_change_no_bucket_status_or_total(rolled_back_d
     # stored evidence is read, never rewritten
     assert (await db.execute(select(E.id, E.disposition, E.original_values, E.query_identifier).where(
         E.entity_id.in_([str(e) for e in ents])).order_by(E.id))).all() == rows_before
-    assert any("NPPES and CMS PPEF enrolment cells" in n for n in dataset["load_meta"]["notes"])
+    assert any("Evidence cells are NOT record-attributed" in n for n in dataset["load_meta"]["notes"])
+
+
+async def test_the_receipt_date_has_no_time_zone_so_carried_needs_a_full_day_of_clearance(rolled_back_db):
+    """`received_at` is the operator-stated receipt date, with no zone; evidence times are UTC. A row written a
+    few hours "before" that value may be after receipt in the zone the date meant, so it gets no carried label."""
+    db = rolled_back_db
+    intake_id, recs = await _delivery(db, "9.99.778.22", [NPI_A, NPI_A], received=datetime(2026, 11, 8, 12, 0, 0))
+    near, far = await _entity(db, "z1"), await _entity(db, "z2")
+    await _link(db, intake_id, recs[1], near)
+    await _link(db, intake_id, recs[2], far)
+    await _ev(db, near, NPPES, "PASS", datetime(2026, 11, 8, 1, 0, 0), answer_npi=NPI_A)    # 11 h "before"
+    await _ev(db, far, NPPES, "PASS", datetime(2026, 11, 7, 11, 0, 0), answer_npi=NPI_A)    # 25 h before
+    facts, _ = await _facts(db, intake_id)
+    assert "carried from" not in facts[1]["nppes"]
+    assert "carried from an earlier check [N4]: observed 2026-11-07 UTC" in facts[2]["nppes"]
+    # an offset-carrying receipt value is converted to UTC, never compared as if it were UTC already
+    from datetime import timedelta, timezone
+    row = _row(created_at=datetime(2026, 11, 7, 20, 0, 0), review_id=None)
+    east = datetime(2026, 11, 9, 2, 0, 0, tzinfo=timezone(timedelta(hours=14)))            # = 2026-11-08T12:00Z
+    assert ld._carried_note(row, received_at=east, record_id=None, review_anchor={}) == ""  # 16 h before, not 30
+    assert "[N4]" in ld._carried_note(_row(created_at=datetime(2026, 11, 7, 11, 0, 0), review_id=None),
+                                      received_at=east, record_id=None, review_anchor={})
+
+
+# ── the limits are stated wherever a cell can be read ──────────────────────────────────────────────────────────
+
+FORBIDDEN = ("attributed to the delivered record", "attributed to this record by", "is this record's result",
+             "record attribution established", "fully attributed")
+
+
+async def test_every_format_states_that_an_npi_match_is_not_record_attribution_and_lists_the_limits(rolled_back_db):
+    import csv
+    import io
+    import json
+
+    import openpyxl
+
+    from app.reports.data import record_review_freeze as freeze
+    from app.reports.engine.xlsx_engine import render_workbook
+
+    db = rolled_back_db
+    intake_id, recs = await _delivery(db, "9.99.778.23", [NPI_A, NPI_A])
+    ents = [await _entity(db, "f1"), await _entity(db, "f2")]
+    await _link(db, intake_id, recs[1], ents[0])
+    await _link(db, intake_id, recs[2], ents[1])
+    await _ev(db, ents[0], NPPES, "PASS", T_OLD, answer_npi=NPI_A)
+    await _ev(db, ents[0], CMS, "PASS", T_BEFORE_RECEIPT, query_identifier=CMS_API_KEY.format(npi=NPI_A))
+    await _ev(db, ents[1], NPPES, "PASS", T_OLD, answer_npi=NPI_B)
+    await _ev(db, ents[1], CMS, "UNAVAILABLE", T_OLD)
+    dataset = await ld.load_dataset(db, intake_id=intake_id, evidence_cutoff=CUTOFF, report_id="R-NOTES")
+
+    # the cells are short and carry a marker; no cell and no note calls an NPI match record attribution
+    rows = {int(r[HDR.index("Source_Line")]) - 1: r for r in dataset["sheets"]["Records"]["rows"]}
+    assert rows[1][HDR.index("NPPES")].endswith("| NPI match only [N1]")
+    assert "[N1]" in rows[1][HDR.index("PECOS/CMS Enrollment")] and "[N4]" in rows[1][HDR.index("PECOS/CMS Enrollment")]
+    assert rows[2][HDR.index("NPPES")].startswith("Not attributed to this record [N2]")
+    assert rows[2][HDR.index("PECOS/CMS Enrollment")].startswith("Not attributed to this record [N3]")
+    assert max(len(rows[i][HDR.index(c)]) for i in (1, 2) for c in ("NPPES", "PECOS/CMS Enrollment")) < 230
+
+    notes = dataset["load_meta"]["evidence_notes"]
+    assert [n["marker"] for n in notes] == ["N1", "N2", "N3", "N4", "N5"] == [m_ for m_, _t in ld.EVIDENCE_NOTES]
+    required = (
+        "Identifier match only",                                           # N1: what IS established
+        "does NOT establish that the check was run for this delivery or for this delivered row",
+        "carries no delivery or record id",
+        "carries NO carried label",                                        # N4: another delivery's later run
+        "OIG LEIE, SAM.gov and SAM public-extract cells are NOT compared", # N5
+        "shown without any attribution check")
+    csv_first = next(csv.reader(io.StringIO(ds_mod.to_csv(dataset).decode("utf-8-sig"))))[0]
+    wb = openpyxl.load_workbook(io.BytesIO(render_workbook(dataset)))
+    sheet_rows = [[c for c in r] for r in wb[ds_mod.EVIDENCE_NOTES_SHEET].iter_rows(values_only=True)]
+    xlsx_text = " ".join(str(c) for r in sheet_rows for c in r if c is not None)
+    html = ds_mod.to_html(dataset)
+    frozen_json = json.loads(freeze.canonical_bytes({"load_meta": dataset["load_meta"]}))
+    json_text = " ".join(n["text"] for n in frozen_json["load_meta"]["evidence_notes"])
+    import html as html_lib
+    for where, text in (("csv", csv_first), ("xlsx", xlsx_text), ("pdf-html", html_lib.unescape(html)),
+                        ("json", json_text)):
+        for phrase in required:
+            assert phrase in text, (where, phrase)
+        for marker in ("[N1]", "[N2]", "[N3]", "[N4]", "[N5]") if where != "json" else ():
+            assert marker in text, (where, marker)
+    assert ds_mod.EVIDENCE_NOTES_HEADING in html_lib.unescape(html)
+    assert ["[N1]", notes[0]["text"]] in sheet_rows
+    everything = " ".join([csv_first, xlsx_text, html_lib.unescape(html), json_text,
+                           " ".join(dataset["load_meta"]["notes"]),
+                           " ".join(c for r in dataset["sheets"]["Records"]["rows"] for c in r)])
+    for phrase in FORBIDDEN:
+        assert phrase not in everything, phrase
