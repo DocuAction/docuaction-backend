@@ -271,6 +271,37 @@ async def create_review_cycle_route(
         raise HTTPException(409, str(exc))
 
 
+@router.get("/deliveries/{intake_id}/review-cycle/identity-precheck",
+            summary="READ-ONLY prediction: members a review cycle could not review for identity reasons")
+async def review_cycle_identity_precheck_route(
+    intake_id: uuid.UUID,
+    after_entity_id: Optional[uuid.UUID] = Query(None, description=(
+        "Continue behind this entity id: the `page.next_after_entity_id` of the previous page.")),
+    limit: int = Query(2000, ge=1, le=5000, description="Members examined per call."),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role("program_manager")),
+):
+    """PROGRAM MANAGER (the role of the POST it previews). Counts, before any review cycle is created, the
+    members the cycle's identity pre-check would set aside - by reason, with the submitted-NPI refusals split
+    into "record delivered no NPI" and "record delivered a different NPI" - and lists them (entity id, delivered
+    reference, reason; never an NPI or any other delivered value).
+
+    READ-ONLY: it draws no plan, creates no sample, review, evidence or audit row, and asks no external
+    source. It is a prediction from local registry data at call time; promotion or analyst decisions after the
+    call can change it. A reference that does not resolve is reported as such (kind transient), not as
+    refused. 409 when the resolver is not the registry one (the pre-check could establish nothing)."""
+    from app.tefca_registry import review_cycle as rc
+    from app.tefca_registry.rce import models as rce_models
+
+    if await db.get(rce_models.RceSourceIntake, intake_id) is None:
+        raise HTTPException(404, f"No delivery {intake_id}")
+    try:
+        return await rc.preview_identity_precheck(
+            db, intake_id, after_entity_id=after_entity_id, limit=limit)
+    except rc.IdentityPrecheckUnavailable as exc:
+        raise HTTPException(409, str(exc))
+
+
 @router.get("/deliveries/{intake_id}/review-cycle",
             summary="The official plans drawn for a delivery, and their completion")
 async def read_review_cycle_route(
