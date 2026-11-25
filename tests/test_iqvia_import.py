@@ -21,7 +21,8 @@ from app.tefca_registry.rce import snapshot_models as sm
 from app.tefca_registry.rce import source_matching as sx
 from rce_traceability_support import NPI_REGISTERED, SYN, rolled_back_db, seed_entity  # noqa: F401
 
-pytestmark = pytest.mark.regression
+# 2026-11-25: these files predate intake contracts; see the fixture in conftest.py.
+pytestmark = [pytest.mark.regression, pytest.mark.usefixtures("iqvia_narrow_test_layouts_bind")]
 
 
 class _User:

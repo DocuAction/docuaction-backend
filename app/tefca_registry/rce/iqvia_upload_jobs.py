@@ -244,6 +244,23 @@ async def finish_failed_or_requeue(db, job_id, reason: str) -> str:
     return job.state
 
 
+async def finish_failed_terminal(db, job_id, reason: str) -> str:
+    """FAILED now, whatever the attempt count: for a failure that is a property
+    of the file itself (the importer marks it `non_retryable`), where a retry
+    would only read and hash the same bytes again to the same end."""
+    job = await db.get(IqviaImportJob, job_id)
+    if job is None:
+        return IqviaImportJob.STATE_FAILED
+    job.error_reason = (reason or "")[:2000]
+    job.heartbeat_at = datetime.utcnow()
+    job.state = IqviaImportJob.STATE_FAILED
+    job.phase = "Failed (not retryable)"
+    job.failed_at = datetime.utcnow()
+    job.active_marker = None
+    await db.commit()
+    return job.state
+
+
 async def reap_stale_jobs(db, threshold_seconds: int = STALE_HEARTBEAT_SECONDS
                           ) -> List[Dict[str, Any]]:
     """A RUNNING job whose worker stopped heartbeating (process killed,

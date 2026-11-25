@@ -21,7 +21,8 @@ from app.tefca_registry.rce import snapshot_models as sm
 from rce_traceability_support import SYN, rolled_back_db  # noqa: F401
 from test_iqvia_import import write_csv
 
-pytestmark = pytest.mark.regression
+# 2026-11-25: these files predate intake contracts; see the fixture in conftest.py.
+pytestmark = [pytest.mark.regression, pytest.mark.usefixtures("iqvia_narrow_test_layouts_bind")]
 
 # a representative slice of the 191-column layout: relationship + identifiers, plus descriptive columns that the
 # file repeats on every row and that the importer must not copy

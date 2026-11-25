@@ -336,3 +336,36 @@ def _reset_list_status_cache():
     except Exception:  # noqa: BLE001 - the module may be absent in a partial checkout
         pass
     yield
+
+
+@pytest.fixture
+def iqvia_narrow_test_layouts_bind(monkeypatch):
+    """OPT-IN, for suites written before intake contracts existed (2026-11-25).
+
+    Those suites stage narrow synthetic files (five or six columns) and then
+    assert on reconciliation, approval or matching. Since the intake gates, a
+    NEW import whose header binds to no registered contract cannot reconcile,
+    so every one of them would stop at "unregistered contract" before reaching
+    what it tests. This fixture makes such a header - one that carries its
+    source's required keys, with unique, non-blank names - bind as if a
+    contract for it were registered. It changes nothing else, and it is a test
+    seam only: there is no production switch that does this. The gate itself is
+    tested, without this fixture, in tests/test_iqvia_intake_gates_2026_11_25.py."""
+    from app.tefca_registry.rce import iqvia_contract_registry as cr
+
+    real = cr.bind_header
+
+    def bind(registry, source_system, header):
+        out = real(registry, source_system, header)
+        if out["outcome"] != cr.OUTCOME_UNREGISTERED or header is None:
+            return out
+        names = list(header)
+        usable = (len(set(names)) == len(names) and all(n.strip() for n in names)
+                  and all(k in names for k in registry.required_keys(source_system)))
+        if not usable:
+            return out
+        return {**out, "outcome": cr.OUTCOME_EXACT, "diff": None, "operator_message": None,
+                "contract": {"contract_id": f"{source_system}:TEST-NARROW-LAYOUT", "contract_file": None,
+                             "layout_sha256": "0" * 64, "field_count": len(names), "editions": []}}
+
+    monkeypatch.setattr(cr, "bind_header", bind)
