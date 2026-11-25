@@ -280,3 +280,51 @@ deliberately left open:
 - No determination was recorded as reportable; `reportable_at` is NULL on all 43
   existing review records.
 - No SAM.gov result was inferred from its absence.
+
+
+---
+
+## Owner instruction received 2026-11-14 — review fixes and gated DEV validation
+
+**DRAFT / NOT FINAL / INDEPENDENT QA PENDING. Owner instruction, not COR acceptance.**
+
+Recorded by the implementation agent at 2026-11-14T15:09:33-05:00. Source: Imran Siddiqui's instruction in this session. No formal approval identifier was supplied; none is generated here.
+
+Verbatim instruction:
+
+> OWNER INSTRUCTION (Imran Siddiqui, received in this session): find the solutions first, then push to DEV. This is an instruction to deploy to DEV after the gates pass. It is NOT approval of PROD, NOT approval of any migration or database write, NOT approval to merge to main, and NOT QA acceptance. Record this instruction verbatim in the decision register before you act.
+
+The same instruction requires every Phase 2 gate and a subsequent explicit `AUTHORIZED: deploy <list of PR numbers and head SHAs> to DEV only` reply before deployment. That SHA-specific authorization has **not** been received. This entry does not authorize a deployment, shared migration, activation, hold release, bucket adjudication, DEV/PROD data write, main merge or firewall change. Independent QA is unassigned. AI File Workspace stays ON HOLD.
+
+### A — owner-requested provenance contract
+
+**Owner decision recorded 2026-11-14 (see below).** Requested in this session: new comment imports require source file/hash/sheet/column. A legacy stored comment missing sheet or column remains exportable, its verbatim text is unchanged, and a comment-specific provenance-incomplete marker and report limitation count are required. This records the requested contract only; it is not approval of a live import or migration.
+
+### B — interim name identity control (owner decision recorded 2026-11-14; heading previously read "confirmation pending")
+
+Owner requested fail-closed record-specific review for an NPI-less record whose delivered name is not established to match the entity. Proposed exact normalization for review: Unicode NFC, collapse whitespace using `str.split()` joined with one ASCII space, then Unicode `casefold()`. Blank names do not establish identity. Punctuation, word order and legal suffixes are retained; no fuzzy, phonetic, transliteration or substring matching is used. The same normalized name must govern live-screen eligibility and persisted name-evidence filtering.
+
+**Owner decision recorded 2026-11-14 (see "Owner decisions received 2026-11-14 — W3 and W4" below).** Earlier wording of this paragraph, kept as history: "PENDING OWNER CONFIRMATION: this exact normalization and refusal/B3 handling. Draft implementation/tests may proceed; this pending decision blocks the DEV promotion gate. No approval ID, reviewer or acceptance is invented."
+
+### Owner decisions received 2026-11-14 — W3 and W4
+
+**DRAFT / NOT FINAL / INDEPENDENT QA PENDING. Owner decisions, not COR acceptance and not QA approval.** Recorded by the implementation agent on 2026-11-14. Source: Imran Siddiqui's message in the working session, relayed by the coordinating agent. No formal approval identifier was supplied; none is generated here.
+
+Verbatim owner text:
+
+> - W3: Require sheet and column for new imports. Export legacy comments verbatim with separate provenance-incomplete markers and limitation counts.
+> - W4: Compare names using Unicode NFC, casefold and collapsed whitespace. Preserve punctuation, word order and legal suffixes. No fuzzy matching; unestablished identity must not pass.
+> Record these decisions in the register. Continue the current run with one push owner and isolated worker worktrees. The 'Imran' reviewer agent is model review, not independent QA.
+
+What this settles:
+
+- **Section A (comment provenance): Owner decision recorded.** New comment imports must carry source sheet and column (in addition to file name and SHA-256) and are rejected at intake otherwise. A comment already stored without them is exported verbatim, with a provenance-incomplete marker on that comment only and a count in the report limitations.
+- **Section B (name identity): Owner decision recorded.** The normalization proposed in section B is confirmed as written: Unicode NFC, collapsed whitespace, casefold; punctuation, word order and legal suffixes preserved; no fuzzy matching; an unestablished identity does not pass. A prompt of the same day had described the rule as "case, whitespace, punctuation only"; the owner's decision above supersedes that wording — punctuation is **not** ignored.
+
+What this does not settle or authorize: any deployment, shared migration, live comment import, activation, hold release, bucket adjudication, DEV/PROD data write, main merge or firewall change. The SHA-specific DEV authorization sentence has not been received. The `imran` reviewer agent is model review, not independent QA; independent QA remains unassigned.
+
+Implementation references on this branch (implemented and locally tested; not reviewed by a human, not deployed): `record_comments._validate_entry`, `october_review_dataset._stored_provenance_gap`, `review_service.record_name_identity` / `evidence_query_name`.
+
+### Deployment and migration boundary
+
+**PENDING:** exact list of PRs and head SHAs explicitly authorized for DEV only. #212 includes `20261112_rce_record_comments`; its presence in DEV has not been verified here. No shared migration is authorized by this instruction. If required, supply a migration plan, disposable-database dry-run and rollback assessment, then stop for specific approval. A populated append-only comment table must never be destructively downgraded.

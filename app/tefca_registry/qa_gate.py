@@ -142,6 +142,27 @@ def effective_determination(events: List[E]) -> Optional[Dict[str, Any]]:
     }
 
 
+QA_STATE_NONE = "NO_DETERMINATION"
+QA_STATE_PENDING = "PENDING_QA"
+QA_STATE_APPROVED = "APPROVED"
+QA_STATE_RETURNED = "RETURNED"
+QA_STATE_ESCALATED = "ESCALATED"
+
+
+def qa_state(events: List[E]) -> str:
+    """The QA state of the determination IN FORCE. A QA approval given to a determination that a later
+    determination superseded does not stand: after a supersession the state is PENDING_QA until QA acts again
+    (a screen that kept showing the earlier APPROVE would show a settled decision that is back in play)."""
+    determination = _latest_determination(events)
+    if determination is None:
+        return QA_STATE_NONE
+    subsequent = _qa_after(events, determination)
+    if not subsequent:
+        return QA_STATE_PENDING
+    return {E.QA_APPROVE: QA_STATE_APPROVED, E.QA_RETURN: QA_STATE_RETURNED,
+            E.QA_ESCALATE: QA_STATE_ESCALATED}.get(subsequent[-1].qa_action, QA_STATE_PENDING)
+
+
 def history(events: List[E]) -> List[Dict[str, Any]]:
     """The full chain, superseded events INCLUDED and marked.
 
@@ -149,7 +170,15 @@ def history(events: List[E]) -> List[Dict[str, Any]]:
     part of the record of what happened.
     """
     superseded = {e.supersedes_decision_id for e in events if e.supersedes_decision_id}
+    determination = _latest_determination(events)
+    standing = None
+    if determination is not None:
+        after = _qa_after(events, determination)
+        standing = after[-1].id if after else None
     return [{
+        # True only for the QA event that is the LAST word on the determination in force. An earlier QA event,
+        # or one given to a superseded determination, is history and is not a standing approval.
+        "standing_qa_event": e.event_type == E.QA_REVIEW and standing is not None and e.id == standing,
         "sequence_number": e.sequence_number,
         "event_type": e.event_type,
         "actor_email": e.actor_email,
@@ -490,6 +519,7 @@ async def review_state(db, review_id: str) -> Dict[str, Any]:
         "review_id": review_id,
         "effective_determination": effective_determination(events),
         "reportable": is_reportable(events),
+        "qa_state": qa_state(events),
         "event_count": len(events),
         "history": history(events),
     }

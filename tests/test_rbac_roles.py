@@ -466,6 +466,16 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # and verification coverage. Same principle as the audit-trail and
         # export exceptions above: the viewer role exists so that a person can
         # follow the work without seeing the identifiers.
+        # Delivery processing that follows an analyst decision (2026-11-18) -
+        # reviewer (4), the SAME floor as /exceptions and /dispositions listed
+        # below, of which these are the companion reads: each row names the
+        # finding, the record, the decision taken and the STAFF MEMBER who took
+        # it (the LOGIN-013 category the audit-trail exception turns on). A
+        # viewer still sees what they need to follow the work: the job detail
+        # and the dashboard carry the counts-only summary and the
+        # "reconciliation not current" notice at viewer.
+        "/api/tefca/rce/disposition-processing/{processing_id}",
+        "/api/tefca/rce/deliveries/{intake_id}/disposition-processing",
         "/api/tefca/rce/deliveries/{intake_id}/records",
         "/api/tefca/rce/deliveries/{intake_id}/curated",
         "/api/tefca/rce/curated/{curated_id}/lineage",
@@ -497,6 +507,26 @@ def test_no_tefca_read_endpoint_sits_above_the_viewer_floor():
         # /exceptions and the per-(source,outcome) lists. Not a new access
         # decision.
         "/api/tefca/rce/deliveries/{intake_id}/sam-extract/candidates",
+        # ── Record comments (2026-11-12) ── Same floor, same principle, as the
+        # per-record reads above: the list returns reviewer-authored QA
+        # commentary about named records, with the second reviewer's attribution
+        # and the importing staff member's email (`imported_by`) - the same
+        # staff-identity category the /api/tefca/audit-trail and
+        # /api/tefca/arc/qa-queue exceptions turn on (LOGIN-013: a viewer sees no
+        # PII anywhere). A viewer keeps every read that carries no such content;
+        # the comment WRITE path is qalead (audited 403). A new access decision
+        # for reviewers is not made here: reviewer is already the floor for
+        # delivered values on this router. Flagged on the PR for confirmation.
+        "/api/tefca/rce/deliveries/{intake_id}/comments",
+        # ── Supplemental NPI research (2026-11-15) ── Same floor and the same
+        # reasoning as the comments read above: the list returns researched NPIs
+        # for NAMED delivered records with the researcher's staff email
+        # (`researcher`) and the analyst's free-text rationale - the staff-identity
+        # category LOGIN-013 keeps from a viewer. The WRITE path is `reviewer`
+        # (the analyst floor). No new access decision is made here: reviewer is
+        # already the floor for delivered values on this router. Flagged on the
+        # PR for confirmation.
+        "/api/tefca/rce/deliveries/{intake_id}/supplemental-npi-research",
         # ── IQVIA Release 1 application journey (2026-10-02) ──
         # Snapshot status/progress/reconciliation for a staged licensed
         # extract -- reviewer (4), the SAME floor `source_matching.

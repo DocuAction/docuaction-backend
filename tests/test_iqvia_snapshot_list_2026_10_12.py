@@ -228,6 +228,7 @@ def test_registration_row_with_approved_successor_is_not_changed_in_place(as_rol
     assert item["sha256"] == "a" * 64 and item["record_count"] == 10
     assert item["stored_counters"] == {
         "basis": "stored_import_counters", "rows_read": 10, "rows_staged": 9,
+        "rows_inserted_latest_attempt": 9, "rows_already_present": None,
         "rows_rejected": 1, "reference_preflight_gate": "CLEAR"}
     assert "reconciles" not in item["stored_counters"]   # not stored, so not claimed here
 

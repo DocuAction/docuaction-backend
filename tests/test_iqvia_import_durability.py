@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from sqlalchemy import delete, func, select, text
 
 from app.tefca_registry.rce import iqvia_import as ii
+from app.tefca_registry.rce import iqvia_reconciliation as rec
 from app.tefca_registry.rce import iqvia_routes as routes
 from app.tefca_registry.rce import iqvia_upload_jobs as jobs
 from app.tefca_registry.rce import iqvia_upload_models as um
@@ -56,6 +57,8 @@ async def db(db_required):
     async with async_session_maker() as session:
         yield session
     async with async_session_maker() as cleanup:
+        await cleanup.execute(delete(rec.IqviaSnapshotReconciliation).where(
+            rec.IqviaSnapshotReconciliation.snapshot_id.in_(_created_snapshot_ids or [uuid.uuid4()])))
         await cleanup.execute(delete(um.IqviaImportJob).where(
             um.IqviaImportJob.snapshot_id.in_(_created_snapshot_ids or [uuid.uuid4()])))
         await cleanup.execute(delete(um.IqviaUploadSession).where(
@@ -251,6 +254,14 @@ class TestWorkerDeathIsABoundedRetryNotADuplicate:
         # live server never hits this: `Depends(get_db)` hands each HTTP
         # request a brand new session.
         db.expire_all()
+
+        # Approval needs the exact reconciliation to have passed for the
+        # RESUMED snapshot; it is queued and run the way the scheduler does it.
+        from fastapi import Response
+        await routes.start_reconciliation(snapshot_id, Response(), db, user=_User("reviewer"))
+        claimed = await rec.claim_next(db)
+        await rec.run_reconciliation(str(claimed.id))
+        await db.rollback()
 
         # Approval now succeeds.
         approved = await routes.approve(snapshot_id, approve_body, db, user=_User("qalead"))

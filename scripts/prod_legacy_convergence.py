@@ -118,11 +118,28 @@ AREA1_OWNER_TABLES = {
     # trigger + app SELECT/INSERT only). OWNER-OWNED, never re-owned to the
     # app at FINALIZE: a table owner could bypass its own append-only trigger.
     "iqvia_advisory_comparison_outcome",
+    # 20261112_rce_record_comments: append-only, NON-DECISION record comments
+    # (trigger + app SELECT/INSERT only). OWNER-OWNED, never re-owned to the app
+    # at FINALIZE: a table owner could drop its own append-only trigger.
+    "rce_record_comments",
+    # 20261115_rce_npi_research: append-only supplemental NPI research per delivered
+    # source record (trigger + app SELECT/INSERT only). OWNER-OWNED for the same reason.
+    "rce_supplemental_npi_research",
     # 20261108_source_policy: versioned mandatory-source policy (M-1..M-4),
     # ships EMPTY and inactive; the app holds SELECT only (the runtime never
     # writes policy — rows are owner-side governed acts). Created by the chain
     # AS the owner role and kept there.
     "rce_source_policies",
+    # 20261118_disposition_followups: the record of accepted analyst-decision
+    # work and what became of it. The app holds SELECT+INSERT+UPDATE by grant
+    # (the worker updates state and heartbeat) and deliberately NO DELETE. An
+    # owner holds every privilege, so handing the table to docuaction_app at
+    # FINALIZE would make that grant stop binding. OWNER-OWNED, like
+    # rce_delivery_jobs (also app-updated by grant).
+    "rce_disposition_followups",
+    # 20261124_iqvia_reconciliation: exact-count job rows. App SELECT+INSERT+UPDATE
+    # by grant, no DELETE; owner-owned so that grant still binds after FINALIZE.
+    "iqvia_snapshot_reconciliation",
 }
 
 
@@ -614,8 +631,23 @@ MANAGED_CHAIN_CREATES = {
     # owner-owned, so it is in AREA1_OWNER_TABLES and is NOT moved to
     # docuaction_app at FINALIZE (an owning app could bypass the trigger).
     "iqvia_advisory_comparison_outcome",
+    # 20261112_rce_record_comments -- append-only (trigger + SELECT/INSERT);
+    # owner-owned, so it is in AREA1_OWNER_TABLES and is NOT moved to
+    # docuaction_app at FINALIZE. FKs into rce_source_intakes/rce_source_records
+    # (chain-created, Area-1), so it could not have existed in legacy PROD.
+    "rce_record_comments",
+    # 20261115_rce_npi_research -- append-only (trigger + SELECT/INSERT); owner-owned,
+    # NOT moved to docuaction_app at FINALIZE. FKs into the chain-created Area-1 tables.
+    "rce_supplemental_npi_research",
     # 20261108_source_policy: SELECT-only for the app; owner-owned; ships empty.
     "rce_source_policies",
+    # 20261118_disposition_followups -- SELECT+INSERT+UPDATE by grant, no DELETE.
+    # Owner-owned, so it is in AREA1_OWNER_TABLES and is NOT moved to
+    # docuaction_app at FINALIZE (an owning app could delete accepted work).
+    "rce_disposition_followups",
+    # 20261124_iqvia_reconciliation: exact-count job rows. App SELECT+INSERT+UPDATE
+    # by grant, no DELETE; owner-owned so that grant still binds after FINALIZE.
+    "iqvia_snapshot_reconciliation",
 }
 # Tables the 20260917 revision declares FOREIGN KEYS to that docuaction_app owns
 # in PROD and that no pending revision ALTERs (so they are not re-owned). CREATE

@@ -54,6 +54,7 @@ import csv
 import hashlib
 import io
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -65,6 +66,7 @@ if TYPE_CHECKING:  # annotation-only: the runtime import stays function-local
 
 from app.Tefca import source_policy as sp
 from app.core import request_context
+from app.core.logging_config import sanitize_stored_error, sanitize_stored_error_tree
 from app.tefca_registry import models as reg
 from app.tefca_registry.rce import models as m
 from app.tefca_registry.rce import recheck_models as rm
@@ -527,6 +529,38 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
         item.state, item.outcome, item.processed_at = rm.ITEM_DONE, rm.OUTCOME_NOT_RESOLVED, now
         item.detail = {"reason": "entity reference did not resolve"}
         return
+    # IDENTITY FIRST: a refusal persists nothing - no evidence, no ledger row, no identifier-status or entity-status
+    # change (CodeRabbit on #233, rounds 5-6).
+    from app.Tefca import rce_fields
+    rce_npi = rce_fields.rce_npi(entity) or ""
+    identifiers = [dict(identifier) for identifier in entity.get("identifier", []) or []]
+    identifier_npis = {str(identifier.get("value") or "").strip() for identifier in identifiers
+                       if identifier.get("system") == rce_fields.NPI_SYSTEM}
+    identifier_npis.discard("")
+    if len(identifier_npis) > 1 or (rce_npi and identifier_npis and rce_npi not in identifier_npis):
+        # Neither representation is authoritative over the other. Refuse even formatting-only disagreements;
+        # choosing or normalising an identifier here would introduce a new identity rule.
+        item.state, item.outcome, item.processed_at = rm.ITEM_DONE, rm.OUTCOME_IDENTITY_REFUSED, now
+        item.detail = {"reason": "the entity carries conflicting NPI values (RCE NPI / FHIR NPI identifiers); "
+                                 "no source was asked", "persisted": False}
+        return
+    identifier_npi = next(iter(identifier_npis), "")
+    probe_npi = rce_npi or identifier_npi
+    # All source adapters must see the same value. This request-local copy supplies a missing representation
+    # without changing the resolver result, registry identifiers, or delivered record.
+    entity = {**entity, "_rce": {**rce_fields.rce_block(entity), "NPI": probe_npi},
+              "identifier": [{**identifier, "value": probe_npi}
+                             if identifier.get("system") == rce_fields.NPI_SYSTEM else dict(identifier)
+                             for identifier in identifiers]}
+    if probe_npi and not identifier_npi:
+        entity["identifier"].insert(0, {"system": rce_fields.NPI_SYSTEM, "value": probe_npi})
+    context, refusal = await vf.validated_delivery_context(
+        db, intake_id=job.intake_id, ref=item.entity_ref, queued_entity_id=item.entity_id, entity=entity,
+        probe_npi=probe_npi)
+    if context is None:
+        item.state, item.outcome, item.processed_at = rm.ITEM_DONE, rm.OUTCOME_IDENTITY_REFUSED, now
+        item.detail = {"reason": refusal, "persisted": False}
+        return
     scope = (job.pinned or {}).get("evidence_scope") or SCOPE_FULL_BUILD
     if scope == SCOPE_CMS_ENROLLMENT_ONLY:
         from app.Tefca.models import TEFCAPPEFSnapshot
@@ -551,11 +585,16 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
     for row in rows:
         row["review_cycle_id"] = None
         db.add(TEFCADimensionEvidence(**row))
+    ledger_failure = None
     try:
-        from app.Tefca import rce_fields
-        await vf.record_from_evidence(db, entity_id=item.entity_id,
-                                      npi=rce_fields.rce_npi(entity), evidence=evidence)
+        # The ledger row belongs to the DELIVERED record validated above (same NPI as the probes used). The writer
+        # wraps its identifier change and its insert in one savepoint, so a failure leaves neither behind and the
+        # batch session usable; the evidence appended above stays. A failure is NOT silent: it is flagged on the
+        # item and counted in the job summary (class name only, never message text).
+        await vf.record_from_evidence(db, entity_id=item.entity_id, npi=probe_npi or None, evidence=evidence,
+                                      source_record_id=context["source_record_id"], intake_id=job.intake_id)
     except Exception as exc:  # noqa: BLE001 -- the ledger must not fail a recheck
+        ledger_failure = type(exc).__name__
         logger.error("recheck: NPI outcome not recorded for %s: %s", item.entity_id,
                      type(exc).__name__, exc_info=True)
 
@@ -573,6 +612,9 @@ async def _recheck_one(db, job: RceRecheckJob, item: RceRecheckItem, *, local_st
     item.detail = {"evidence_generation": evidence.get("generated_at"),
                    "rows_appended": len(rows),
                    "entity_status_changed_to_verified": False}
+    if ledger_failure:
+        item.detail["ledger_recorded"] = False
+        item.detail["ledger_error_class"] = ledger_failure
 
 
 async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str, Any]:
@@ -607,7 +649,7 @@ async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str
             logger.error("recheck %s: unhandled error for %s: %s", job.id, item.entity_ref,
                          type(exc).__name__, exc_info=True)
             item.state, item.processed_at = rm.ITEM_ERROR, datetime.utcnow()
-            item.detail = {"error": f"{type(exc).__name__}: {exc}"[:500]}
+            item.detail = {"error": item_error_text(exc)}
 
     job.processed_count = (job.processed_count or 0) + len(items)
     job.heartbeat_at = datetime.utcnow()
@@ -620,6 +662,13 @@ async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str
     pending = int(counts.get(rm.ITEM_PENDING, 0))
     job.summary = {"by_outcome": {k: int(v) for k, v in counts.items()},
                    "pending": pending,
+                   # Items refused at identity validation: nothing was gathered or persisted for them.
+                   "identity_refused": int(counts.get(rm.OUTCOME_IDENTITY_REFUSED, 0)),
+                   # Items whose evidence was appended but whose NPI ledger write failed (see item detail).
+                   "ledger_not_recorded": int((await db.execute(
+                       select(func.count()).select_from(RceRecheckItem).where(
+                           RceRecheckItem.job_id == job.id,
+                           RceRecheckItem.detail["ledger_recorded"].astext == "false"))).scalar() or 0),
                    "note": "ANSWERED_NO_SIGNAL is a re-evaluation result, not a "
                            "verification pass; no entity was marked verified."}
 
@@ -641,17 +690,28 @@ async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str
         # entity was actually asked -- every reference failed to resolve, or
         # every lookup raised -- reported SUCCEEDED / "Finished". Nothing was
         # re-evaluated, so that is a failure with a reason, not a success.
-        not_asked = int(counts.get(rm.OUTCOME_NOT_RESOLVED, 0)) + int(counts.get(rm.ITEM_ERROR, 0))
+        refused = int(counts.get(rm.OUTCOME_IDENTITY_REFUSED, 0))
+        not_asked = (int(counts.get(rm.OUTCOME_NOT_RESOLVED, 0)) + int(counts.get(rm.ITEM_ERROR, 0)) + refused)
         total_items = sum(int(v) for v in counts.values())
         job.completed_at = datetime.utcnow()
-        if total_items and not_asked == total_items:
+        if total_items and refused == total_items:
+            job.state = rm.STATE_FAILED
+            job.error_reason = (
+                f"no entity could be re-evaluated: all {refused} item(s) were refused at identity validation "
+                f"(the reference no longer maps to the queued entity, the delivery has no single delivered "
+                f"record for it, or the probes would use an NPI the delivery did not submit). Nothing was "
+                f"persisted for them and the source was not asked.")
+        elif total_items and not_asked == total_items:
             job.state = rm.STATE_FAILED
             job.error_reason = (
                 f"no entity could be re-evaluated: {int(counts.get(rm.OUTCOME_NOT_RESOLVED, 0))} "
                 f"reference(s) did not resolve in the registry and "
                 f"{int(counts.get(rm.ITEM_ERROR, 0))} lookup(s) raised an error. The source "
                 f"was not asked. Check the entity resolver configuration "
-                f"(ENTITY_RESOLVER_SOURCE) before requesting another recheck.")
+                f"(ENTITY_RESOLVER_SOURCE) before requesting another recheck."
+                + (f" {refused} item(s) were refused at identity validation (the reference no longer maps to "
+                   f"the queued entity, the delivery has no single delivered record for it, or its submitted "
+                   f"NPI differs); nothing was persisted for them." if refused else ""))
         else:
             job.state = rm.STATE_SUCCEEDED
     await db.commit()
@@ -700,6 +760,50 @@ async def reap_stale_jobs(db, threshold_seconds: int = STALE_HEARTBEAT_SECONDS
     return out
 
 
+def item_error_text(exc: BaseException) -> str:
+    """What is stored for an entity whose recheck raised: the write rule every
+    other evidence writer uses (`safe_exception_text`) - a domain message, or
+    the class name only for a driver or library exception. Before 2026-11-14
+    this stored `f"{type(exc).__name__}: {exc}"`, the raw message."""
+    from app.core.logging_config import safe_exception_text
+    return safe_exception_text(exc, 500)
+
+
+_LEADING_CLASS = re.compile(r"^([A-Za-z_][A-Za-z_0-9]*): ")
+
+
+def _masked_item_detail(detail: Dict[str, Any]) -> Dict[str, Any]:
+    """An item's stored detail as a caller may read it.
+
+    The old writer stored "{ClassName}: {message}" under `error`, with no stage
+    in front, for ANY class - "gaierror", "_RetryableProviderError", "error".
+    The leading identifier is therefore taken as the class and handed to the
+    contract as `failure_class`: a listed domain class keeps its message, any
+    other keeps its name only. A controlled sentence this module writes
+    ("pinned PPEF snapshot ... no longer resolves") has no such lead-in and is
+    returned as it is."""
+    shown = sanitize_stored_error_tree(detail)
+    stored = detail.get("error") if isinstance(detail, dict) else None
+    if isinstance(stored, str):
+        lead = _LEADING_CLASS.match(stored)
+        if lead:
+            shown["error"] = sanitize_stored_error(stored, failure_class=lead.group(1))
+    return shown
+
+
+def item_dto(item: RceRecheckItem) -> Dict[str, Any]:
+    """One targeted entity as a caller receives it. `detail` is masked on read
+    (rows written before the writer was fixed still hold a raw message); the
+    stored row is never rewritten."""
+    return {"entity_id": str(item.entity_id), "entity_ref": item.entity_ref,
+            "state": item.state, "prior_disposition": item.prior_disposition,
+            "new_disposition": item.new_disposition, "outcome": item.outcome,
+            "prior_evidence_id": str(item.prior_evidence_id)
+            if item.prior_evidence_id else None,
+            "processed_at": item.processed_at.isoformat() if item.processed_at else None,
+            "detail": _masked_item_detail(item.detail or {})}
+
+
 def job_dto(job: RceRecheckJob) -> Dict[str, Any]:
     return {
         "job_id": str(job.id), "intake_id": str(job.intake_id),
@@ -712,7 +816,9 @@ def job_dto(job: RceRecheckJob) -> Dict[str, Any]:
         "untargeted_remaining": job.untargeted_remaining,
         "processed_count": job.processed_count, "batch_size": job.batch_size,
         "attempt_count": job.attempt_count, "max_attempts": RceRecheckJob.MAX_ATTEMPTS,
-        "summary": job.summary or {}, "error_reason": job.error_reason,
+        "summary": job.summary or {},
+        # Masked on read by the one stored-error contract; the row is unchanged.
+        "error_reason": sanitize_stored_error(job.error_reason),
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         "is_compliance_approval": False,
@@ -754,13 +860,7 @@ async def list_items(db, job_id, *, limit: int = 100, offset: int = 0) -> Dict[s
         .limit(limit).offset(offset))).scalars().all()
     return {"job_id": str(job.id), "total": total, "count": len(rows),
             "limit": limit, "offset": offset,
-            "items": [{"entity_id": str(r.entity_id), "entity_ref": r.entity_ref,
-                       "state": r.state, "prior_disposition": r.prior_disposition,
-                       "new_disposition": r.new_disposition, "outcome": r.outcome,
-                       "prior_evidence_id": str(r.prior_evidence_id)
-                       if r.prior_evidence_id else None,
-                       "processed_at": r.processed_at.isoformat() if r.processed_at else None,
-                       "detail": r.detail or {}} for r in rows]}
+            "items": [item_dto(r) for r in rows]}
 
 
 async def items_csv(db, job_id) -> str:

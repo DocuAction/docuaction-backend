@@ -1,4 +1,4 @@
-﻿name: Backend Tests
+name: Backend Tests
 
 # The one required check this repo did not already have on a pull request.
 # CodeQL, dependency-review, sast and render (pdf-linux) all already run on
@@ -15,7 +15,7 @@
 
 on:
   pull_request:
-    branches: [main, 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06', 'feat/proposed-rules-v4-inactive-2026-11-07', 'test/iqvia-settings-shadowing-fix-2026-11-08']
+    branches: [main, 'feat/mandatory-source-parity-assessment-date-2026-11-11', 'feat/reporting-architecture-2026-10-01', 'feat/treatment-b4-rule-and-full-population-2026-11-06', 'feat/proposed-rules-v4-inactive-2026-11-07', 'test/iqvia-settings-shadowing-fix-2026-11-08', 'feat/supplemental-npi-research-2026-11-15']
   push:
     branches: [main]
 
@@ -123,6 +123,7 @@ jobs:
             tests/test_delivery_rollups_isolation.py \
             tests/test_identity_provenance_and_controls.py \
             tests/test_review_cycle_report_scope_isolation.py \
+            tests/test_review_cycle_outer_transaction_2026_11_15.py \
             tests/test_report_scope_summary_isolation.py \
             tests/test_report_links.py \
             tests/test_report_storage_durable.py \
@@ -153,7 +154,14 @@ jobs:
             tests/test_sampling_eligibility_review_required.py \
             tests/test_proposed_rules_v5_inactive_2026_11_07.py \
             tests/test_iqvia_advisory_routes_2026_11_08.py \
+            tests/test_delivery_status_error_masking_2026_11_13.py \
+            tests/test_stored_error_contract_2026_11_14.py \
             tests/test_iqvia_routes.py \
+            tests/test_review_hub_2026_11_13.py \
+            tests/test_review_hub_workflow_2026_11_13.py \
+            tests/test_iqvia_upload_ownership_2026_11_13.py \
+            tests/test_iqvia_stage_excludes_upload_dir_2026_11_15.py \
+            tests/test_iqvia_reconciliation_2026_11_24.py \
             tests/test_iqvia_import_durability.py \
             tests/test_ex3_consistency_guard_2026_11_08.py \
             tests/test_sampling_audit_label_parity_2026_11_07.py \
@@ -195,10 +203,44 @@ jobs:
             tests/test_sam_extract_visibility_2026_10_31.py \
             tests/test_manual_reconciliation_snapshot_2026_10_31.py \
             tests/test_recheck_enrollment_scope_2026_11_04.py \
+            tests/test_october_review_loader_db_2026_11_12.py \
+            tests/test_october_review_export_db_2026_11_12.py \
+            tests/test_report_export_session_failure_2026_11_15.py \
+            tests/test_extract_row_subject_identifier_2026_11_15.py \
+            tests/test_case_update_import_agt_2026_11_12.py \
+            tests/test_review_lineage_writers_db_2026_11_12.py \
+            tests/test_record_name_identity_db_2026_11_14.py \
+            tests/test_review_verification_gaps_2026_11_13.py \
+            tests/test_validation_queue_schema_gate_db_2026_11_14.py \
+            tests/test_validation_queue_routes_missing_table_db_2026_11_14.py \
+            tests/test_record_comments_db_2026_11_12.py \
+            tests/test_record_review_package_script_2026_11_12.py \
+            tests/test_record_review_download_path_db_2026_11_13.py \
+            tests/test_reviewed_disposition_report_2026_11_15.py \
+            tests/test_qa_approved_reporting_bucket_2026_11_16.py \
+            tests/test_qa_approved_reporting_bucket_validation_2026_11_16.py \
+            tests/test_b1_evidence_gate_2026_11_17.py \
+            tests/test_b2_b3_report_controls_2026_11_17.py \
+            tests/test_treatment_b4_journey_2026_11_15.py \
+            tests/test_comment_migration_downgrade_lock_2026_11_15.py \
+            tests/test_review_single_npi_read_2026_11_15.py \
+            tests/test_supplemental_npi_research_2026_11_15.py \
+            tests/test_npi_research_migration_downgrade_lock_2026_11_15.py \
+            tests/test_npi_research_review_fixes_2026_11_15.py \
+            tests/test_npi_research_replay_content_2026_11_15.py \
+            tests/test_npi_outcome_record_anchoring_2026_11_16.py \
+            tests/test_recheck_identity_validation_2026_11_16.py \
+            tests/test_deferred_disposition_processing_2026_11_18.py \
+            tests/test_disposition_followups_schema_2026_11_19.py \
+            tests/test_refused_correction_leaves_no_decision_2026_11_19.py \
+            tests/test_zip_state_finding_not_correctable_2026_11_19.py \
             -v --tb=short -rs --junitxml=isolation-results.xml
-      - name: Fail if any isolation test was skipped for want of a database
-        run: |
-          if grep -q 'No database reachable' isolation-results.xml; then echo "::error::database-backed isolation tests were skipped"; exit 1; fi
+      - name: Fail if any isolation test skip is not explicitly permitted
+        # Replaces a case-sensitive `grep 'No database reachable'` that let
+        # lowercase "no database reachable ..." / "no sandbox database ..." skips pass.
+        # Every skip fails unless its test id is in PERMITTED_SKIPS (scripts/ci_skip_guard.py);
+        # permitted skips are printed as warnings so they stay visible.
+        run: python scripts/ci_skip_guard.py isolation-results.xml
       - name: Upload isolation results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -646,6 +646,9 @@ class SowReportDataService:
 
                 snap = await _recon.latest_snapshot(self.db, scope["job"].id)
                 data["reconciliation_snapshot_id"] = str(snap.id) if snap is not None else None
+                from app.tefca_registry.rce import disposition_followups as _followups
+                data["disposition_processing"] = await _followups.summary(
+                    self.db, getattr(scope["job"], "source_intake_id", None))
             if scope["intake_id"] or scope["sample_id"]:
                 data["progress"] = await SowProgressDataService(self.db).build(
                     kind=PROGRESS_KINDS[report_type], deliverable=meta["deliverable"],

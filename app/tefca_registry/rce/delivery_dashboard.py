@@ -135,6 +135,9 @@ async def delivery_dashboard(db, intake_id) -> Dict[str, Any]:
         "actions": _actions(status, recon, status_counts),
         "dispositions": dispositions,
         "snapshot": snapshot,
+        # Recorded analyst decisions whose promotion/reconciliation has not
+        # completed. While any exist, `snapshot` predates them (2026-11-18).
+        "disposition_processing": await _disposition_processing(db, intake.id),
     }
 
 
@@ -187,8 +190,10 @@ def _status(job, recon) -> Dict[str, Any]:
         return {"state": "PROCESSING", "stage": job.stage,
                 "detail": "The delivery is being processed."}
     if job is not None and job.state == "FAILED":
+        from app.core.logging_config import sanitize_stored_error
+
         return {"state": "FAILED", "stage": job.stage,
-                "detail": job.error_reason or "Processing did not complete."}
+                "detail": sanitize_stored_error(job.error_reason) or "Processing did not complete."}
     if recon is None:
         return {"state": "NOT_RECONCILED", "stage": None,
                 "detail": ("The delivery exists in Area 1 but reconciliation "
@@ -209,7 +214,12 @@ def _stages(job, recon, integrity) -> Dict[str, Dict[str, Any]]:
     PENDING for not yet reached, and HELD or FAILED where the stage said so.
     Nothing here is inferred from elapsed time.
     """
-    detail = (job.stage_detail or {}) if job else {}
+    # Masked exactly as `RceDeliveryJob.to_dict()` masks it: this checklist copies
+    # per-stage values into a viewer-readable response (review finding 2026-11-14).
+    from app.core.logging_config import sanitize_stored_error_tree
+
+    detail = (sanitize_stored_error_tree(job.stage_detail or {}, strict_error_keys=True)
+              if job else {})
     order = ["PARSING", "QUALITY", "CURATION", "PROMOTION", "VERIFICATION",
              "RECONCILIATION"]
     current = job.stage if job else None
@@ -355,6 +365,11 @@ async def _dispositions(db, intake_id, received) -> Dict[str, Any]:
         logger.info("dashboard dispositions unavailable for %s: %s", intake_id,
                     type(exc).__name__)
         return {"equation": None, "note": "Disposition counts unavailable."}
+
+
+async def _disposition_processing(db, intake_id) -> Dict[str, Any]:
+    from app.tefca_registry.rce import disposition_followups
+    return await disposition_followups.summary(db, intake_id)
 
 
 async def _latest_snapshot(db, job) -> Optional[Dict[str, Any]]:
