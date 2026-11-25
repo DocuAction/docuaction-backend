@@ -38,7 +38,9 @@ pytestmark = pytest.mark.asyncio
 def _valid_npi(seed: int) -> str:
     from app.services.npi_validator import CMS_PREFIX, _luhn_total
 
-    base = f"{1_000_000_000 + (seed % 900_000_000):09d}"[-9:]
+    # Base must start with 1 or 2 (real NPPES numbering range; see
+    # app/services/npi_validator.py) to pass validate_npi() at all.
+    base = f"1{seed % 100_000_000:08d}"
     for d in range(10):
         candidate = base + str(d)
         if _luhn_total(CMS_PREFIX + candidate) % 10 == 0:
