@@ -124,6 +124,15 @@ def _pending_disposition_processing(d, failed=False):
     return d
 
 
+def _adjudication_open(d):
+    d["dataset"]["outcome"].update(
+        classification_may_continue=True, adjudication_open=412, approvable=False,
+        detail=("Processing completed and every population closes. Reconciliation has NOT passed: 412 "
+                "default-routed determination(s) await an analyst resolution. Classification may continue - "
+                "adjudication open (412). The delivery cannot be approved until they are adjudicated."))
+    return d
+
+
 SCENARIOS = {
     "clean_060": lambda: _fixture("060"),
     "long_unbreakable_token": lambda: _long_unbreakable_token(_fixture("061")),
@@ -140,11 +149,13 @@ SCENARIOS = {
     "worst_case": lambda: _long_timeline(_busy_cover(_many_rules(_fixture("061")))),
     "pending_disposition_processing": lambda: _pending_disposition_processing(_fixture("068")),
     "failed_disposition_processing": lambda: _pending_disposition_processing(_fixture("068"), failed=True),
+    # 2026-11-26: an outcome built today with only the adjudication check open (the stored datasets above carry
+    # no `classification_may_continue` key and keep the wording they were issued with)
+    "adjudication_open_061": lambda: _adjudication_open(_fixture("061")),
 }
 
 
-def _render(name: str):
-    d = copy.deepcopy(SCENARIOS[name]())
+def _render_context(d):
     ds, snap = d["dataset"], d["snapshot"]
     ctx = {k: v for k, v in ds.items() if k not in ("chart_list", "service_version", "review_cycle_id")}
     brand = current_branding()
@@ -152,7 +163,12 @@ def _render(name: str):
                                           "government_logo": brand.government_logo},
                pdf_author=brand.prepared_by, pdf_keywords="layout-test",
                document_status="Draft — awaiting PM review", reviewed_by=None, progress=None, annex=None)
-    html = render_html("delivery_processing.html", {**ctx, "snapshot": snap, **_marking_context(snap)})
+    return {**ctx, "snapshot": snap, **_marking_context(snap)}
+
+
+def _render(name: str):
+    d = copy.deepcopy(SCENARIOS[name]())
+    html = render_html("delivery_processing.html", _render_context(d))
     pdf = render_pdf(html, title=f"layout {name}")
     if OUT:
         Path(OUT).mkdir(parents=True, exist_ok=True)
@@ -354,3 +370,19 @@ def test_the_reconciliation_not_current_notice_is_printed_whole_in_the_pdf(pdfs,
 def test_a_report_without_pending_processing_prints_no_such_notice(pdfs):
     assert not [pi for pi, p in enumerate(pdfs["live_068_three_open_high"], start=1)
                 if "Reconciliation not current." in p["text"]]
+
+
+@needs_weasyprint
+def test_the_adjudication_open_outcome_is_disclosed_on_the_cover_and_a_stored_one_is_not_reworded(pdfs):
+    """2026-11-26: only an outcome that states classification_may_continue=True shows the adjudication detail; the
+    stored DA-ARC-2026-061 payload (no such key) keeps the wording it was issued with."""
+    def cover(name):
+        return re.sub(r"\s+", " ", pdfs[name][0]["text"])
+    opened = cover("adjudication_open_061")
+    # PDF text extraction interleaves the cover's two columns, so "(412)" can land after a neighbouring cell's
+    # text: each part of the disclosure is asserted on the cover separately.
+    assert "Reconciliation has NOT passed: 412 default-routed" in opened
+    assert "Classification may continue - adjudication open" in opened and "(412)" in opened
+    assert "The delivery cannot be approved until they are adjudicated." in opened
+    stored = cover("exceptions_061")
+    assert "remain undecided" in stored and "adjudication open" not in stored
