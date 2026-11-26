@@ -522,3 +522,47 @@ async def test_frame_consistency_is_not_hidden_by_an_already_reviewed_record(rol
     after = (await _page(db, delivery))["frame"]
     assert after["eligible_units"] == after["members_total"]            # the exclusion made the counts agree ...
     assert after["entities_with_several_records"] == 1 and after["frame_consistent"] is False    # ... not the truth
+
+
+# ═══ the pre-check and a member whose record is already reviewed (second delta review of #249) ══════════════════════
+
+async def test_the_precheck_says_a_member_will_be_linked_to_its_existing_review_not_that_it_has_no_reference(
+        rolled_back_db, monkeypatch):
+    """A member that is still in the frame through a record with no delivered reference, whose OTHER record already
+    has its own review classified on submitted values: the cycle will link the member to that review. The pre-check
+    says exactly that (reviewable, named, with the review id) instead of "no delivered reference"; and when that
+    review belongs to another sample it says why it will not be linked, with a kind of its own."""
+    db = rolled_back_db
+    delivery = await _Delivery().build(db, monkeypatch)
+    await _assess_on(db, delivery, "2026-11-09")
+    entity, low, high = await _two_blank_records_of_one_entity(db, delivery)
+    first = await ap.verify_and_classify(db, [low], intake_id=delivery.intake_id)
+    review_id = first["outcomes"][0]["review_id"]
+    other_row = (await db.execute(select(m.RceCuratedRecord).where(
+        m.RceCuratedRecord.source_intake_id == delivery.intake_id,
+        m.RceCuratedRecord.rce_org_oid == high))).scalars().one()
+    other_row.rce_org_oid = None                                        # the member's remaining record has no reference
+    await db.flush()
+
+    page = await _page(db, delivery)
+    assert page["counts"]["will_link_existing_submitted_values_review"] == 1
+    assert page["will_link_existing_submitted_values_review"] == [
+        {"entity_id": str(entity), "entity_ref": low, "existing_review": review_id}]
+    listed = {n["entity_id"]: n for n in page["not_reviewable"]}
+    assert str(entity) not in listed                                    # not "no delivered reference"
+
+    review = (await db.execute(select(reg.ReviewRecord).where(
+        reg.ReviewRecord.review_id == review_id))).scalars().one()
+    other_sample = reg.ReviewSample(id=uuid.uuid4(), sample_name="synthetic other sample", review_type="weekly",
+                                    population_size=1, sample_size=1, confidence_level=0.95,
+                                    margin_of_error=0.05, proportion=0.5)
+    db.add(other_sample)
+    await db.flush()
+    review.sample_id = other_sample.id
+    await db.flush()
+    page = await _page(db, delivery)
+    assert page["counts"]["will_link_existing_submitted_values_review"] == 0
+    entry = {n["entity_id"]: n for n in page["not_reviewable"]}[str(entity)]
+    assert entry["kind"] == rc.KIND_ALREADY_REVIEWED
+    assert entry["reason"] == rc.NOT_REVIEWABLE_ALREADY_REVIEWED.format(review=review_id, why=rc.WHY_OTHER_SAMPLE)
+    assert "no delivered reference" not in entry["reason"]

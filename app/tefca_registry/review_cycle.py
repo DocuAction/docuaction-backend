@@ -186,6 +186,17 @@ NOT_REVIEWABLE_CHANGED = ("the delivered reference resolved to the sample member
 #: Only `identity` members can justify the stop signal.
 KIND_IDENTITY = "identity"
 KIND_TRANSIENT = "transient"
+#: The member's delivered record already has a review classified on its submitted values, and that review could
+#: not be linked to the member (it reviews another entity, or belongs to another sample or member). Not an
+#: identity fact about the record and not something another call will change: a person has to look. It is
+#: reported with the review id and does NOT feed the stop signal, which is reserved for settled identity reasons.
+KIND_ALREADY_REVIEWED = "already_reviewed"
+NOT_REVIEWABLE_ALREADY_REVIEWED = (
+    "this member's delivered record already has a review classified on its submitted values ({review}); that "
+    "review is not linked to this member because {why}. No new review was made and no source was asked")
+WHY_OTHER_ENTITY = "it is a review of a different entity"
+WHY_OTHER_SAMPLE = "it belongs to another sample"
+WHY_OTHER_MEMBER = "it is already linked to a sample member"
 
 
 async def _identity_precheck(db, intake_uuid, member_entity_id, ref, *, assessment_date=None) -> Optional[str]:
@@ -343,6 +354,8 @@ async def preview_identity_precheck(db, intake_id, *, after_entity_id=None,
     held_in_page = held_not_reviewable = held_reviewable = 0
     on_submitted_values: List[Dict[str, Any]] = []
     on_submitted_values_total = 0
+    will_link: List[Dict[str, Any]] = []
+    will_link_total = 0
 
     def _count(entity_id, ref, reason, kind, outcome):
         nonlocal listed_total, held_not_reviewable
@@ -357,11 +370,30 @@ async def preview_identity_precheck(db, intake_id, *, after_entity_id=None,
 
     for start in range(0, len(page_ids), _REF_CHUNK):
         chunk = page_ids[start:start + _REF_CHUNK]
-        refs = await _refs_for(db, intake_uuid, chunk)
+        refs, existing_reviews = await _refs_with_existing_reviews(
+            db, intake_uuid, chunk, assessment_date=assessment.value)
         for entity_id in chunk:
             if entity_id in held_members:
                 held_in_page += 1
             ref = refs.get(entity_id)
+            if not ref and existing_reviews.get(entity_id):
+                # Already reviewed on its submitted values: the cycle will LINK the member to that review (no new
+                # review, no source call), or report why it cannot - never "no delivered reference".
+                own, refused = await _own_existing_review(
+                    db, entity_id, existing_reviews[entity_id], sample_id=None)
+                if own is not None:
+                    counts[OUTCOME_REVIEWABLE] += 1
+                    will_link_total += 1
+                    if entity_id in held_members:
+                        held_reviewable += 1
+                    if len(will_link) < PRECHECK_LIST_CAP:
+                        will_link.append({"entity_id": str(entity_id), "entity_ref": own["rce_org_oid"],
+                                          "existing_review": own["review_id"]})
+                else:
+                    _count(entity_id, existing_reviews[entity_id][0]["rce_org_oid"],
+                           NOT_REVIEWABLE_ALREADY_REVIEWED.format(review=refused[0], why=refused[1]),
+                           KIND_ALREADY_REVIEWED, OUTCOME_NOT_REVIEWABLE)
+                continue
             if not ref:
                 _count(entity_id, None, NOT_REVIEWABLE_NO_REFERENCE, KIND_IDENTITY, OUTCOME_NOT_REVIEWABLE)
                 continue
@@ -448,9 +480,14 @@ async def preview_identity_precheck(db, intake_id, *, after_entity_id=None,
             # They WILL BE CLASSIFIED ON THEIR SUBMITTED VALUES (the registry NPI withheld, NPI-keyed sources not
             # asked). Always 0 when blank_npi_rule.applies_to_this_delivery is false.
             "classified_on_submitted_values": on_submitted_values_total,
+            # Of `reviewable`: members whose record ALREADY has its own review classified on submitted values and
+            # is not linked to any sample. The cycle will link the member to that review - no new review, no
+            # source call.
+            "will_link_existing_submitted_values_review": will_link_total,
         },
         # The members counted under counts.classified_on_submitted_values (bounded like the list below).
         "classified_on_submitted_values": on_submitted_values,
+        "will_link_existing_submitted_values_review": will_link,
         "classified_on_submitted_values_truncated": on_submitted_values_total > len(on_submitted_values),
         "not_reviewable": listed,
         "not_reviewable_listed": len(listed),
@@ -714,6 +751,8 @@ async def _create_review_cycle(
         limit_reached = False
         last_examined = None
         refs: Dict[Any, str] = {}
+        existing_reviews: Dict[Any, List[Dict[str, Any]]] = {}
+        linked_existing: List[str] = []    # reviews that already existed and were linked to their own member
         refs_loaded_to = position
 
         def _set_aside(entity_id, ref, reason, kind):
@@ -728,20 +767,52 @@ async def _create_review_cycle(
                 if len(not_reviewable) >= MAX_NOT_REVIEWABLE_PER_CALL:
                     limit_reached = True
                     break
+                if cycle_assessment_date is None:
+                    from app.tefca_registry.rce.assessment_context import resolve_assessment_date
+                    cycle_assessment_date = (await resolve_assessment_date(db, intake_uuid)).value
                 if position >= refs_loaded_to:
                     chunk = members[position:position + _REF_CHUNK]
-                    refs.update(await _refs_for(db, intake_id, [e for _m, _i, e in chunk]))
+                    chunk_refs, chunk_existing = await _refs_with_existing_reviews(
+                        db, intake_id, [e for _m, _i, e in chunk], assessment_date=cycle_assessment_date)
+                    refs.update(chunk_refs)
+                    existing_reviews.update(chunk_existing)
                     refs_loaded_to = position + len(chunk)
                 member, member_id, entity_id = members[position]
                 position += 1
                 last_examined = member_id
                 ref = refs.get(entity_id)
+                if not ref and existing_reviews.get(entity_id):
+                    # THE MEMBER'S RECORD IS ALREADY REVIEWED (classified on its submitted values) but the member
+                    # was never linked: the writer commits its reviews before this function commits the links, so
+                    # a crash or timeout between the two - or a review made outside the cycle - leaves exactly
+                    # this. Its own existing review is linked: no new review, no source asked. Anything else is
+                    # reported with the review id; it is never reported as "no delivered reference".
+                    own, refused = await _own_existing_review(
+                        db, entity_id, existing_reviews[entity_id], sample_id=sample_id)
+                    if own is None:
+                        _set_aside(entity_id, existing_reviews[entity_id][0]["rce_org_oid"],
+                                   NOT_REVIEWABLE_ALREADY_REVIEWED.format(review=refused[0], why=refused[1]),
+                                   KIND_ALREADY_REVIEWED)
+                        not_reviewable[-1]["existing_review"] = refused[0]
+                        continue
+                    record = (await db.execute(select(reg.ReviewRecord).where(
+                        reg.ReviewRecord.review_id == own["review_id"]))).scalars().first()
+                    record.sample_id = sample_id
+                    record.verification_results = {
+                        **(record.verification_results or {}),
+                        "source_intake_id": str(intake_id),
+                        "queue_source": QUEUE_SOURCE,
+                        "sample_id": str(sample_id),
+                    }
+                    member.review_id = own["review_id"]
+                    member.review_status = "in_review"
+                    linked += 1
+                    linked_existing.append(own["review_id"])
+                    await db.commit()
+                    continue
                 if not ref:
                     _set_aside(entity_id, None, NOT_REVIEWABLE_NO_REFERENCE, KIND_IDENTITY)
                     continue
-                if cycle_assessment_date is None:
-                    from app.tefca_registry.rce.assessment_context import resolve_assessment_date
-                    cycle_assessment_date = (await resolve_assessment_date(db, intake_uuid)).value
                 reason = await _identity_precheck(db, intake_uuid, entity_id, ref,
                                                   assessment_date=cycle_assessment_date)
                 if reason:
@@ -823,7 +894,7 @@ async def _create_review_cycle(
         verified["evidence_snapshot_only_submitted_values"] = list(
             verified.get("evidence_snapshot_only_submitted_values") or [])[:CYCLE_LIST_CAP]
         walk_exhausted = position >= len(members)
-        if verified.get("requested") or not_reviewable:
+        if verified.get("requested") or not_reviewable or linked_existing:
             reg_audit.record(
                 db, "review_cycle_members_verified", None, actor_id=actor_id,
                 actor_email=actor_email, ip_address=ip_address,
@@ -847,7 +918,10 @@ async def _create_review_cycle(
                           # Records that submitted no NPI and were classified on their submitted values (the
                           # registry NPI withheld; evidence in the review snapshot only).
                           "classified_on_submitted_values": verified["classified_on_submitted_values_count"],
-                          "classified_on_submitted_values_refs": verified["classified_on_submitted_values"]})
+                          "classified_on_submitted_values_refs": verified["classified_on_submitted_values"],
+                          # Members linked to their OWN review that already existed (no new review, no source).
+                          "linked_existing_submitted_values_review": len(linked_existing),
+                          "linked_existing_submitted_values_review_ids": linked_existing[:CYCLE_LIST_CAP]})
             await db.commit()
         if not_reviewable:
             logger.warning(
@@ -894,6 +968,11 @@ async def _create_review_cycle(
         "reconciliation_passed": True,
         "members": plan.get("membership_count"),
         "linked_this_call": linked,
+        # Of `linked_this_call`: members linked to their OWN review that already existed - the record had been
+        # classified on its submitted values and the link was never written (see the walk). No new review was
+        # made and no source was asked for them.
+        "linked_existing_submitted_values_review": len(linked_existing),
+        "linked_existing_submitted_values_review_ids": linked_existing[:CYCLE_LIST_CAP],
         # Members with no linked review. Unchanged meaning: it includes the
         # members this call could not review for identity reasons.
         "remaining": remaining,
@@ -907,7 +986,9 @@ async def _create_review_cycle(
         "not_reviewable_for_identity_count": len(not_reviewable),
         # Split by `kind` (see KIND_IDENTITY / KIND_TRANSIENT): only the first is a settled identity fact.
         "not_reviewable_identity_count": identity_count,
-        "not_reviewable_transient_count": len(not_reviewable) - identity_count,
+        "not_reviewable_transient_count": sum(1 for n in not_reviewable if n["kind"] == KIND_TRANSIENT),
+        "not_reviewable_already_reviewed_count": sum(
+            1 for n in not_reviewable if n["kind"] == KIND_ALREADY_REVIEWED),
         # Whether this call's walk began at the first unlinked member (no cursor, or a cursor it did not find).
         "walk_started_at_front": started_at_front,
         # Members this call did not get to (its `batch` was used up, or the
@@ -974,14 +1055,25 @@ async def read_review_cycle(db, intake_id) -> Dict[str, Any]:
     return {"intake_id": str(intake_id), "plans": plans, "count": len(plans)}
 
 
-async def _refs_for(db, intake_id, entity_ids: List[Any]) -> Dict[Any, str]:
-    """entity_id -> rce_org_oid, the reference `resolve_entity` matches on.
+async def _refs_for(db, intake_id, entity_ids: List[Any], *, assessment_date=None) -> Dict[Any, str]:
+    """entity_id -> rce_org_oid, the reference `resolve_entity` matches on (see `_refs_with_existing_reviews`)."""
+    return (await _refs_with_existing_reviews(db, intake_id, entity_ids, assessment_date=assessment_date))[0]
 
-    Read from THIS delivery's curated records so the reference is the one the
-    delivery actually carried for that organisation.
+
+async def _refs_with_existing_reviews(db, intake_id, entity_ids: List[Any], *, assessment_date=None):
+    """(entity_id -> rce_org_oid, entity_id -> the member's records that were SKIPPED and why).
+
+    The reference is read from THIS delivery's curated records so it is the one the delivery actually carried for
+    that organisation. A record that already has its own review classified on submitted values is not returned as
+    a reference - and it is not silently dropped either: the second mapping lists, per entity, each such record
+    with the review that covers it (review id, the entity that review is about, its sample), so the caller can
+    link the member to its own existing review instead of reporting "no delivered reference".
+
+    `assessment_date` is the delivery's own; resolved here when not given. Before
+    `arc_pipeline.BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE` no such review can exist and nothing is read for it.
     """
     if not entity_ids:
-        return {}
+        return {}, {}
     rows = (await db.execute(
         select(m.RceCuratedRecord.canonical_entity_id,
                m.RceCuratedRecord.rce_org_oid,
@@ -998,13 +1090,56 @@ async def _refs_for(db, intake_id, entity_ids: List[Any]) -> Dict[Any, str]:
                   m.RceCuratedRecord.rce_org_oid,
                   m.RceCuratedRecord.source_record_id))).all()
     # A record that already has its OWN review classified on submitted values is never handed to the writer
-    # again through a sibling record's membership (nothing is asked for a delivery before the effective date).
-    from app.tefca_registry.qhin_sampling import source_records_reviewed_on_submitted_values
-    already_reviewed = (await source_records_reviewed_on_submitted_values(db, intake_id, entity_ids=entity_ids)
-                        if rows else set())
+    # again through a sibling record's membership (nothing is read for a delivery before the effective date).
+    from app.tefca_registry.rce import arc_pipeline as ap
+    if assessment_date is None and rows:
+        from app.tefca_registry.rce.assessment_context import resolve_assessment_date
+        assessment_date = (await resolve_assessment_date(db, intake_id)).value
+    reviews_by_record: Dict[Any, Dict[str, Any]] = {}
+    if rows and assessment_date >= ap.BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE:
+        record_ids = [source_record_id for _e, _r, source_record_id in rows]
+        for review_id, review_entity, source_record_id, review_sample in (await db.execute(
+                select(reg.ReviewRecord.review_id, reg.ReviewRecord.entity_id,
+                       reg.ReviewRecord.source_record_id, reg.ReviewRecord.sample_id)
+                .where(reg.ReviewRecord.source_record_id.in_(record_ids),
+                       reg.ReviewRecord.verification_results.has_key("submitted_values_basis"))   # noqa: W601
+                .order_by(reg.ReviewRecord.created_at, reg.ReviewRecord.review_id))).all():
+            reviews_by_record.setdefault(source_record_id, {
+                "review_id": review_id, "review_entity_id": review_entity, "sample_id": review_sample})
     out: Dict[Any, str] = {}
+    existing: Dict[Any, List[Dict[str, Any]]] = {}
     for entity_id, ref, source_record_id in rows:
-        if source_record_id in already_reviewed:
+        review = reviews_by_record.get(source_record_id)
+        if review is not None:
+            existing.setdefault(entity_id, []).append(
+                {**review, "source_record_id": source_record_id, "rce_org_oid": ref})
             continue
         out.setdefault(entity_id, ref)
-    return out
+    return out, existing
+
+
+async def _own_existing_review(db, entity_id, candidates: List[Dict[str, Any]], *, sample_id):
+    """(the member's OWN existing submitted-values review, None) or (None, (review id, why not)).
+
+    Linkable only when ALL hold: the review is about the member's own entity; it covers one of the member's own
+    delivered records in this delivery (`candidates` are exactly those - read through this delivery's curated rows
+    for this entity) and carries `submitted_values_basis`; and it is not already someone's review - not in another
+    sample, and no sample member is linked to it. `sample_id` None (the read-only pre-check, before any sample
+    exists) accepts only a review that is in no sample."""
+    refused = None
+    for candidate in candidates:
+        review_id = candidate["review_id"]
+        if str(candidate["review_entity_id"]) != str(entity_id):
+            refused = refused or (review_id, WHY_OTHER_ENTITY)
+            continue
+        if candidate["sample_id"] is not None and (
+                sample_id is None or str(candidate["sample_id"]) != str(sample_id)):
+            refused = refused or (review_id, WHY_OTHER_SAMPLE)
+            continue
+        taken = (await db.execute(select(reg.SampleEntity.id).where(
+            reg.SampleEntity.review_id == review_id).limit(1))).first()
+        if taken is not None:
+            refused = refused or (review_id, WHY_OTHER_MEMBER)
+            continue
+        return candidate, None
+    return None, refused

@@ -1262,3 +1262,150 @@ async def test_the_frame_pays_nothing_for_a_delivery_assessed_before_the_effecti
         assert len(seen) == 1                                           # from the effective date: one read
     finally:
         event.remove(sync_conn, "before_cursor_execute", _capture)
+
+
+# ═══ a member whose record is already reviewed but was never linked (second delta review of #249) ═══════════════════
+#
+# The writer commits its reviews before the cycle commits the links. A crash or timeout in between leaves a member
+# UNLINKED with its own review classified on submitted values; since the frame and `_refs_for` skip such a record,
+# the member used to get no reference, was reported as "no delivered reference" (false) and the cycle could never
+# complete. The cycle now links the member to ITS OWN existing review. Auto-linking is the coordinator's
+# engineering choice, for the owner to confirm.
+
+async def _crash_between_reviews_and_links(w, monkeypatch):
+    """Run the first cycle call so that the reviews are committed and the linking never happens."""
+    real_verify = ap.verify_and_classify
+
+    async def _verify_then_die(db_, refs, **kw):
+        await real_verify(db_, refs, **kw)                              # the reviews ARE committed
+        raise RuntimeError("synthetic crash between the review commit and the link commit")
+    monkeypatch.setattr(ap, "verify_and_classify", _verify_then_die)
+    intake_b, entities = w.intake_b, list(w.entities)
+    record_ids = [w.cur_b[ref].source_record_id for ref in w.refs]       # plain values: the failure rolls back
+    with pytest.raises(RuntimeError, match="synthetic crash"):
+        await rc._create_review_cycle(w.db, intake_b, user=_PM, full_population=True)
+    monkeypatch.setattr(ap, "verify_and_classify", real_verify)
+    return intake_b, entities, record_ids
+
+
+async def _review_ids(db, record_ids):
+    return sorted((await db.execute(select(reg.ReviewRecord.review_id).where(
+        reg.ReviewRecord.source_record_id.in_(record_ids)))).scalars().all())
+
+
+async def test_after_a_crash_the_next_call_links_each_member_to_its_own_existing_review(world, monkeypatch):
+    w = world
+    await _give_qhin(w.db, w.entities)
+    _real_cycle(monkeypatch, w.db)
+    intake_b, entities, record_ids = await _crash_between_reviews_and_links(w, monkeypatch)
+    existing = await _review_ids(w.db, record_ids)
+    assert len(existing) == 4                                           # reviewed ...
+    members = (await w.db.execute(select(reg.SampleEntity.review_id).where(
+        reg.SampleEntity.entity_id.in_(entities)))).scalars().all()
+    assert members == [None] * 4                                        # ... and not one member linked
+    w.sources.npi_calls.clear()
+    w.sources.name_calls.clear()
+
+    result = await rc._create_review_cycle(w.db, intake_b, user=_PM, full_population=True)
+
+    assert result["linked_this_call"] == 4 and result["remaining"] == 0 and result["complete"] is True
+    assert result["linked_existing_submitted_values_review"] == 4
+    assert sorted(result["linked_existing_submitted_values_review_ids"]) == existing
+    assert result["not_reviewable_for_identity"] == [] and result["verification"]["requested"] == 0
+    assert await _review_ids(w.db, record_ids) == existing              # NO second review
+    assert w.sources.npi_calls == [] and w.sources.name_calls == []     # NO source asked
+    rows = (await w.db.execute(select(reg.SampleEntity.entity_id, reg.SampleEntity.review_id,
+                                      reg.SampleEntity.review_status)
+                               .where(reg.SampleEntity.entity_id.in_(entities)))).all()
+    assert sorted(r[1] for r in rows) == existing and {r[2] for r in rows} == {"in_review"}
+    for entity_id, review_id, _status in rows:                          # each member got ITS OWN review
+        review = await _review_of(w.db, review_id)
+        assert review.entity_id == entity_id and review.source_record_id in record_ids
+        assert review.verification_results["queue_source"] == rc.QUEUE_SOURCE     # and it is in the work queue
+        assert review.verification_results["submitted_values_basis"]
+    audit = (await w.db.execute(select(reg.TefcaRegAuditLog).where(
+        reg.TefcaRegAuditLog.action == "review_cycle_members_verified"))).scalars().all()
+    assert any((a.metadata_ or {}).get("linked_existing_submitted_values_review") == 4
+               and sorted(a.metadata_["linked_existing_submitted_values_review_ids"]) == existing for a in audit)
+    again = await rc._create_review_cycle(w.db, intake_b, user=_PM, full_population=True)
+    assert again["linked_this_call"] == 0 and again["complete"] is True
+
+
+@pytest.mark.parametrize("case", ["another_entity", "another_sample", "another_member"])
+async def test_an_existing_review_that_is_not_the_members_own_is_never_linked(world, monkeypatch, case):
+    """The existing review is linked only when it is the member's own and nobody else's. A review of a different
+    entity, one that belongs to another sample, or one another sample member is already linked to, is NOT linked:
+    the member is reported with the review id and a reason of its own (kind `already_reviewed`), never as "no
+    delivered reference"; the stop signal stays false (this is not a settled identity fact - a person has to look);
+    the sample is not complete; no new review is made and no source is asked."""
+    w = world
+    await _give_qhin(w.db, w.entities)
+    _real_cycle(monkeypatch, w.db)
+    intake_b, entities, record_ids = await _crash_between_reviews_and_links(w, monkeypatch)
+    existing = await _review_ids(w.db, record_ids)
+    target = (await w.db.execute(select(reg.ReviewRecord).where(
+        reg.ReviewRecord.source_record_id == record_ids[0]))).scalars().one()
+    target_id, target_entity = target.review_id, target.entity_id
+    if case == "another_entity":
+        target.entity_id = w.twins[0]
+        why = rc.WHY_OTHER_ENTITY
+    elif case == "another_sample":
+        other_sample = reg.ReviewSample(id=uuid.uuid4(), sample_name="synthetic other sample",
+                                        review_type="weekly", population_size=1, sample_size=1,
+                                        confidence_level=0.95, margin_of_error=0.05, proportion=0.5)
+        w.db.add(other_sample)
+        await w.db.flush()
+        target.sample_id = other_sample.id
+        why = rc.WHY_OTHER_SAMPLE
+    else:
+        other_sample = reg.ReviewSample(id=uuid.uuid4(), sample_name="synthetic other sample",
+                                        review_type="weekly", population_size=1, sample_size=1,
+                                        confidence_level=0.95, margin_of_error=0.05, proportion=0.5)
+        w.db.add(other_sample)
+        await w.db.flush()
+        w.db.add(reg.SampleEntity(id=uuid.uuid4(), sample_id=other_sample.id, entity_id=w.twins[0],
+                                  review_id=target_id, review_status="in_review", stratum="s"))
+        why = rc.WHY_OTHER_MEMBER
+    await w.db.flush()
+    w.sources.npi_calls.clear()
+    w.sources.name_calls.clear()
+
+    result = await rc._create_review_cycle(w.db, intake_b, user=_PM, full_population=True)
+
+    assert result["linked_this_call"] == 3 and result["linked_existing_submitted_values_review"] == 3
+    assert target_id not in result["linked_existing_submitted_values_review_ids"]
+    assert result["remaining"] == 1 and result["complete"] is False
+    assert result["no_further_reviews_possible"] is False               # not a settled identity reason
+    assert result["not_reviewable_already_reviewed_count"] == 1 and result["not_reviewable_identity_count"] == 0
+    (listed,) = result["not_reviewable_for_identity"]
+    assert listed["kind"] == rc.KIND_ALREADY_REVIEWED and listed["existing_review"] == target_id
+    assert listed["entity_id"] == str(target_entity)
+    assert listed["reason"] == rc.NOT_REVIEWABLE_ALREADY_REVIEWED.format(review=target_id, why=why)
+    assert "no delivered reference" not in listed["reason"]
+    assert await _review_ids(w.db, record_ids) == existing              # no new review for it either
+    assert w.sources.npi_calls == [] and w.sources.name_calls == []
+    member = (await w.db.execute(select(reg.SampleEntity).where(
+        reg.SampleEntity.entity_id == target_entity,
+        reg.SampleEntity.sample_id == uuid.UUID(result["plan"]["sample_id"])))).scalars().one()
+    assert member.review_id is None and member.review_status == "pending"
+
+
+@pytest.mark.parametrize("full_population", [True, False])
+async def test_both_plan_kinds_freeze_the_reviewed_on_submitted_values_exclusion(world, monkeypatch,
+                                                                                 full_population):
+    """The enumerated plan and the SAMPLED plan both record the count and the units in `strata_config`."""
+    from app.tefca_registry import qhin_sampling as qs
+    w = world
+    await _give_qhin(w.db, w.entities)
+    await ap.verify_and_classify(w.db, w.refs[:2], intake_id=w.intake_b)
+    plan = await qs.finalize_plan(w.db, w.intake_b, full_population=full_population)
+    assert plan["excluded_reviewed_on_submitted_values"] == 2
+    sample = await w.db.get(reg.ReviewSample, uuid.UUID(plan["sample_id"]))
+    config = sample.strata_config
+    assert config["selection_algorithm"] == ("FULL_POPULATION_ENUMERATION" if full_population
+                                             else qs.SELECTION_ALGORITHM)
+    assert config["excluded_reviewed_on_submitted_values"] == 2
+    assert sorted(u["rce_org_oid"] for u in config["excluded_reviewed_on_submitted_values_units"]) == sorted(w.refs[:2])
+    members = (await w.db.execute(select(reg.SampleEntity.entity_id).where(
+        reg.SampleEntity.sample_id == sample.id))).scalars().all()
+    assert set(members) <= set(w.entities[2:]) and members             # drawn only from the records not yet reviewed
