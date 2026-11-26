@@ -147,7 +147,7 @@ async def _seed(monkeypatch, n: int, *, sam_factory=None):
 
 
 async def _plant_latest_record(entity_id, *, rule_version: int, classifier_input: dict,
-                               bucket: str, rule: str):
+                               bucket: str, rule: str, extra_results: dict = None):
     """A hand-built, LATER official review record for an entity, so the
     comparison's input is deterministic (the pipeline's own record stays too,
     untouched). created_at is left to the server default, exactly as the
@@ -163,7 +163,8 @@ async def _plant_latest_record(entity_id, *, rule_version: int, classifier_input
             id=uuid.uuid4(), review_id=rid, entity_id=entity_id,
             verification_results={"classifier_input": classifier_input,
                                   "generation_timestamp": datetime.now(timezone.utc).isoformat(),
-                                  "resolution_source": "pytest-shadow-planted"},
+                                  "resolution_source": "pytest-shadow-planted",
+                                  **(extra_results or {})},
             classification_bucket=bucket, classification_rule=rule,
             classification_rule_version=rule_version,
             classification_rationale="pytest-shadow planted official record"))
@@ -324,8 +325,12 @@ async def test_publication_refused_outside_local_mode_then_idempotent_in_it(db_r
     from app.tefca_registry.rce import shadow_reassessment as shadow
 
     intake_id, entity_ids, _ = await _seed(monkeypatch, n=2)
+    # The predecessor carries a review cycle's origin stamp (2026-11-26); the successor must not inherit it.
+    from app.tefca_registry.rce.arc_pipeline import CREATED_FOR_SAMPLE_KEY
+    creating_sample = str(uuid.uuid4())
     planted = await _plant_latest_record(entity_ids[0], rule_version=2, classifier_input=SIGNAL_B1,
-                                         bucket="B1", rule="RULE-001")
+                                         bucket="B1", rule="RULE-001",
+                                         extra_results={CREATED_FOR_SAMPLE_KEY: creating_sample})
     # An EIN/FEIN-touching input on the second entity: flagged, never auto-superseded.
     await _plant_latest_record(entity_ids[1], rule_version=2, classifier_input=FEIN_SIGNAL,
                                bucket="B1", rule="RULE-001")
@@ -389,6 +394,8 @@ async def test_publication_refused_outside_local_mode_then_idempotent_in_it(db_r
     assert succ.classification_rule_version == 0
     assert succ.verification_results["shadow_successor"]["predecessor_review_id"] == planted
     assert succ.verification_results["shadow_successor"]["package_hash"] == dto["package_hash"]
+    assert CREATED_FOR_SAMPLE_KEY not in succ.verification_results      # a publication made it, not that cycle
+    assert pred.verification_results[CREATED_FOR_SAMPLE_KEY] == creating_sample      # the predecessor keeps it
     assert succ.classification_rationale.startswith(f"[SHADOW-SUCCESSOR of {planted}")
     assert pred.classification_bucket == "B1" and pred.classification_rule_version == 2
     assert pred.classification_rationale == "pytest-shadow planted official record"

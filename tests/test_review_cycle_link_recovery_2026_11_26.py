@@ -263,3 +263,26 @@ async def test_the_delivery_lock_does_not_depend_on_how_the_id_is_spelled(world,
     assert keys[0] == (f"review_cycle:{intake}",)
     with pytest.raises(rc.CycleRefused, match="No delivery"):
         await rc._create_review_cycle(w.db, "not-a-delivery-id", user=_PM)
+
+
+async def test_no_link_is_made_in_a_configuration_the_writer_would_refuse_to_run_in(world, monkeypatch):
+    """The writer refuses to classify when the exclusion producer flag and the rules in force disagree. Recovery
+    makes the same check: with the flag on and no rule consuming it, no member is linked, each is reported with
+    that reason, nothing is created and no source is asked."""
+    w = world
+    c = await _crashed(w, monkeypatch)
+    monkeypatch.setenv(ap.PROPOSED_EXCLUSION_STATES_ENV, "1")
+    result = await rc._create_review_cycle(w.db, c.intake, user=_PM, full_population=True)
+    assert result["linked_this_call"] == 0 and result["remaining"] == 4 and result["complete"] is False
+    assert result["needs_person"] is True and result["needs_person_count"] == 4
+    prefix = rc.WHY_CONFIGURATION.format(why="")
+    assert len(result["not_reviewable_for_identity"]) == 4
+    for listed in result["not_reviewable_for_identity"]:
+        assert listed["kind"] == rc.KIND_ALREADY_REVIEWED and listed["existing_review"] in c.existing
+        assert listed["not_linked_because"].startswith(prefix) and len(listed["not_linked_because"]) > len(prefix)
+    assert await _review_ids(w.db, c.record_ids) == c.existing
+    assert w.sources.npi_calls == [] and w.sources.name_calls == []
+
+    monkeypatch.delenv(ap.PROPOSED_EXCLUSION_STATES_ENV)            # consistent again: the same call links all four
+    again = await rc._create_review_cycle(w.db, c.intake, user=_PM, full_population=True)
+    assert again["linked_this_call"] == 4 and again["complete"] is True
