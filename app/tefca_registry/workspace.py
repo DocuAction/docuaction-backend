@@ -122,6 +122,9 @@ def _section_verification_status(record, entity) -> Dict[str, Any]:
         "classification_bucket": record.classification_bucket,
         "completeness": vcomp.describe(stored, vcomp.completeness(vr)),
         "prior_risk_not_cleared": vr.get("prior_risk_not_cleared"),
+        # Present when the record submitted no NPI and was classified on its own submitted values: what was and
+        # was not checked, and that the entity status shown above was NOT written by this review.
+        "submitted_values_basis": vr.get("submitted_values_basis"),
         "verification_claim": vr.get("verification_claim"),
         "source_policy": {
             "recorded": bool(policy),

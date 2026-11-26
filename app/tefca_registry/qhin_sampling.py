@@ -78,6 +78,22 @@ class SamplingRefused(RuntimeError):
 #: not in the frame of a NEW draw until the finding is resolved. Historical
 #: samples are never touched: `finalize_plan` never redraws an existing plan.
 EXCLUSION_REVIEW_REQUIRED = "REVIEW_REQUIRED"
+#: A delivered record that already has ITS OWN anchored review, classified on its submitted values
+#: (`arc_pipeline.SUBMITTED_VALUES_BASIS`), is not drawn again for the same delivery (2026-11-25).
+#:
+#: Before, a reviewed record was normally kept out of a second draw by the entity status the review wrote
+#: (`in_review`, the exclusion above). For a record classified on its submitted values that status is deliberately
+#: NOT written - the shared entity is left as it is - so nothing would stop a second plan for the same delivery
+#: (another review type, margin, or full-population) from selecting the same record and minting a second review.
+#:
+#: THE KEY IS THE DELIVERED RECORD, not the entity: a review whose `source_record_id` is this curated row's own
+#: source record and whose results carry `submitted_values_basis`. A source record belongs to one delivery and one
+#: line of it, so this cannot exclude another record of the same entity, the same entity's record in a later
+#: delivery, or any record reviewed the ordinary way.
+EXCLUSION_REVIEWED_ON_SUBMITTED_VALUES = "REVIEWED_ON_SUBMITTED_VALUES"
+REVIEWED_ON_SUBMITTED_VALUES_REASON = (
+    "this delivered record already has its own review, classified on its submitted values; it is not drawn again "
+    "for this delivery. The review is the work item; the shared entity's status was not changed.")
 REVIEW_REQUIRED_REASON = ("unresolved blocking post-promotion finding "
                           "(verification_status=in_review); excluded from new "
                           "sample draws until resolved through the analyst/QA "
@@ -148,7 +164,8 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
     rows = (await db.execute(
         select(m.RceCuratedRecord.canonical_entity_id,
                m.RceCuratedRecord.rce_org_oid,
-               m.RceCuratedRecord.record_status)
+               m.RceCuratedRecord.record_status,
+               m.RceCuratedRecord.source_record_id)
         .where(m.RceCuratedRecord.source_intake_id == intake_id))).all()
 
     if not rows:
@@ -220,9 +237,13 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
                     reg.TefcaRegEntity.id.in_(promoted),
                     reg.TefcaRegEntity.verification_status == REVIEW_REQUIRED_STATUS))).all()}
 
+    # Delivered records of THIS delivery that already carry their own review classified on submitted values (see
+    # EXCLUSION_REVIEWED_ON_SUBMITTED_VALUES). Same subquery discipline as above; read-only.
+    reviewed_on_submitted_values = await source_records_reviewed_on_submitted_values(db, intake_id)
+
     eligible: List[Dict[str, Any]] = []
     unresolved: List[Dict[str, Any]] = []
-    for entity_id, org_oid, record_status in rows:
+    for entity_id, org_oid, record_status, source_record_id in rows:
         parents = by_child.get(entity_id, [])
         unit = {"entity_id": entity_id, "rce_org_oid": org_oid,
                 "record_status": record_status}
@@ -249,8 +270,51 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
                                           if blocking_only
                                           else REVIEW_REQUIRED_REASON)})
             continue
+        if source_record_id in reviewed_on_submitted_values:
+            unresolved.append({**unit, "qhin": str(parents[0]),
+                               "exclusion": EXCLUSION_REVIEWED_ON_SUBMITTED_VALUES,
+                               "reason": REVIEWED_ON_SUBMITTED_VALUES_REASON})
+            continue
         eligible.append({**unit, "qhin": str(parents[0])})
     return eligible, unresolved
+
+
+async def source_records_reviewed_on_submitted_values(db, intake_id, *, entity_ids=None) -> set:
+    """The delivered records (source record ids) of one delivery that already have THEIR OWN review classified on
+    submitted values. Read-only.
+
+    NOT ASKED AT ALL for a delivery assessed before `arc_pipeline.BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE`: such a
+    review cannot exist for it (the rule does not apply), so earlier deliveries' previews, pre-check pages,
+    rollups and cycles pay nothing for this. `entity_ids` narrows the read to those entities' records."""
+    from app.tefca_registry.rce import arc_pipeline as ap
+    from app.tefca_registry.rce.assessment_context import resolve_assessment_date
+
+    assessment = await resolve_assessment_date(db, intake_id)
+    if assessment.value < ap.BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE:
+        return set()
+    records = (select(m.RceCuratedRecord.source_record_id)
+               .where(m.RceCuratedRecord.source_intake_id == intake_id))
+    if entity_ids is not None:
+        records = records.where(m.RceCuratedRecord.canonical_entity_id.in_(list(entity_ids)))
+    return {row[0] for row in (await db.execute(
+        select(reg.ReviewRecord.source_record_id).where(
+            reg.ReviewRecord.source_record_id.in_(records),
+            reg.ReviewRecord.verification_results.has_key("submitted_values_basis")))).all()}  # noqa: W601
+
+
+def reviewed_on_submitted_values_exclusions(unresolved: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The units `resolve_qhin_strata` kept out of the frame because the delivered record already has its own
+    review classified on submitted values."""
+    return [u for u in unresolved if u.get("exclusion") == EXCLUSION_REVIEWED_ON_SUBMITTED_VALUES]
+
+
+def _reviewed_exclusion_facts(unresolved: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """What a plan, its audit rows and a preview state about that exclusion: the count, and which records
+    (entity id + delivered reference; no delivered value)."""
+    excluded = reviewed_on_submitted_values_exclusions(unresolved)
+    return {"excluded_reviewed_on_submitted_values": len(excluded),
+            "excluded_reviewed_on_submitted_values_units": [
+                {"entity_id": str(u["entity_id"]), "rce_org_oid": u.get("rce_org_oid")} for u in excluded]}
 
 
 def review_required_exclusions(unresolved: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -299,6 +363,7 @@ async def preview_plan(db, intake_id, *, review_type: str = "quarterly",
         "eligible_population": len(eligible),
         "unresolved_units": len(unresolved),
         "excluded_review_required": len(review_required_exclusions(unresolved)),
+        "excluded_reviewed_on_submitted_values": len(reviewed_on_submitted_values_exclusions(unresolved)),
         "total_sample_size": sum(s["sample_size"] for s in strata.values()),
         "per_qhin": dict(sorted(strata.items())),
         "note": ("Margin of error and stratification remain subject to COR "
@@ -360,6 +425,7 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
     eligible, unresolved = await resolve_qhin_strata(
         db, intake_id, include_held=include_held)
     excluded = review_required_exclusions(unresolved)
+    reviewed_excluded = reviewed_on_submitted_values_exclusions(unresolved)
     if not eligible:
         raise SamplingRefused(
             f"Delivery {intake_id} has no eligible population to sample under "
@@ -395,7 +461,8 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
                            "include_held": include_held,
                            "full_population": True,
                            "unresolved_units": len(unresolved),
-                           "excluded_review_required": len(excluded)})
+                           "excluded_review_required": len(excluded),
+                           **_reviewed_exclusion_facts(unresolved)})
     else:
         # The statistics are the engine's. This module only says what to sample.
         result = CochranSampler().draw_per_stratum(
@@ -410,7 +477,8 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
                            "source_intake_id": str(intake_id),
                            "include_held": include_held,
                            "unresolved_units": len(unresolved),
-                           "excluded_review_required": len(excluded)})
+                           "excluded_review_required": len(excluded),
+                           **_reviewed_exclusion_facts(unresolved)})
 
     sample = reg.ReviewSample(
         id=uuid.uuid4(),
@@ -461,7 +529,21 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
                   "selection_algorithm": result.strata_config["selection_algorithm"],
                   "random_seed": result.random_seed,
                   "unresolved_units": len(unresolved),
-                  "excluded_review_required": len(excluded)})
+                  "excluded_review_required": len(excluded),
+                  "excluded_reviewed_on_submitted_values": len(reviewed_excluded)})
+    if reviewed_excluded:
+        # The same audit fact for the other eligibility exclusion: which delivered records were kept out of THIS
+        # plan's frame because each already has its own review classified on submitted values.
+        reg_audit.record(
+            db, "sampling_eligibility_excluded", None,
+            actor_id=actor_id, actor_email=actor,
+            metadata={"sample_id": str(sample.id), "plan_key": key,
+                      "source_intake_id": str(intake_id),
+                      "exclusion": EXCLUSION_REVIEWED_ON_SUBMITTED_VALUES,
+                      "reason": REVIEWED_ON_SUBMITTED_VALUES_REASON,
+                      "entity_ids": [str(u["entity_id"]) for u in reviewed_excluded],
+                      "references": [u.get("rce_org_oid") for u in reviewed_excluded],
+                      "count": len(reviewed_excluded)})
     if excluded:
         # The eligibility decision itself, as its own audit fact: which
         # entities were kept out of THIS plan's frame and why. One row per
@@ -479,7 +561,8 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
 
     return {**await get_plan(db, sample.id), "already_finalized": False,
             "unresolved_units": len(unresolved),
-            "excluded_review_required": len(excluded)}
+            "excluded_review_required": len(excluded),
+            "excluded_reviewed_on_submitted_values": len(reviewed_excluded)}
 
 
 async def get_plan(db, sample_id) -> Dict[str, Any]:

@@ -602,6 +602,15 @@ async def verify(
     `POST /api/tefca/workflow/deliveries/{id}/review-cycle`, which verifies the
     sample members; this route remains for an explicitly chosen supplementary
     run under the same authority.
+
+    NO HELD FILTER (noted 2026-11-25, behaviour unchanged). The default
+    selection below takes every promoted record of the delivery by reference
+    order, whatever its `record_status`; the sampling frame's HELD exclusion
+    (`qhin_sampling.resolve_qhin_strata`) does not apply here. A HELD record
+    is therefore verified and classified through this route. Since the
+    blank-NPI rule (`arc_pipeline.record_identity`) that includes a HELD
+    record that submitted no NPI, which used to be refused. Do not use this
+    route for an official delivery's classification run; use the review cycle.
     """
     from sqlalchemy import select
     from app.tefca_registry.rce import models as m

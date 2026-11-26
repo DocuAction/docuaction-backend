@@ -439,6 +439,9 @@ async def _work_items(db, records: List[reg.ReviewRecord], *, now: datetime,
             # candidate is which without opening each case first. Never
             # written here, never used to select or close anything.
             "prior_risk_not_cleared": payload.get("prior_risk_not_cleared"),
+            # Read-only, additive (2026-11-25): this case's record submitted no NPI and was classified on its
+            # submitted values. The case is the work item; the shared entity's status does not show it.
+            "submitted_values_basis": payload.get("submitted_values_basis"),
             "limitations": limits,
             "attention": _attention(limits, block["deadline_status"], idle_days,
                                     stale_after_days),

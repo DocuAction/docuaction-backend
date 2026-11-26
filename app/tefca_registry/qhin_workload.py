@@ -197,7 +197,8 @@ async def qhin_rollup(db, intake_id, *, sample_id=None,
     for unit in placed:
         qhin_of[unit["entity_id"]] = unit["qhin"]
         population[unit["qhin"]] = population.get(unit["qhin"], 0) + 1
-        bucket = draw.setdefault(unit["qhin"], {"eligible": 0, "review_required": 0, "held": 0})
+        bucket = draw.setdefault(unit["qhin"], {"eligible": 0, "review_required": 0, "held": 0,
+                                                "reviewed_on_submitted_values": 0})
         bucket[unit["draw_eligibility"]] += 1
 
     names = await qhin_names(db, list(population.keys()))
@@ -218,7 +219,10 @@ async def qhin_rollup(db, intake_id, *, sample_id=None,
             "eligible_for_draw": draw.get(key, {}).get("eligible", 0),
             "excluded_from_draw": {
                 "review_required": draw.get(key, {}).get("review_required", 0),
-                "held": draw.get(key, {}).get("held", 0)},
+                "held": draw.get(key, {}).get("held", 0),
+                # Already reviewed on their submitted values: not drawn again for this delivery, still placed,
+                # and counted under `in_review` through their review like any other case.
+                "reviewed_on_submitted_values": draw.get(key, {}).get("reviewed_on_submitted_values", 0)},
             "in_review": 0,
             "assigned": 0,
             "completed": 0,
@@ -321,6 +325,7 @@ async def placement_units(db, intake_id, *, include_held: bool = False):
     promoted) are unplaced.
     """
     from app.tefca_registry.qhin_sampling import (EXCLUSION_REVIEW_REQUIRED,
+                                                  EXCLUSION_REVIEWED_ON_SUBMITTED_VALUES,
                                                   UNRESOLVED_QHIN,
                                                   resolve_qhin_strata)
 
@@ -333,6 +338,8 @@ async def placement_units(db, intake_id, *, include_held: bool = False):
             unplaced.append(unit)
             continue
         kind = ("review_required" if unit.get("exclusion") == EXCLUSION_REVIEW_REQUIRED
+                else "reviewed_on_submitted_values"
+                if unit.get("exclusion") == EXCLUSION_REVIEWED_ON_SUBMITTED_VALUES
                 else "held")
         placed.append({**unit, "draw_eligibility": kind})
     summary = {"placed": len(placed), "unplaced": len(unplaced),
@@ -340,6 +347,10 @@ async def placement_units(db, intake_id, *, include_held: bool = False):
                "review_required": sum(1 for u in placed
                                       if u["draw_eligibility"] == "review_required"),
                "held": sum(1 for u in placed if u["draw_eligibility"] == "held"),
+               # Already reviewed (classified on submitted values): placed, under review through that review, and
+               # not drawn again for this delivery. Never counted as held.
+               "reviewed_on_submitted_values": sum(
+                   1 for u in placed if u["draw_eligibility"] == "reviewed_on_submitted_values"),
                "basis": ("Placement = canonical managed_by_qhin edge. Draw eligibility = "
                          "the sampling frame for a NEW draw; entities already under "
                          "review or held stay placed and are excluded from a new draw "
