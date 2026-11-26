@@ -478,6 +478,7 @@ async def _get_with_retry(
     """
     client = _shared_http_client()
     limiter = _rate_limiter_for(source)
+    sent: List[httpx.Response] = []
     async for attempt in AsyncRetrying(
         stop=(stop_after_attempt(RETRY_ATTEMPTS) | stop_after_delay(SOURCE_TIMEOUT_SECONDS)),
         wait=wait_exponential(multiplier=1, min=1, max=4),
@@ -490,10 +491,15 @@ async def _get_with_retry(
                 # Re-checked per ATTEMPT: concurrent records past the entry-point check must not keep asking.
                 stopped = sam_screening.live_api_stop_reason()
                 if stopped:
+                    if sent:
+                        # This call already sent a request: it keeps that request's real outcome (e.g. HTTP 500),
+                        # never "not attempted". Only a call that sent nothing is recorded as stopped.
+                        return sent[-1]
                     raise SamLiveAccessStopped(stopped)
                 sam_screening.note_live_api_request()
             resp = await client.get(url, params=params, headers=headers,
                                     timeout=httpx.Timeout(timeout))
+            sent.append(resp)
             if source in _SAM_SOURCES:
                 try:
                     empty = not (resp.text or "").strip()

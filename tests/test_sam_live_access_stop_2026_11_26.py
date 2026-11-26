@@ -173,3 +173,27 @@ def test_the_report_cell_says_not_attempted_and_why():
                           normalized_values={"failure_class": sam_screening.NOT_ATTEMPTED_STOPPED})
     cell = ld._evidence_cell("sam", row)
     assert "not attempted - access stopped" in cell and "retrieved" not in cell
+
+
+async def test_remaining_zero_stops_until_the_next_utc_day_even_with_retry_after(wired):
+    """Review 2026-11-26: Retry-After is honoured for a 429 only; "Remaining: 0" means the daily quota is used."""
+    import time
+    now = time.time()
+    sam_screening.note_live_api_response(200, remaining="0", retry_after="60", now=now)
+    assert sam_screening.live_api_stop_reason(now=now + 120) is not None          # not resumed after 60 s
+    assert sam_screening._LIVE["stop_until"] == sam_screening._next_utc_midnight(now)
+    assert "next UTC day" in sam_screening.live_api_stop_reason(now=now + 1)
+
+
+async def test_a_call_that_already_sent_a_request_keeps_its_real_failure(wired, monkeypatch):
+    """Review 2026-11-26: the budget is used by a request that answers HTTP 500; the call stops retrying but is
+    recorded with its real failure (attempted, unavailable), never as 'not attempted'."""
+    monkeypatch.setenv(sam_screening.DAILY_REQUEST_BUDGET_ENV, "1")
+    client = _Client(500)
+    connector = wired(client)
+    result = await connector.lookup_by_name(f"{SYN} five hundred")
+    assert client.attempts == 1                                   # no retry after the budget is used
+    assert result.success is False and "HTTP 500" in result.error
+    assert sam_screening.classify_failure(result.error) != sam_screening.NOT_ATTEMPTED_STOPPED
+    _stopped(await connector.lookup_by_name(f"{SYN} next"))      # the NEXT call sends nothing
+    assert client.attempts == 1

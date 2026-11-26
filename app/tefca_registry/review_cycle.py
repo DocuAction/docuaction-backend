@@ -662,10 +662,8 @@ async def _create_review_cycle(
     # transaction (releasing the shared in-flight lock), which is fine: the
     # drain guarantee protects classification writes, and those happen inside
     # verify_and_classify's own guarded transaction.
-    from app.tefca_registry.processing_controls import enter_processing
-    await enter_processing(db)
-
-    # INTERLOCK (2026-11-26). With the live SAM API switched off for the run, the dated public extract is the ONLY
+    # INTERLOCK (2026-11-26). Runs BEFORE the shared processing lock below, because it may download the extract.
+    # With the live SAM API switched off for the run, the dated public extract is the ONLY
     # exclusion screen for SAM. The cycle is not started or continued unless that screen is enabled, loaded and
     # within its freshness rule - checked here, before anything is drawn or classified.
     from app.Tefca import sam_extract as _sam_extract
@@ -681,6 +679,9 @@ async def _create_review_cycle(
                 f"available and current, or turn the switch off.")
     # Captured ONCE, here: the edition the interlock just found ready.
     sam_extract_edition = _sam_extract.loaded_edition() if sam_api_disabled else None
+
+    from app.tefca_registry.processing_controls import enter_processing
+    await enter_processing(db)
 
     actor_id, actor_email = reg_audit.actor_of(user)
     batch = max(1, min(int(batch or DEFAULT_BATCH), MAX_BATCH))

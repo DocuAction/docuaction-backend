@@ -690,8 +690,9 @@ class DeliveryProcessingDataService:
                 self.limit(
                     f"{label}: the live API was not attempted - disabled or stopped for this run - for {disabled} "
                     f"eligible entity(ies). This is not an outage, not a missing key and not a screening "
-                    f"result; those entities are not counted as attempted or as unavailable at {label}, and "
-                    f"this report draws no conclusion from {label} for them.")
+                    f"result: these rows add no attempt and no unavailable outcome at {label} (counts from "
+                    f"other evidence rows of the same entities are unchanged), and this report draws no "
+                    f"conclusion from {label} from them.")
         idle = [x for x in sources if not (x.get("attempted") or 0)
                 and not int(x.get("not_attempted_disabled") or 0)]
         if not idle:

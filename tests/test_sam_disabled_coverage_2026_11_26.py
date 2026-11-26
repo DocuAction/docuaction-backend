@@ -130,8 +130,9 @@ async def test_the_delivery_report_states_it_separately(batch, monkeypatch):
         "No check was attempted at PECOS (legacy NPPES proxy) (0 attempted, 0% coverage at that source).")
     assert limits[:1] == [
         f"SAM.gov: the live API was not attempted - disabled or stopped for this run - for {N} eligible entity(ies). This is "
-        f"not an outage, not a missing key and not a screening result; those entities are not counted as attempted "
-        f"or as unavailable at SAM.gov, and this report draws no conclusion from SAM.gov for them."]
+        f"not an outage, not a missing key and not a screening result: these rows add no attempt and no unavailable "
+        f"outcome at SAM.gov (counts from other evidence rows of the same entities are unchanged), and this report "
+        f"draws no conclusion from SAM.gov from them."]
     # the printed report: a line of its own under the coverage table and in the leg table
     from jinja2 import Environment
     template = open("app/reports/templates/delivery_processing.html", encoding="utf-8").read()
@@ -162,12 +163,14 @@ async def test_per_record_statements_say_not_attempted(batch, monkeypatch):
     assert vc.is_not_attempted_disabled("SAM_GOV", {"failure_class": "NOT_ROUTING"}) is False
     assert vc.is_not_attempted_disabled("OIG_LEIE", {"failure_class": "NOT_ATTEMPTED_DISABLED"}) is False
     from app.tefca_registry import report_generator
+    # The legacy report never infers the cause from TODAY's setting (a regenerated report of an earlier period
+    # would misstate it): its standing line is the same with the switch on or off (review 2026-11-26).
     monkeypatch.setenv(SWITCH, "1")
-    lines = report_generator.build_limitations({}, [])
-    assert any(line.startswith("sam_gov: not attempted - disabled for this run") for line in lines)
-    assert not any("returning 404" in line for line in lines)
+    on = report_generator.build_limitations({}, [])
     monkeypatch.delenv(SWITCH)
-    assert any("returning 404" in line for line in report_generator.build_limitations({}, []))
+    off = report_generator.build_limitations({}, [])
+    assert on == off and any("returning 404" in line for line in on)
+    assert not any("disabled for this run" in line for line in on)
 
 
 async def test_a_real_cycle_records_the_sam_channel_on_its_audit_row_and_response(batch, monkeypatch):

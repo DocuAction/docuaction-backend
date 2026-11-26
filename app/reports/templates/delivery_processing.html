@@ -663,7 +663,7 @@
 </table>
 {% for s in verification.sources %}{% if s.get('not_attempted_disabled') %}
 <p class="sam-not-attempted-disabled-note"><b>{{ s.name|upper }}: not attempted &mdash; disabled or stopped for this run: {{ s.get('not_attempted_disabled')|number }} entity(ies).</b>
-  The live API was switched off for the run. These entities are not counted in Attempted or in Unavailable above; this is not an outage and not a screening result.</p>
+  The live API was switched off, or live access was stopped after SAM.gov's own signal, for this run. These rows add no attempt and no unavailable outcome above (counts from other evidence rows of the same entities are unchanged); this is not an outage and not a screening result.</p>
 {% endif %}{% endfor %}
 {% for s in verification.sources %}{% if s.get('screening_legs') %}{% set legs = s.get('screening_legs') %}
 <table class="dp-tight">
