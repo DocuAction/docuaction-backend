@@ -125,6 +125,9 @@ def _section_verification_status(record, entity) -> Dict[str, Any]:
         # Present when the record submitted no NPI and was classified on its own submitted values: what was and
         # was not checked, and that the entity status shown above was NOT written by this review.
         "submitted_values_basis": vr.get("submitted_values_basis"),
+        # Present when the dated SAM extract returned a CANDIDATE for this record that the determination does not
+        # already name: a pending concern requiring confirmation, never a confirmed exclusion.
+        "pending_exclusion_candidate": vr.get("pending_exclusion_candidate"),
         "verification_claim": vr.get("verification_claim"),
         "source_policy": {
             "recorded": bool(policy),

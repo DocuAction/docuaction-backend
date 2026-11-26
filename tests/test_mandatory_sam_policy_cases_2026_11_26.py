@@ -364,6 +364,15 @@ async def test_bulk_writer(delivery, name):
     # WHAT IS STORED
     assert (facts["bucket"], facts["rule"], facts["rule_version"], facts["tier"]) == case["final"], facts["rationale"]
     expected_text = _policy_text(reason, d.configuration) if reason else RATIONALES[name]
+    if name == "7_extract_candidate_with_no_active_policy_row":
+        # Since 2026-11-26 the candidate is at least SAID on the review (still B1, still marked verified: with no
+        # active policy row nothing routes an extract candidate to review).
+        from datetime import datetime as _dt, timezone as _tz
+        expected_text += (
+            f" Pending exclusion concern: the dated SAM public exclusions extract (edition "
+            f"{_dt.now(_tz.utc).date().isoformat()}, SAM_Exclusions_Public_Extract_V2_SYNTHETIC.ZIP) returned 1 "
+            f"candidate match(es) for this record (matched by npi). A candidate is not a confirmed exclusion; an "
+            f"analyst must confirm or dismiss it. The bucket and rule above are unchanged.")
     assert facts["rationale"] == expected_text
     assert facts["outcome"]["entity_marked_verified"] is case["marked_verified"]
     # Every source was asked through the real connectors, and both SAM API legs were tried.

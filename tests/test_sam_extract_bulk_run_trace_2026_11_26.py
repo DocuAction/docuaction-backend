@@ -125,7 +125,7 @@ async def _run(b):
             bucket=review.classification_bucket, rule=review.classification_rule,
             rule_version=review.classification_rule_version, rationale=review.classification_rationale,
             extract_row=evidence.get("SAM_EXTRACT_SUPPLEMENTARY"), api_row=evidence.get("SAM_GOV"),
-            sources=sources,
+            sources=sources, results=review.verification_results,
             d3_rationale=next((d.get("rationale") for d in review.verification_results.get("dimensions") or []
                                if isinstance(d, dict) and d.get("dimension") == "EXCLUSION_REVOCATION"), None))
     return out
@@ -215,13 +215,13 @@ async def test_api_not_routing__the_extract_screens_every_record_and_the_api_is_
     for label in NAME_ONLY:
         # No NPI: NPPES, CMS enrollment and CMS revocation cannot be asked, so no B1/B2 rule matches and the
         # record is B3 by the unmatched default BEFORE the policy is consulted (it acts on B1/B2 only). That is
-        # so for the clean record and for the one the extract lists: the candidate is on the evidence row and
-        # in the report cell, and is NOT named in the stored rationale.
+        # so for the clean record and for the one the extract lists. (Since 2026-11-26 the listed one says so in
+        # its rationale as a pending concern - see test_pending_extract_candidate_visibility_2026_11_26.py.)
         f = out[label]
         assert (f.bucket, f.rule, f.rule_version) == UNMATCHED_B3
         assert (f.sources["nppes"]["status"], f.sources["pecos"]["status"],
                 f.sources["cms_revocation"]["status"]) == ("unavailable", "unavailable", "unavailable")
-        assert "possible" not in f.rationale.lower() and "candidate" not in f.rationale.lower()
+        assert f.rationale.startswith("[DEFAULT-UNMATCHED] No active rule matched these results")
 
 
 async def test_api_answering__the_same_number_of_requests_and_registration_decides_nothing(batch):

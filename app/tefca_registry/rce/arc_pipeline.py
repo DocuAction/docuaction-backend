@@ -444,6 +444,55 @@ def withhold_unestablished_name_screens(evidence: Dict[str, Any], *, delivered_n
     return out, withheld
 
 
+#: `verification_results` key: the dated SAM extract returned a CANDIDATE for this record and the stored
+#: determination does not already say so. Present only then. See `pending_extract_candidate`.
+PENDING_EXCLUSION_CANDIDATE_KEY = "pending_exclusion_candidate"
+PENDING_EXCLUSION_CANDIDATE_STATUS = "CANDIDATE_REQUIRES_CONFIRMATION"
+
+
+def pending_extract_candidate(evidence: Dict[str, Any], sources: Dict[str, Any],
+                              rationale: Optional[str]) -> Optional[Dict[str, Any]]:
+    """A pending exclusion CONCERN to show on the review, or None.
+
+    The mandatory-source policy names an extract candidate (EXCLUSION_POSSIBLE_MATCH_PENDING) only when it acts,
+    and it acts only on a B1/B2 outcome. A record that is B3 or B4 for another reason - typically a record with
+    no NPI, which no B1/B2 rule can match - kept its extract candidate in the evidence alone. This returns the
+    facts to state on the review for exactly those records: the candidate, its count, how it matched and the
+    extract edition. It changes no bucket, rule, rule version or policy; a candidate is never called an
+    exclusion."""
+    if ((sources or {}).get("sam_extract") or {}).get("status") != EXCLUSION_POSSIBLE_MATCH_STATE:
+        return None
+    if "EXCLUSION_POSSIBLE_MATCH_PENDING" in (rationale or ""):
+        return None                              # the stored determination already names it
+    item = next((i for d in (evidence or {}).get("dimensions", []) for i in (d.get("evidence") or [])
+                 if isinstance(i, dict) and i.get("source") == EXTRACT_EVIDENCE_SOURCE
+                 and str(i.get("disposition") or "").upper() == "REVIEW"), None)
+    original = (item or {}).get("original_values") if isinstance((item or {}).get("original_values"), dict) else {}
+    return {
+        "source": "sam_extract", "status": PENDING_EXCLUSION_CANDIDATE_STATUS, "confirmed_exclusion": False,
+        "candidate_count": original.get("candidate_count"),
+        "matched_by": list(original.get("match_methods_matched") or []),
+        "extract_filename": original.get("extract_filename"),
+        "publication_date": original.get("publication_date"),
+        "extract_sha256": original.get("extract_sha256"),
+        "note": ("A candidate found in the dated SAM public exclusions extract. It is not a confirmed exclusion: "
+                 "an analyst must confirm or dismiss the identity and applicability. The bucket and rule of this "
+                 "review were decided on other grounds and are unchanged."),
+    }
+
+
+def pending_extract_candidate_sentence(concern: Dict[str, Any]) -> str:
+    """The sentence appended to the stored rationale for `pending_extract_candidate`."""
+    count = concern.get("candidate_count")
+    how = ", ".join(concern.get("matched_by") or []) or "method not recorded"
+    return (f" Pending exclusion concern: the dated SAM public exclusions extract (edition "
+            f"{concern.get('publication_date') or 'date not recorded'}, "
+            f"{concern.get('extract_filename') or 'file not recorded'}) returned "
+            f"{count if count is not None else 'a'} candidate match(es) for this record (matched by {how}). A "
+            f"candidate is not a confirmed exclusion; an analyst must confirm or dismiss it. The bucket and rule "
+            f"above are unchanged.")
+
+
 def extract_state_of(disposition: Any) -> str:
     """The `sam_extract` source state for one persisted/assembled extract evidence disposition. The ONE translation both
     classification paths use: PASS -> clear, a candidate (REVIEW) -> possible_match (never a confirmed exclusion),
@@ -1431,6 +1480,12 @@ async def verify_and_classify(
                              + ", ".join(analyst_dimensions)
                              + " carry an NPPES identity name conflict requiring "
                                "analyst review; the bucket itself is unchanged.")
+            # An extract candidate the determination above does not already name (2026-11-26): said on the
+            # review itself, as a candidate requiring confirmation. Bucket, rule and versions are untouched.
+            pending_candidate = pending_extract_candidate(
+                evidence, verification_results.get("sources") or {}, rationale)
+            if pending_candidate:
+                rationale = (rationale or "") + pending_extract_candidate_sentence(pending_candidate)
 
             db.add(reg.ReviewRecord(
                 id=uuid.uuid4(),
@@ -1440,6 +1495,9 @@ async def verify_and_classify(
                     # Present ONLY when a prior risk signal is uncleared, so
                     # the snapshot shape of every other record is unchanged.
                     **({"prior_risk_not_cleared": prior_risk} if prior_risk else {}),
+                    # Present ONLY when the dated SAM extract returned a candidate that the determination does not
+                    # already name: the work item shows it as a pending concern, never as an exclusion.
+                    **({PENDING_EXCLUSION_CANDIDATE_KEY: pending_candidate} if pending_candidate else {}),
                     # WHICH REVIEW CYCLE CREATED THIS REVIEW (2026-11-26), written in the same commit as the
                     # review itself. Present ONLY when a cycle passed its sample: a review made by the
                     # supplementary verify route, or by anything else, carries no such key. It is a statement of

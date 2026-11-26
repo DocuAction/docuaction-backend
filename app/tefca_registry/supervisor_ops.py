@@ -442,6 +442,9 @@ async def _work_items(db, records: List[reg.ReviewRecord], *, now: datetime,
             # Read-only, additive (2026-11-25): this case's record submitted no NPI and was classified on its
             # submitted values. The case is the work item; the shared entity's status does not show it.
             "submitted_values_basis": payload.get("submitted_values_basis"),
+            # Read-only, additive (2026-11-26): the dated SAM extract returned a CANDIDATE for this case's record
+            # and the stored determination was made on other grounds. A candidate, never a confirmed exclusion.
+            "pending_exclusion_candidate": payload.get("pending_exclusion_candidate"),
             "limitations": limits,
             "attention": _attention(limits, block["deadline_status"], idle_days,
                                     stale_after_days),
