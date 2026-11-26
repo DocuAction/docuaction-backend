@@ -1946,15 +1946,21 @@ async def run_verification_coverage(
     intake_id: str,
     request: Request,
     batch_size: int = Query(100, ge=1, le=500),
-    scope: str = Query("full", pattern="^(full|sam_extract)$", description=(
+    scope: str = Query("full", pattern="^(full|sam_extract|sam_extract_edition)$", description=(
         "full: all-source first lookup for entities with no evidence at all. "
         "sam_extract: append ONLY the SAM public-extract supplementary row to "
         "entities that have evidence but no SAM_EXTRACT_SUPPLEMENTARY row — "
-        "no other source is re-asked, no quota re-spent.")),
+        "no other source is re-asked, no quota re-spent. "
+        "sam_extract_edition: append ONLY the extract row, for every eligible entity that has no row for the "
+        "PINNED edition (`edition_sha256`); older editions' rows are kept untouched.")),
     after_entity_id: Optional[uuid.UUID] = Query(None, description=(
         "Continue after this entity id: the `next_after_entity_id` of a "
         "response whose `identity_refusal_scan_limit_reached` is true. Omit "
         "otherwise.")),
+    edition_sha256: Optional[str] = Query(None, pattern="^[0-9a-f]{64}$", description=(
+        "sam_extract_edition only (required there): SHA-256 of the extract edition this run is pinned to - "
+        "the loaded edition's `extract_sha256` (GET .../sam-extract or the extract readiness). Refused (409) "
+        "when the loaded edition is a different one.")),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("program_manager")),
 ):
@@ -1976,12 +1982,16 @@ async def run_verification_coverage(
     from app.tefca_registry.rce import automated_verification as av
 
     intake = await _intake_or_404(db, intake_id)
+    if scope == av.SCOPE_SAM_EXTRACT_EDITION and not edition_sha256:
+        raise HTTPException(status_code=422, detail="scope=sam_extract_edition requires edition_sha256")
+    if scope != av.SCOPE_SAM_EXTRACT_EDITION and edition_sha256:
+        raise HTTPException(status_code=422, detail="edition_sha256 applies only to scope=sam_extract_edition")
     try:
         result = await av.run_coverage_batch(
             db, intake.id, batch_size=batch_size, scope=scope,
             actor=getattr(user, "email", None) or "SYSTEM",
-            after_entity_id=after_entity_id)
-    except av.SamExtractScreeningDisabled as exc:
+            after_entity_id=after_entity_id, edition_sha256=edition_sha256)
+    except (av.SamExtractScreeningDisabled, av.SamExtractEditionRefused) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     if result.get("identity_refused"):
         await _audit(db, "verification_coverage_identity_refused", user, request,
