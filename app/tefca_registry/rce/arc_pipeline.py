@@ -551,6 +551,9 @@ def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, An
                 if key == "sam_gov" and (item.get("normalized_values") or {}).get(
                         "failure_class") == _sam_screening.NOT_ATTEMPTED_DISABLED:
                     sources[key]["not_attempted"] = _sam_screening.LIVE_API_DISABLED_MARKER
+                elif key == "sam_gov" and (item.get("normalized_values") or {}).get(
+                        "failure_class") == _sam_screening.NOT_ATTEMPTED_STOPPED:
+                    sources[key]["not_attempted"] = _sam_screening.LIVE_API_STOPPED_MARKER
 
         # Field-level signals the B2/B3 rules look for.
         if name == "ADDRESS":

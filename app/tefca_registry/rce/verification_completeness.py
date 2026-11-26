@@ -128,7 +128,9 @@ def completeness(verification_results: Optional[Dict[str, Any]]) -> Dict[str, An
         # A source deliberately not asked says so; its OUTCOME stays UNAVAILABLE (still incomplete, never a pass).
         raw = sources.get(name)
         if isinstance(raw, dict) and raw.get("not_attempted"):
-            from app.Tefca.sam_screening import LIVE_API_DISABLED_LABEL
+            from app.Tefca.sam_screening import LIVE_API_DISABLED_LABEL, LIVE_API_STOPPED_MARKER
+            if raw.get("not_attempted") == LIVE_API_STOPPED_MARKER:
+                return "Not attempted - live SAM.gov access stopped"
             return LIVE_API_DISABLED_LABEL
         return OUTCOME_DISPLAY[outcome]
 

@@ -781,7 +781,12 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
     else:
         any_unavailable = True
         sam_api_not_attempted = bool(sam and sam.error) and (
-            sam_screening.classify_failure(sam.error) == sam_screening.NOT_ATTEMPTED_DISABLED)
+            sam_screening.classify_failure(sam.error) in (sam_screening.NOT_ATTEMPTED_DISABLED,
+                                                          sam_screening.NOT_ATTEMPTED_STOPPED))
+        sam_not_attempted_words = (sam_screening.LIVE_API_STOPPED_MARKER
+                                   if sam_api_not_attempted and sam_screening.classify_failure(sam.error)
+                                   == sam_screening.NOT_ATTEMPTED_STOPPED
+                                   else sam_screening.LIVE_API_DISABLED_MARKER)
         items.append(EvidenceItem(
             dimension=dim, source="SAM_GOV", disposition=Disposition.UNAVAILABLE.value,
             note=(sam_screening.sanitize_reason(sam.error) if sam and sam.error else "SAM.gov was not queried."),
@@ -857,11 +862,11 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
         if not sam_api_not_attempted:
             rationale = "One or more of the three controls could not be reached. Not a finding."
         elif others_unreached:
-            rationale = (f"The live SAM.gov API was {sam_screening.LIVE_API_DISABLED_MARKER}; "
+            rationale = (f"The live SAM.gov API was {sam_not_attempted_words}; "
                          f"{', '.join(sorted(set(others_unreached)))} could not be reached. Not a finding and "
                          f"not a clearance.")
         else:
-            rationale = (f"The live SAM.gov API was {sam_screening.LIVE_API_DISABLED_MARKER}; the other controls "
+            rationale = (f"The live SAM.gov API was {sam_not_attempted_words}; the other controls "
                          f"answered and are reported separately above. Not a finding and not a clearance.")
         disposition, needs = Disposition.UNAVAILABLE, True
     elif any_insufficient:

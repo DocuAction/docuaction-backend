@@ -157,6 +157,14 @@ def safe_upstream_request_id(resp: "httpx.Response") -> Optional[Dict[str, str]]
 _RETRYABLE_EXC = (httpx.TimeoutException, httpx.TransportError)
 
 
+#: The two SAM.gov API sources whose own rate-limit / quota / routing signals stop further live attempts.
+_SAM_SOURCES = ("SAM_GOV", "SAM_GOV_EXCLUSIONS")
+
+
+class SamLiveAccessStopped(Exception):
+    """Raised before a SAM request while live access is stopped; its text is the stored reason (never retried)."""
+
+
 class RetryableHTTPError(Exception):
     """Raised for HTTP 429/5xx so tenacity retries; 4xx is terminal."""
 
@@ -478,8 +486,25 @@ async def _get_with_retry(
     ):
         with attempt:
             await limiter.acquire()
+            if source in _SAM_SOURCES:
+                # Re-checked per ATTEMPT: concurrent records past the entry-point check must not keep asking.
+                stopped = sam_screening.live_api_stop_reason()
+                if stopped:
+                    raise SamLiveAccessStopped(stopped)
+                sam_screening.note_live_api_request()
             resp = await client.get(url, params=params, headers=headers,
                                     timeout=httpx.Timeout(timeout))
+            if source in _SAM_SOURCES:
+                try:
+                    empty = not (resp.text or "").strip()
+                except Exception:  # noqa: BLE001
+                    empty = False
+                sam_screening.note_live_api_response(
+                    resp.status_code, empty_body=empty,
+                    remaining=resp.headers.get("X-RateLimit-Remaining"),
+                    retry_after=resp.headers.get("Retry-After"))
+                if resp.status_code == 429:
+                    return resp        # exhausted access is never retried; the caller records HTTP 429
             if resp.status_code == 429 or resp.status_code >= 500:
                 raise RetryableHTTPError(
                     f"HTTP {resp.status_code} from {url}"
@@ -1082,6 +1107,9 @@ class SAMGovConnector:
         if sam_screening.live_api_attempts_disabled():       # the run switch: checked BEFORE the key, no request
             return SourceResult.unavailable(
                 "SAM_GOV", sam_screening.LIVE_API_DISABLED_REASON, qp, self.API_VERSION)
+        _stopped = sam_screening.live_api_stop_reason()      # SAM.gov signalled exhausted access / no route
+        if _stopped:
+            return SourceResult.unavailable("SAM_GOV", _stopped, qp, self.API_VERSION)
         if not self.api_key:
             return SourceResult.unavailable(
                 "SAM_GOV", "SAM_GOV_API_KEY not set (register a free key at sam.gov)", qp, self.API_VERSION
@@ -1152,6 +1180,9 @@ class SAMGovConnector:
         if sam_screening.live_api_attempts_disabled():       # the run switch: checked BEFORE the key, no request
             return SourceResult.unavailable(
                 "SAM_GOV", sam_screening.LIVE_API_DISABLED_REASON, qp, self.API_VERSION)
+        _stopped = sam_screening.live_api_stop_reason()      # SAM.gov signalled exhausted access / no route
+        if _stopped:
+            return SourceResult.unavailable("SAM_GOV", _stopped, qp, self.API_VERSION)
         if not self.api_key:
             return SourceResult.unavailable(
                 "SAM_GOV", "SAM_GOV_API_KEY not set (register a free key at sam.gov)",
@@ -1222,6 +1253,9 @@ class SAMGovConnector:
         if sam_screening.live_api_attempts_disabled():       # the run switch: checked BEFORE the key, no request
             return SourceResult.unavailable(
                 "SAM_GOV_EXCLUSIONS", sam_screening.LIVE_API_DISABLED_REASON, qp, "v4")
+        _stopped = sam_screening.live_api_stop_reason()      # SAM.gov signalled exhausted access / no route
+        if _stopped:
+            return SourceResult.unavailable("SAM_GOV_EXCLUSIONS", _stopped, qp, "v4")
         if not self.api_key:
             return SourceResult.unavailable(
                 "SAM_GOV_EXCLUSIONS",
@@ -1304,6 +1338,9 @@ class SAMGovConnector:
         if sam_screening.live_api_attempts_disabled():       # the run switch: neither leg is asked
             return SourceResult.unavailable(
                 "SAM_GOV", sam_screening.LIVE_API_DISABLED_REASON, qp, self.API_VERSION)
+        _stopped = sam_screening.live_api_stop_reason()      # SAM.gov signalled exhausted access / no route
+        if _stopped:
+            return SourceResult.unavailable("SAM_GOV", _stopped, qp, self.API_VERSION)
         reg = (await self.lookup_by_uei(uei)) if uei else \
               (await self.lookup_by_name(legal_name))
         exc = await self.check_exclusions(uei=uei, legal_name=legal_name)

@@ -688,7 +688,7 @@ class DeliveryProcessingDataService:
             if disabled:
                 label = self._SOURCE_LABELS.get(x.get("name"), str(x.get("name")).upper())
                 self.limit(
-                    f"{label}: the live API was not attempted - disabled for this run - for {disabled} "
+                    f"{label}: the live API was not attempted - disabled or stopped for this run - for {disabled} "
                     f"eligible entity(ies). This is not an outage, not a missing key and not a screening "
                     f"result; those entities are not counted as attempted or as unavailable at {label}, and "
                     f"this report draws no conclusion from {label} for them.")

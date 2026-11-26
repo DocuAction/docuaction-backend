@@ -103,17 +103,21 @@ OUTCOMES = ("verified", "not_found", "deactivated", "failed", "unavailable")
 # happened. Nothing was asked, so such a row is NOT an attempt and NOT an unavailable answer: it is counted on its
 # own, under the key below, everywhere this module counts. Every other row is counted exactly as before.
 NOT_ATTEMPTED_DISABLED = "not_attempted_disabled"
-NOT_ATTEMPTED_DISABLED_LABEL = "Not attempted - disabled for this run"
+NOT_ATTEMPTED_DISABLED_LABEL = "Not attempted - live API disabled or stopped for this run"
 _DISABLED_FAILURE_CLASS = "NOT_ATTEMPTED_DISABLED"       # sam_screening.NOT_ATTEMPTED_DISABLED
 #: SQL predicate over `tefca_dimension_evidence d`: this row records a live SAM API check that was not attempted.
+#: Since 2026-11-26 also NOT_ATTEMPTED_STOPPED (sam_screening): live access stopped after SAM.gov signalled exhausted
+#: access (HTTP 429 / X-RateLimit-Remaining 0) or kept serving no route. Also not an attempt: no request was made.
+_STOPPED_FAILURE_CLASS = "NOT_ATTEMPTED_STOPPED"
 _DISABLED_ROW_SQL = ("(upper(btrim(coalesce(d.source, ''))) = 'SAM_GOV' AND "
-                     f"coalesce(d.normalized_values->>'failure_class', '') = '{_DISABLED_FAILURE_CLASS}')")
+                     f"coalesce(d.normalized_values->>'failure_class', '') IN "
+                     f"('{_DISABLED_FAILURE_CLASS}', '{_STOPPED_FAILURE_CLASS}'))")
 
 
 def is_not_attempted_disabled(source: Optional[str], normalized_values: Any) -> bool:
     """The Python twin of `_DISABLED_ROW_SQL`."""
     return ((source or "").strip().upper() == "SAM_GOV" and isinstance(normalized_values, dict)
-            and normalized_values.get("failure_class") == _DISABLED_FAILURE_CLASS)
+            and normalized_values.get("failure_class") in (_DISABLED_FAILURE_CLASS, _STOPPED_FAILURE_CLASS))
 
 _ELIGIBLE_SQL = ("SELECT DISTINCT canonical_entity_id FROM rce_curated_records "
                  "WHERE source_intake_id = CAST(:i AS uuid) "
@@ -769,8 +773,8 @@ async def coverage_for_intake(db, intake_id, *, job=None) -> Dict[str, Any]:
                 # The state word is unchanged (no new vocabulary). The note says what the count means, so a
                 # "Not Run" or partial SAM line is never read as an outage or as work left undone by mistake.
                 sources[key]["note"] = (
-                    f"{tally[key][NOT_ATTEMPTED_DISABLED]} entity(ies): live API "
-                    f"{NOT_ATTEMPTED_DISABLED_LABEL.lower()} - not counted as attempted and not counted as "
+                    f"{tally[key][NOT_ATTEMPTED_DISABLED]} entity(ies): live API not attempted - disabled or "
+                    f"stopped for this run (each record states which) - not counted as attempted and not counted as "
                     f"unavailable. " + str(sources[key].get("note") or ""))
     states = await source_states(db, intake_id, eligible=eligible)
     provenance = None

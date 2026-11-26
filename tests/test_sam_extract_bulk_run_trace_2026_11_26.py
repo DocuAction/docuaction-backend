@@ -337,15 +337,15 @@ class _Client:
 
 
 @pytest.mark.parametrize("status,attempts_per_leg,reason_starts", [
-    (404, 1, "SAM_GOV unavailable: SAM_GOV unavailable: HTTP 404 with an empty body"),   # today: not retried
-    (429, 3, "SAM_GOV unavailable: "),                                 # rate limited: retried, then unavailable
-    (503, 3, "SAM_GOV unavailable: "),
+    (404, 1, "SAM_GOV unavailable: SAM_GOV unavailable: HTTP 404 with an empty body"),   # not retried
+    (503, 3, "SAM_GOV unavailable: "),                                 # transient upstream error: retried
 ])
-async def test_retries_per_leg__a_404_is_one_request_a_429_or_5xx_is_three(monkeypatch, status, attempts_per_leg,
-                                                                            reason_starts):
-    """The retry rule of `connectors._get_with_retry`, measured: an empty 404 costs ONE request per leg; a 429 or
-    a 5xx is tried RETRY_ATTEMPTS (3) times per leg. A failure of the registration leg does not stop the
-    exclusion leg (`SAMGovConnector.verify` always asks both). Nothing carries a failure over to the next call."""
+async def test_retries_per_leg__a_404_is_one_request_a_5xx_is_three(monkeypatch, status, attempts_per_leg,
+                                                                     reason_starts):
+    """The retry rule of `connectors._get_with_retry`, measured: an empty 404 costs ONE request per leg; a 5xx is
+    tried RETRY_ATTEMPTS (3) times per leg. A failure of the registration leg does not stop the exclusion leg
+    (`SAMGovConnector.verify` always asks both). (A 429 is no longer retried - since 2026-11-26 it stops live
+    attempts; see test_sam_live_access_stop_2026_11_26.py.)"""
     import tenacity
     client = _Client(status)
     monkeypatch.setenv("SAM_GOV_API_KEY", "synthetic-key-not-a-credential")

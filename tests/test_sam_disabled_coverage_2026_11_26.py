@@ -34,7 +34,7 @@ pytestmark = pytest.mark.asyncio
 
 SWITCH = sam_screening.LIVE_API_DISABLED_ENV
 KEY = vc.NOT_ATTEMPTED_DISABLED
-LABEL = "Not attempted - disabled for this run"
+LABEL = "Not attempted - live API disabled or stopped for this run"
 N = len(BATCH)
 
 
@@ -52,7 +52,7 @@ async def test_a_disabled_run_is_neither_attempted_nor_unavailable(batch, monkey
     assert (sam["eligible"], sam["attempted"], sam["unavailable"], sam[KEY]) == (N, 0, 0, N)
     assert (sam["verified"], sam["not_found"], sam["failed"]) == (0, 0, 0)
     assert sam["not_attempted_disabled_label"] == LABEL and vc.NOT_ATTEMPTED_DISABLED_LABEL == LABEL
-    assert sam["note"].startswith(f"{N} entity(ies): live API not attempted - disabled for this run - not counted "
+    assert sam["note"].startswith(f"{N} entity(ies): live API not attempted - disabled or stopped for this run (each record states which) - not counted "
                                   f"as attempted and not counted as unavailable.")
     assert sam["state"] == "Not Run" and sam["coverage_pct"] == 0.0        # the state vocabulary is unchanged
     # Every OTHER source is counted exactly as it is with the switch off: zero under the new key.
@@ -129,14 +129,14 @@ async def test_the_delivery_report_states_it_separately(batch, monkeypatch):
     assert len(limits) == 2 and limits[1].startswith(
         "No check was attempted at PECOS (legacy NPPES proxy) (0 attempted, 0% coverage at that source).")
     assert limits[:1] == [
-        f"SAM.gov: the live API was not attempted - disabled for this run - for {N} eligible entity(ies). This is "
+        f"SAM.gov: the live API was not attempted - disabled or stopped for this run - for {N} eligible entity(ies). This is "
         f"not an outage, not a missing key and not a screening result; those entities are not counted as attempted "
         f"or as unavailable at SAM.gov, and this report draws no conclusion from SAM.gov for them."]
     # the printed report: a line of its own under the coverage table and in the leg table
     from jinja2 import Environment
     template = open("app/reports/templates/delivery_processing.html", encoding="utf-8").read()
-    assert "not attempted &mdash; disabled for this run: {{ s.get('not_attempted_disabled')|number }}" in template
-    assert "Live API not attempted &mdash; disabled for this run</th><td>{{ legs.not_attempted_disabled.entities" \
+    assert "not attempted &mdash; disabled or stopped for this run: {{ s.get('not_attempted_disabled')|number }}" in template
+    assert "Live API not attempted &mdash; disabled or stopped for this run</th><td>{{ legs.not_attempted_disabled.entities" \
         in template
     assert Environment is not None
 
