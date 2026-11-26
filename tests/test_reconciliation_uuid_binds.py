@@ -40,7 +40,10 @@ UUID_COLUMNS = ("source_intake_id",)
 
 def _raw_sql_statements() -> list[str]:
     """The SQL string literals passed to text() inside reconcile_delivery."""
-    source = inspect.getsource(reconciliation.reconcile_delivery)
+    # 2026-11-26: the adjudication-count statement was moved, unchanged, into
+    # `default_routed_unadjudicated`; it stays under this guard.
+    source = (inspect.getsource(reconciliation.reconcile_delivery)
+              + inspect.getsource(reconciliation.default_routed_unadjudicated))
     # text( "..." "..." ) — adjacent implicitly-concatenated literals.
     blocks = re.findall(r"text\(\s*((?:\s*\"[^\"]*\"\s*)+)", source)
     return ["".join(re.findall(r"\"([^\"]*)\"", b)) for b in blocks]

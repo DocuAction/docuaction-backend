@@ -69,6 +69,64 @@ async def _scalar(db, stmt) -> int:
     return int((await db.execute(stmt)).scalar() or 0)
 
 
+#: Analyst WORK ITEMS are questions, not determinations (see the comment where
+#: `reconcile_delivery` uses this). One spelling, shared by every review check.
+_NOT_WORK_ITEM = (
+    "  AND COALESCE(r.verification_results->>'queue_source', '') NOT IN "
+    "      ('RCE_DQ_HUMAN_REQUIRED', 'RCE_POST_PROMOTION_VERIFICATION') ")
+
+#: The name of the one check that reads analyst-adjudication state.
+ADJUDICATION_CHECK = "Every default-routed determination is adjudicated"
+
+
+def _adjudication_detail(count: int) -> str:
+    from app.tefca_registry.rce.arc_pipeline import UNMATCHED_RULE_CODE
+
+    return (f"{count} default-routed ({UNMATCHED_RULE_CODE}) review(s) await an "
+            f"analyst resolution")
+
+
+async def default_routed_unadjudicated(db, intake_id) -> int:
+    """Default-routed reviews of this delivery's promoted entities that no
+    analyst has adjudicated. The statement `reconcile_delivery` has run for
+    its adjudication check since 2026-10-31, moved here unchanged.
+
+    SCOPE, as written: every review of an entity this delivery promoted to -
+    whichever delivery, sample or route the review was made for.
+    """
+    from app.tefca_registry.rce.arc_pipeline import UNMATCHED_RULE_CODE
+
+    return await _scalar(db, text(
+        "SELECT count(*) FROM review_records r "
+        "WHERE r.entity_id IN (SELECT canonical_entity_id FROM rce_curated_records "
+        "                      WHERE source_intake_id = CAST(:i AS uuid) "
+        "                        AND canonical_entity_id IS NOT NULL) "
+        + _NOT_WORK_ITEM +
+        "  AND r.classification_rule = :dc "
+        "  AND r.reviewer_resolution IS NULL "
+        "  AND NOT EXISTS ("
+        "      SELECT 1 FROM review_decision_events e "
+        "      WHERE e.review_id = r.review_id "
+        "        AND e.event_type IN (:det, :sup) "
+        "        AND NOT EXISTS (SELECT 1 FROM review_decision_events s "
+        "                        WHERE s.supersedes_decision_id = e.id))").bindparams(
+            i=intake_id, dc=UNMATCHED_RULE_CODE,
+            det=reg.ReviewDecisionEvent.ANALYST_DETERMINATION,
+            sup=reg.ReviewDecisionEvent.SUPERSEDING_DETERMINATION))
+
+
+def _promoted_entity_ids(intake_id):
+    return select(m.RceCuratedRecord.canonical_entity_id).where(
+        m.RceCuratedRecord.source_intake_id == intake_id,
+        m.RceCuratedRecord.canonical_entity_id.isnot(None))
+
+
+async def _reviews_of_promoted(db, intake_id) -> int:
+    """F: reviews written over this delivery's promoted entities."""
+    return await _scalar(db, select(func.count()).select_from(reg.ReviewRecord)
+                         .where(reg.ReviewRecord.entity_id.in_(_promoted_entity_ids(intake_id))))
+
+
 async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
     """Full A–F reconciliation for one delivery, plus the disposition equation."""
     intake = await db.get(m.RceSourceIntake, intake_id)
@@ -123,11 +181,8 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
                m.RceCuratedRecord.canonical_entity_id.isnot(None)))
 
     # ── F — verification population ──
-    promoted_ids = select(m.RceCuratedRecord.canonical_entity_id).where(
-        m.RceCuratedRecord.source_intake_id == intake_id,
-        m.RceCuratedRecord.canonical_entity_id.isnot(None))
-    f_reviews = await _scalar(db, select(func.count()).select_from(reg.ReviewRecord)
-                              .where(reg.ReviewRecord.entity_id.in_(promoted_ids)))
+    promoted_ids = _promoted_entity_ids(intake_id)
+    f_reviews = await _reviews_of_promoted(db, intake_id)
     f_entities = await _scalar(
         db, select(func.count(func.distinct(reg.ReviewRecord.entity_id)))
         .where(reg.ReviewRecord.entity_id.in_(promoted_ids)))
@@ -234,9 +289,7 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
     # reviews). They must not read as "a determination without evidence" -
     # which would flip the delivery's verdict for one entity's open question
     # (pre-merge review Decision 2 follow-up, 2026-09-16).
-    _not_work_item = (
-        "  AND COALESCE(r.verification_results->>'queue_source', '') NOT IN "
-        "      ('RCE_DQ_HUMAN_REQUIRED', 'RCE_POST_PROMOTION_VERIFICATION') ")
+    _not_work_item = _NOT_WORK_ITEM
     # A SECOND, OLDER evidence shape exists alongside the sampled reviews'
     # `dimensions` array: the single-entity Priority Review / ad-hoc Verify
     # action (`review_service.run_review`, still reachable from
@@ -310,25 +363,11 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
     # check was considered and rejected (2026-10-30): it would have let a
     # resolved review with NO recorded provenance pass, which is the one thing
     # that check exists to catch.
-    from app.tefca_registry.rce.arc_pipeline import UNMATCHED_RULE_CODE
-
-    reviews_default_unadjudicated = await _scalar(db, text(
-        "SELECT count(*) FROM review_records r "
-        "WHERE r.entity_id IN (SELECT canonical_entity_id FROM rce_curated_records "
-        "                      WHERE source_intake_id = CAST(:i AS uuid) "
-        "                        AND canonical_entity_id IS NOT NULL) "
-        + _not_work_item +
-        "  AND r.classification_rule = :dc "
-        "  AND r.reviewer_resolution IS NULL "
-        "  AND NOT EXISTS ("
-        "      SELECT 1 FROM review_decision_events e "
-        "      WHERE e.review_id = r.review_id "
-        "        AND e.event_type IN (:det, :sup) "
-        "        AND NOT EXISTS (SELECT 1 FROM review_decision_events s "
-        "                        WHERE s.supersedes_decision_id = e.id))").bindparams(
-            i=intake_id, dc=UNMATCHED_RULE_CODE,
-            det=reg.ReviewDecisionEvent.ANALYST_DETERMINATION,
-            sup=reg.ReviewDecisionEvent.SUPERSEDING_DETERMINATION))
+    #
+    # The statement itself lives in `default_routed_unadjudicated` (moved, not
+    # changed, 2026-11-26) so the status attribution can ask the same question
+    # with the same SQL instead of a copy that could drift.
+    reviews_default_unadjudicated = await default_routed_unadjudicated(db, intake_id)
 
     checks: List[Dict[str, Any]] = []
 
@@ -380,10 +419,9 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
           f"{reviews_without_evidence} review(s) carry no dimension evidence")
     check("Every determination cites a rule", reviews_without_rule == 0,
           f"{reviews_without_rule} classified review(s) carry no rule_code")
-    check("Every default-routed determination is adjudicated",
+    check(ADJUDICATION_CHECK,
           reviews_default_unadjudicated == 0,
-          f"{reviews_default_unadjudicated} default-routed "
-          f"({UNMATCHED_RULE_CODE}) review(s) await an analyst resolution")
+          _adjudication_detail(reviews_default_unadjudicated))
     # ── the 2026-09-17 additions ──
     check("Every source record has a current disposition",
           without_disposition == 0,
@@ -488,6 +526,126 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
             "nobody can account for. The disposition equation is proven over "
             "persisted, append-only events, not over this run's counters."
         ),
+    }
+
+
+# ── which evaluation does a status come from? ────────────────────────────────
+
+SOURCE_LIVE = "live_evaluation"
+SOURCE_SNAPSHOT = "persisted_snapshot"
+SOURCE_NONE = "no_snapshot"
+
+#: What `reconciliation.current` on the delivery detail has always meant. It
+#: is NOT a comparison of the stored snapshot with a live evaluation.
+CURRENT_FIELD_MEANING = (
+    "`current` reports only whether recorded analyst finding-decisions have "
+    "delivery processing (promotion and reconciliation) outstanding. It does "
+    "not compare the stored snapshot with the reviews written since.")
+
+
+async def status_attribution(db, intake_id, *, snapshot=None,
+                             live_result: Optional[Dict[str, Any]] = None
+                             ) -> Dict[str, Any]:
+    """State WHICH evaluation a reconciliation status comes from (2026-11-26).
+
+    The defect this answers: the delivery job stores its snapshot at the end
+    of processing, BEFORE any review exists (verification is deferred to the
+    review cycle), and nothing the cycle does writes another. A reader shown
+    that snapshot's `passed: true` could not tell it from "passes now" - while
+    the review-cycle gate, which evaluates live, was refusing the delivery.
+
+    READ-ONLY and additive: it changes no check, no gate, no stored snapshot.
+
+    For a status served from a stored snapshot it names the snapshot (id,
+    sequence, trigger, time) and re-asks, live, the two questions whose
+    answers move when reviews are written: how many reviews exist over the
+    delivery's promoted entities, and how many default-routed ones are not
+    adjudicated (the same statement the adjudication check runs). It does NOT
+    run the full reconciliation (158 s measured on a 24,589-record delivery),
+    so `passed_now` is:
+
+        False  a check re-asked live fails now - whatever the snapshot says
+        None   NOT ESTABLISHED: nothing re-asked fails, the rest was not re-run
+        True   only for a full live evaluation (`live_result`)
+    """
+    from datetime import datetime, timezone
+
+    evaluated_at = datetime.now(timezone.utc).isoformat()
+    if live_result is not None:
+        verification = (live_result.get("dimensions") or {}).get("verification") or {}
+        failed = [c["check"] for c in live_result.get("failed_checks") or []]
+        return {
+            "status_source": SOURCE_LIVE, "evaluated_at": evaluated_at,
+            "snapshot": None, "live_checks_evaluated": "all",
+            "live_failed_checks": failed,
+            "passed_now": bool(live_result.get("passed")),
+            "reviews": {"at_snapshot": None, "now": verification.get("reviews")},
+            "default_routed_unadjudicated": {
+                "at_snapshot": None, "now": verification.get("default_unadjudicated")},
+            "snapshot_predates_review_activity": None,
+            "current_field_meaning": CURRENT_FIELD_MEANING,
+            "statement": (
+                f"Every check was evaluated live at {evaluated_at}; no stored "
+                f"snapshot was used. Result: "
+                f"{'passed' if live_result.get('passed') else 'NOT passed'}."),
+        }
+
+    reviews_now = await _reviews_of_promoted(db, intake_id)
+    unadjudicated_now = await default_routed_unadjudicated(db, intake_id)
+    live_failed = [ADJUDICATION_CHECK] if unadjudicated_now else []
+    stored_reviews = stored_unadjudicated = None
+    snapshot_view = None
+    if snapshot is not None:
+        verification = (snapshot.dimensions or {}).get("verification") or {}
+        stored_reviews = verification.get("reviews")
+        stored_unadjudicated = verification.get("default_unadjudicated")
+        taken_at = snapshot.created_at.isoformat() if snapshot.created_at else None
+        snapshot_view = {
+            "id": str(snapshot.id), "sequence": snapshot.sequence,
+            "trigger": snapshot.trigger, "created_at": taken_at,
+            "passed": bool(snapshot.passed)}
+    # Inferred from the COUNTS differing, not from timestamps.
+    predates = None
+    if snapshot is not None:
+        predates = bool(
+            (stored_reviews is not None and stored_reviews != reviews_now)
+            or (stored_unadjudicated is not None and stored_unadjudicated != unadjudicated_now)
+            or (stored_unadjudicated is None and unadjudicated_now > 0))
+
+    if snapshot is None:
+        statement = "No reconciliation snapshot is stored for this delivery."
+    else:
+        statement = (
+            f"Stored snapshot {snapshot.sequence} ({snapshot.trigger}, taken "
+            f"{taken_at}) recorded "
+            f"{'a pass' if snapshot.passed else 'a failure'}.")
+    if unadjudicated_now:
+        statement += (
+            f" Evaluated live at {evaluated_at}: {_adjudication_detail(unadjudicated_now)}, "
+            f"so '{ADJUDICATION_CHECK}' does NOT pass now. The count covers every "
+            f"review of an entity this delivery promoted to, whichever delivery the "
+            f"review was made for - the scope the check itself uses.")
+    else:
+        statement += (
+            f" Evaluated live at {evaluated_at}: no default-routed review awaits "
+            f"adjudication. The other checks were not re-run; whether the delivery "
+            f"passes now is not established by this read.")
+    if predates:
+        statement += (" The stored snapshot predates review activity "
+                      f"(reviews then {stored_reviews}, now {reviews_now}).")
+    return {
+        "status_source": SOURCE_SNAPSHOT if snapshot is not None else SOURCE_NONE,
+        "evaluated_at": evaluated_at,
+        "snapshot": snapshot_view,
+        "live_checks_evaluated": [ADJUDICATION_CHECK],
+        "live_failed_checks": live_failed,
+        "passed_now": False if live_failed else None,
+        "reviews": {"at_snapshot": stored_reviews, "now": reviews_now},
+        "default_routed_unadjudicated": {
+            "at_snapshot": stored_unadjudicated, "now": unadjudicated_now},
+        "snapshot_predates_review_activity": predates,
+        "current_field_meaning": CURRENT_FIELD_MEANING,
+        "statement": statement,
     }
 
 
