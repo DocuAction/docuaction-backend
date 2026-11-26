@@ -29,6 +29,7 @@ import time
 import uuid
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -71,7 +72,8 @@ class _World:
         async def _get(url, params=None, headers=None, timeout=None, source="UNSPECIFIED"):
             world.calls.append((source, dict(params or {})))
             request = httpx.Request("GET", url)
-            if "npiregistry.cms.hhs.gov" in url:
+            target = urlsplit(url)                     # the exact host and path - never a substring of the URL
+            if target.hostname == "npiregistry.cms.hhs.gov":
                 npi = str(params["number"])
                 name = world.nppes_name.get(npi, world.names.get(npi, ""))
                 return httpx.Response(200, request=request, json={"result_count": 1, "results": [{
@@ -81,10 +83,10 @@ class _World:
                                    "city": "Testville", "state": "MA", "postal_code": "02101",
                                    "country_code": "US"}],
                     "taxonomies": [{"code": "261QM1300X", "desc": "Clinic/Center", "primary": True}]}]})
-            if "api.sam.gov" in url:
+            if target.hostname == "api.sam.gov":
                 if world.sam_api == "not_routing":
                     return httpx.Response(404, request=request, content=b"")      # what api.sam.gov serves
-                if "/exclusions" in url:
+                if target.path == "/entity-information/v4/exclusions":
                     return httpx.Response(200, request=request, json={"totalRecords": 0, "excludedEntity": []})
                 name = params.get("legalBusinessName", "")
                 return httpx.Response(200, request=request, json={"totalRecords": 1, "entityData": [{
