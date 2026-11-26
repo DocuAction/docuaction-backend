@@ -236,8 +236,13 @@ def processing_outcome(*, job_state: Optional[str], job_stage: Optional[str],
 
 
 def _result(value: str, basis, detail: str, **extra) -> Dict[str, Any]:
+    # `classification_may_continue` is stated explicitly on every outcome built
+    # from 2026-11-26: False unless the one adjudication-only branch sets True.
+    # Outcomes stored before then (frozen report datasets) do not carry the key;
+    # readers must treat its ABSENCE as "not stated" - never as permission - and
+    # keep the wording those reports were issued with.
     out = {"value": value, "code": OUTCOME_CODES[value], "detail": detail,
-           "basis": basis}
+           "basis": basis, "classification_may_continue": False}
     out.update(extra)
     return out
 

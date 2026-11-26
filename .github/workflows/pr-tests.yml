@@ -242,6 +242,7 @@ jobs:
             tests/test_review_cycle_batch_gate_characterization_2026_11_26.py \
             tests/test_reconciliation_status_attribution_2026_11_26.py \
             tests/test_review_cycle_open_adjudication_2026_11_26.py \
+            tests/test_delivery_report_adjudication_open_wording_2026_11_26.py \
             tests/test_deferred_disposition_processing_2026_11_18.py \
             tests/test_disposition_followups_schema_2026_11_19.py \
             tests/test_refused_correction_leaves_no_decision_2026_11_19.py \
