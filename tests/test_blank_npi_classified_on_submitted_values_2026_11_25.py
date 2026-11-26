@@ -586,3 +586,170 @@ async def test_remaining_the_anchored_single_record_review_still_refuses_it(worl
     entity = await w.db.get(reg.TefcaRegEntity, w.entities[0])
     with pytest.raises(ValueError, match="does not match the registered"):
         await rs.run_review(w.db, entity, source_record_id=w.cur_b[w.refs[0]].source_record_id)
+
+
+# ═══ the shared entity is left as it is (owner decision on #249) ═════════════════════════════════════════════════════
+#
+#   "preserve the shared entity's status and keep evidence in the review snapshot without appending it to shared
+#    entity evidence. Treat this as correction of classification on original submitted values, not authorization to
+#    change RULE-006 scope."
+
+async def _entity_state(db, entity_ids):
+    """What a review can write about an ENTITY: its status, and its per-entity verification (marker) rows."""
+    entities = {str(e): (await db.get(reg.TefcaRegEntity, e)).verification_status for e in entity_ids}
+    markers = sorted((str(v.entity_id), v.source, v.verification_status, v.review_id)
+                     for v in (await db.execute(select(reg.TefcaVerification).where(
+                         reg.TefcaVerification.entity_id.in_(list(entity_ids))))).scalars().all())
+    return entities, markers
+
+
+@pytest.mark.parametrize("forced_bucket", [None, "B1"])
+async def test_the_shared_entitys_status_and_marker_rows_are_untouched(world, monkeypatch, forced_bucket):
+    """All four variants - as the rules classify them, and with the rules engine forced to B1 (the bucket that
+    would mark an entity verified). Before and after: the entity's verification status and its marker rows are
+    identical. The review exists with its bucket, anchored to the delivered record. A record that submitted its
+    NPI (delivery A, verified next by the same writer) still gets its entity status and marker written as before."""
+    w = world
+    if forced_bucket:
+        from app.tefca_registry.bucket_classifier import BucketClassifier
+        from test_mandatory_source_parity_2026_11_11 import _cls
+        monkeypatch.setattr(BucketClassifier, "classify", lambda self, results, rules=None: _cls(forced_bucket))
+    # Delivery A holds the same four organisations, each submitting the NPI the registry holds. One writer call
+    # serves one delivery, so A is verified right after B, by the same writer, further down.
+    status_before, markers_before = await _entity_state(w.db, w.entities)
+    assert set(status_before.values()) == {"not_verified"} and markers_before == []
+
+    res_b = await ap.verify_and_classify(w.db, list(w.refs), intake_id=w.intake_b)
+
+    assert res_b["verified"] == 4 and res_b["classified_on_submitted_values"] == w.refs
+    assert await _entity_state(w.db, w.entities) == (status_before, markers_before)       # identical
+    assert res_b["entities_marked_verified"] == 0
+    for outcome, ref in zip(res_b["outcomes"], w.refs):
+        assert outcome["entity_status_preserved"] is True and outcome["entity_marked_verified"] is False
+        review = await _review_of(w.db, outcome["review_id"])
+        assert review.classification_bucket == outcome["bucket"] == (forced_bucket or outcome["bucket"])
+        assert review.source_record_id == w.cur_b[ref].source_record_id
+        assert review.verification_results["submitted_values_basis"]["entity"].startswith("the shared entity")
+        assert review.verification_results["dimensions"]             # its own evidence snapshot is there
+    if forced_bucket:
+        assert {o["bucket"] for o in res_b["outcomes"]} == {"B1"}
+
+    # A record that submitted its NPI (delivery A, same entities): status and marker written exactly as before.
+    res_a = await ap.verify_and_classify(w.db, list(w.refs), intake_id=w.intake_a)
+    status_after, markers_after = await _entity_state(w.db, w.entities)
+    expected = "verified" if forced_bucket == "B1" else "in_review"
+    assert all(o["entity_status_preserved"] is False for o in res_a["outcomes"])
+    if forced_bucket == "B1":
+        expected_status = {str(e): ("verified" if o["entity_marked_verified"] else "in_review")
+                           for e, o in zip(w.entities, res_a["outcomes"])}
+    else:
+        expected_status = {str(e): expected for e in w.entities}
+    assert status_after == expected_status
+    assert sorted(mk[3] for mk in markers_after) == sorted(o["review_id"] for o in res_a["outcomes"])
+    assert {(mk[1], mk[2]) for mk in markers_after} == {("rce_arc_pipeline", "verified")}
+
+
+async def test_the_review_cycle_still_links_a_member_whose_entity_was_left_as_it_is(world, monkeypatch):
+    import app.tefca_registry.processing_controls as pc
+    import app.tefca_registry.qhin_sampling as qs
+    import app.tefca_registry.rce.reconciliation as rec
+    from app.tefca_registry.bucket_classifier import BucketClassifier
+    from test_mandatory_source_parity_2026_11_11 import _cls
+    w = world
+    monkeypatch.setattr(BucketClassifier, "classify", lambda self, results, rules=None: _cls("B1"))
+    sample = reg.ReviewSample(id=uuid.uuid4(), sample_name="synthetic preserved-status sample",
+                              review_type="quarterly", population_size=4, sample_size=4, confidence_level=0.95,
+                              margin_of_error=0.05, proportion=0.5)
+    sample_id = sample.id
+    w.db.add(sample)
+    await w.db.flush()
+    for entity in w.entities:
+        w.db.add(reg.SampleEntity(id=uuid.uuid4(), sample_id=sample_id, entity_id=entity, stratum="s"))
+    await w.db.flush()
+
+    async def _enter(_db):
+        return None
+
+    async def _reconciled(_db, _intake):
+        return {"passed": True, "checks": []}
+
+    async def _plan(_db, intake_id, **_kw):
+        return {"sample_id": str(sample_id), "already_finalized": True, "sample_size": 4, "population_size": 4,
+                "membership_count": 4}
+    monkeypatch.setattr(pc, "enter_processing", _enter)
+    monkeypatch.setattr(rec, "reconcile_delivery", _reconciled)
+    monkeypatch.setattr(qs, "finalize_plan", _plan)
+    monkeypatch.setattr("app.Tefca.entity_resolution.resolve_entity", await _real_resolver(w.db))
+    before = await _entity_state(w.db, w.entities)
+
+    result = await rc._create_review_cycle(
+        w.db, w.intake_b, user=SimpleNamespace(id=None, email="cycle@synthetic-test.docuaction.invalid"))
+
+    assert result["linked_this_call"] == 4 and result["remaining"] == 0 and result["complete"] is True
+    members = (await w.db.execute(select(reg.SampleEntity).where(
+        reg.SampleEntity.sample_id == sample_id))).scalars().all()
+    assert all(mbr.review_id and mbr.review_status == "in_review" for mbr in members)     # the MEMBER is linked
+    for mbr in members:
+        review = await _review_of(w.db, mbr.review_id)
+        assert review.classification_bucket == "B1" and review.entity_id == mbr.entity_id
+        assert review.sample_id == sample_id
+    assert await _entity_state(w.db, w.entities) == before          # ... and the ENTITY is as it was
+
+
+async def test_reconciliation_still_sees_these_reviews_as_carrying_evidence(world, monkeypatch):
+    """The marker row is one of two things `reconciliation` accepts as "this review carries evidence"; the other is
+    the review's own `dimensions` snapshot, which these reviews have. Not writing the marker leaves that count at
+    zero for them."""
+    from sqlalchemy import text as sql
+    w = world
+    res_b = await ap.verify_and_classify(w.db, list(w.refs), intake_id=w.intake_b)
+    ids = [o["review_id"] for o in res_b["outcomes"]]
+    without_evidence = (await w.db.execute(sql(
+        "SELECT count(*) FROM review_records r WHERE r.review_id = ANY(:ids) "
+        "AND (r.verification_results IS NULL OR r.verification_results->'dimensions' IS NULL "
+        "     OR jsonb_array_length(r.verification_results->'dimensions') = 0) "
+        "AND NOT EXISTS (SELECT 1 FROM tefca_verifications v WHERE v.review_id = r.review_id "
+        "                AND v.verification_status IN ('verified', 'not_found', 'excluded'))"),
+        {"ids": ids})).scalar()
+    assert without_evidence == 0
+
+
+async def test_this_change_touches_no_rule_no_rule_component_and_not_the_scope_of_rule_006(world, monkeypatch):
+    """"... not authorization to change RULE-006 scope." The stored rule rows are identical before and after a
+    classification call; the rule components and what each composes to are what the rule modules define, and those
+    modules know nothing of this change; and the writer hands the classifier the rule set it was given."""
+    import inspect
+    from app.tefca_registry import bucket_classifier, rule_configuration
+    w = world
+
+    async def _rule_rows():
+        rows = (await w.db.execute(select(reg.ReviewRule).order_by(
+            reg.ReviewRule.rule_code, reg.ReviewRule.version))).scalars().all()
+        return [{c.name: getattr(row, c.name) for c in reg.ReviewRule.__table__.columns} for row in rows]
+
+    await ap._rule_set(w.db)                                        # seed the shipped rules first, if not there
+    rows_before = await _rule_rows()
+    composed_before = {name: json.dumps(rule_configuration.compose({name}), sort_keys=True, default=str)
+                       for name in ("treatment_b4_onc_scope", "treatment_b4_owner_adopted")}
+    assert rows_before
+    seen = []
+    real_classify = bucket_classifier.BucketClassifier.classify
+
+    def _spy(self, results, rules=None):
+        seen.append(json.dumps(rules, sort_keys=True, default=str))
+        return real_classify(self, results, rules=rules)
+    monkeypatch.setattr(bucket_classifier.BucketClassifier, "classify", _spy)
+    effective = json.dumps(await ap._rule_set(w.db), sort_keys=True, default=str)
+
+    res = await ap.verify_and_classify(w.db, list(w.refs), intake_id=w.intake_b)
+
+    assert res["classified_on_submitted_values"] == w.refs
+    assert await _rule_rows() == rows_before                         # no rule row written, changed or retired
+    assert set(seen) == {effective}                                  # the classifier got the effective rule set
+    assert {name: json.dumps(rule_configuration.compose({name}), sort_keys=True, default=str)
+            for name in composed_before} == composed_before
+    # Under the shipped rules RULE-006 does not exist for these records: the sole-purpose Treatment one is B3.
+    assert {o["rule_code"] for o in res["outcomes"]} == {"DEFAULT-UNMATCHED"}
+    for module in (bucket_classifier, rule_configuration):
+        source = inspect.getsource(module)
+        assert "submitted_values" not in source and "BLANK_NPI" not in source, module.__name__

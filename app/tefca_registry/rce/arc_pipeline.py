@@ -957,6 +957,8 @@ SUBMITTED_VALUES_BASIS = {
     "npi_keyed_sources": "not checked: no NPI was submitted",
     "evidence": ("held in this review's snapshot only; not appended to the entity evidence store, whose rows "
                  "carry no record key"),
+    "entity": ("the shared entity's verification status and its pipeline marker were not written for this review; "
+               "they describe the entity, whose NPI-based checks belong to the record that submitted that NPI"),
 }
 
 REFUSAL_GATHERED_WITH_REGISTRY_NPI = (
@@ -1456,17 +1458,26 @@ async def verify_and_classify(
                 classification_rationale=rationale,
             ))
 
-            db.add(reg.TefcaVerification(
-                id=uuid.uuid4(), entity_id=entity_uuid, review_id=review_id,
-                source="rce_arc_pipeline",
-                lookup_identifier=ref[:50],
-                verification_status="verified",
-                detail=(f"D1-D6 assembled; classified {classification.bucket} by "
-                        f"{rule_code} v{rule_version}; routed to tier {tier}."),
-                data_source_label="RCE canonical registry",
-            ))
+            # THE SHARED ENTITY IS LEFT AS IT IS for a record classified on its submitted values (owner decision
+            # 2026-11-25: "preserve the shared entity's status"). The review above is about ONE delivered record,
+            # verified against a view of the entity without its NPI. The entity's `verification_status` and the
+            # per-entity pipeline marker row say something about the ENTITY - the marker literally "verified" - and
+            # the entity's NPI-based checks belong to the record that submitted that NPI. Neither is written. The
+            # review itself, its bucket, its link to the delivered record and its evidence snapshot are unaffected,
+            # and the review cycle links the member through the review, not through either of these.
+            if not _npi_withheld:
+                db.add(reg.TefcaVerification(
+                    id=uuid.uuid4(), entity_id=entity_uuid, review_id=review_id,
+                    source="rce_arc_pipeline",
+                    lookup_identifier=ref[:50],
+                    verification_status="verified",
+                    detail=(f"D1-D6 assembled; classified {classification.bucket} by "
+                            f"{rule_code} v{rule_version}; routed to tier {tier}."),
+                    data_source_label="RCE canonical registry",
+                ))
 
-            entity_row = await db.get(reg.TefcaRegEntity, entity_uuid) if entity_uuid else None
+            entity_row = (await db.get(reg.TefcaRegEntity, entity_uuid)
+                          if entity_uuid and not _npi_withheld else None)
             if entity_row is not None:
                 # The REVIEW TIER, stored separately from the determination. A
                 # verification_status of in_review says who must look; it does not
@@ -1496,10 +1507,14 @@ async def verify_and_classify(
                 "assigned_role": TIER_ROLE[tier],
                 "prior_risk_not_cleared": prior_risk,
                 "verification_claim": claim,
+                # False for a record classified on its submitted values whatever its bucket: the shared entity's
+                # status was not written for it (`entity_status_preserved`).
                 "entity_marked_verified": bool(
-                    classification.bucket == "B1" and not withhold_verified),
+                    classification.bucket == "B1" and not withhold_verified and not _npi_withheld),
+                "entity_status_preserved": bool(_npi_withheld),
                 "verification_completeness": _vcomp.describe(
-                    "verified" if classification.bucket == "B1" and not withhold_verified
+                    "verified" if (classification.bucket == "B1" and not withhold_verified
+                                   and not _npi_withheld)
                     else "in_review",
                     _vcomp.completeness({"classifier_input": verification_results})),
                 "dimensions": {d["dimension"]: d["disposition"]
