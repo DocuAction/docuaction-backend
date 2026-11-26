@@ -310,11 +310,11 @@ PRECHECK_LIST_CAP = 500
 #: work anyway, and the client's re-sends then ran the same read several times at once (five overlapping
 #: executions of 419-489 s each were logged). The binding limit observed was tighter than the gateway's: an
 #: 800-member page (~166 s) was RE-SENT by the browser after ~60 s without a response (two executions, 224 s and
-#: 184 s, logged 60 s apart). A page must return well inside a minute: default 150 (~36 s), maximum 250 (~56 s).
+#: 184 s, logged 60 s apart; ~0.23-0.28 s per member under that overlap). A page must return well inside a minute: default 150 (~36 s alone), maximum 180 (~42 s alone; ~56 s at the slower overlapped rate).
 #: Page size never changes what is checked: every member is examined by the same `_identity_precheck_detail`, and
 #: `next_after_entity_id` walks the whole frame.
 PRECHECK_DEFAULT_LIMIT = 150
-PRECHECK_MAX_LIMIT = 250
+PRECHECK_MAX_LIMIT = 180
 
 OUTCOME_REVIEWABLE = "reviewable"
 OUTCOME_NOT_REVIEWABLE = "not_reviewable"

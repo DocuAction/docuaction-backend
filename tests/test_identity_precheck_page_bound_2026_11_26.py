@@ -15,6 +15,8 @@ from app.tefca_registry import workflow_routes as wr
 #: logged 60 s apart). App Service's own front-end timeout is 230 s. Measured DEV cost model below.
 GATEWAY_TIMEOUT_S = 60
 FIXED_S, PER_MEMBER_S = 6.0, 0.20
+#: Slower rate seen while executions overlapped (800 members in 184-224 s).
+PER_MEMBER_SLOW_S = 0.28
 
 
 def _route_limit_param():
@@ -30,7 +32,8 @@ def _bound(field, name):
 
 def test_service_bounds_fit_the_gateway_timeout():
     assert 1 <= rc.PRECHECK_DEFAULT_LIMIT <= rc.PRECHECK_MAX_LIMIT
-    assert FIXED_S + PER_MEMBER_S * rc.PRECHECK_MAX_LIMIT < GATEWAY_TIMEOUT_S
+    # the maximum must fit even at the slower, loaded rate
+    assert FIXED_S + PER_MEMBER_SLOW_S * rc.PRECHECK_MAX_LIMIT < GATEWAY_TIMEOUT_S
     # the default leaves a quarter of the limit as headroom for a loaded instance
     assert FIXED_S + PER_MEMBER_S * rc.PRECHECK_DEFAULT_LIMIT < GATEWAY_TIMEOUT_S * 0.75
 
