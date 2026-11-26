@@ -170,6 +170,15 @@ async def test_candidate_on_the_pinned_edition_is_review_never_exclusion(screene
                                              scope=av.SCOPE_SAM_EXTRACT_EDITION, edition_sha256=NEW)
     assert result["by_outcome"] == {av.OUTCOME_REVIEW_REQUIRED: 3}
     assert {r.disposition for r in await _rows(db, intake_id) if r.sha == NEW} == {"REVIEW"}
+    # The candidate is a work item, not only an evidence row: one OPEN SAM_EXTRACT_CANDIDATE finding per entity on
+    # this delivery's records (the finding writer's failures are caught and logged, so assert it actually ran).
+    from app.tefca_registry.rce.verification_findings import SAM_EXTRACT_CANDIDATE
+    findings = (await db.execute(text(
+        "SELECT count(DISTINCT r.canonical_entity_id) FROM rce_issues i "
+        "JOIN rce_curated_records r ON r.source_record_id = i.source_record_id "
+        "WHERE r.source_intake_id = CAST(:i AS uuid) AND i.issue_type = :t AND i.resolution = 'OPEN'"),
+        {"i": str(intake_id), "t": SAM_EXTRACT_CANDIDATE})).scalar()
+    assert findings == 3
 
 
 def test_edition_candidate_query_matches_on_the_recorded_hash_and_deduplicates():
