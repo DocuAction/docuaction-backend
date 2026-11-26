@@ -526,12 +526,13 @@ async def test_frame_consistency_is_not_hidden_by_an_already_reviewed_record(rol
 
 # ═══ the pre-check and a member whose record is already reviewed (second delta review of #249) ══════════════════════
 
-async def test_the_precheck_says_a_member_will_be_linked_to_its_existing_review_not_that_it_has_no_reference(
+async def test_the_precheck_reports_an_already_reviewed_member_as_the_cycle_would_never_as_no_reference(
         rolled_back_db, monkeypatch):
-    """A member that is still in the frame through a record with no delivered reference, whose OTHER record already
-    has its own review classified on submitted values: the cycle will link the member to that review. The pre-check
-    says exactly that (reviewable, named, with the review id) instead of "no delivered reference"; and when that
-    review belongs to another sample it says why it will not be linked, with a kind of its own."""
+    """PARITY with the cycle (2026-11-26). A member still in the frame through a record with no delivered reference,
+    whose OTHER record already has a review classified on submitted values. The cycle would NOT link it - the entity
+    has two promoted, not-HELD records, and the review was not created by a cycle of this delivery - so the
+    pre-check does not say "will link". It reports the member as already reviewed, with the review id as a key of
+    its own and the reason the cycle would give; never "no delivered reference"."""
     db = rolled_back_db
     delivery = await _Delivery().build(db, monkeypatch)
     await _assess_on(db, delivery, "2026-11-09")
@@ -545,24 +546,17 @@ async def test_the_precheck_says_a_member_will_be_linked_to_its_existing_review_
     await db.flush()
 
     page = await _page(db, delivery)
-    assert page["counts"]["will_link_existing_submitted_values_review"] == 1
-    assert page["will_link_existing_submitted_values_review"] == [
-        {"entity_id": str(entity), "entity_ref": low, "existing_review": review_id}]
-    listed = {n["entity_id"]: n for n in page["not_reviewable"]}
-    assert str(entity) not in listed                                    # not "no delivered reference"
+    assert page["counts"]["will_link_existing_submitted_values_review"] == 0
+    assert page["will_link_existing_submitted_values_review"] == []
+    entry = {n["entity_id"]: n for n in page["not_reviewable"]}[str(entity)]
+    assert entry["kind"] == rc.KIND_ALREADY_REVIEWED and entry["existing_review"] == review_id
+    assert entry["not_linked_because"] == rc.WHY_SEVERAL_RECORDS.format(n=2)
+    assert entry["reason"] == rc.NOT_REVIEWABLE_ALREADY_REVIEWED.format(
+        review=review_id, why=rc.WHY_SEVERAL_RECORDS.format(n=2))
+    assert "no delivered reference" not in entry["reason"]
 
-    review = (await db.execute(select(reg.ReviewRecord).where(
-        reg.ReviewRecord.review_id == review_id))).scalars().one()
-    other_sample = reg.ReviewSample(id=uuid.uuid4(), sample_name="synthetic other sample", review_type="weekly",
-                                    population_size=1, sample_size=1, confidence_level=0.95,
-                                    margin_of_error=0.05, proportion=0.5)
-    db.add(other_sample)
-    await db.flush()
-    review.sample_id = other_sample.id
+    # one record again (the other is held): now the reason is the owning cycle - no cycle created this review
+    other_row.record_status = "HELD"
     await db.flush()
     page = await _page(db, delivery)
     assert page["counts"]["will_link_existing_submitted_values_review"] == 0
-    entry = {n["entity_id"]: n for n in page["not_reviewable"]}[str(entity)]
-    assert entry["kind"] == rc.KIND_ALREADY_REVIEWED
-    assert entry["reason"] == rc.NOT_REVIEWABLE_ALREADY_REVIEWED.format(review=review_id, why=rc.WHY_OTHER_SAMPLE)
-    assert "no delivered reference" not in entry["reason"]

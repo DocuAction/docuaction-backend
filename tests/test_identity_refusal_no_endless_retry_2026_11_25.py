@@ -671,7 +671,8 @@ async def test_a_correctly_identified_members_review_is_what_it_was_before(rolle
         assert getattr(linked, field) == getattr(baseline, field), field
     assert linked.entity_id == member and linked.source_record_id == cycle.recs[1].id      # anchored to its record
     ours = {k: v for k, v in linked.verification_results.items()
-            if k not in ("source_intake_id", "queue_source", "sample_id")}
+            if k not in ("source_intake_id", "queue_source", "sample_id",
+                         ap.CREATED_FOR_SAMPLE_KEY)}     # the cycle's bookkeeping and its origin stamp
     assert ours == baseline.verification_results                            # same snapshot, same classifier input
     assert linked.sample_id == cycle.sample_id and baseline.sample_id is None
     assert linked.verification_results["queue_source"] == rc.QUEUE_SOURCE

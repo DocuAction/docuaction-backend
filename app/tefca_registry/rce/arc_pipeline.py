@@ -944,6 +944,9 @@ def anchored_npi_refusal(entity, selected) -> Optional[str]:
 # `BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE`; a delivery assessed earlier is refused exactly as before, so re-running an
 # existing cycle of an earlier delivery classifies nothing new. The date is the owner's to set.
 
+#: `verification_results` key naming the review cycle (sample id) that created a review. See the writer.
+CREATED_FOR_SAMPLE_KEY = "created_for_sample_id"
+
 #: First assessment date the blank-NPI rule applies to. The October delivery's assessment date is 2026-11-08
 #: (D-12), so it stays as it was. OWNER DECISION: confirm or change this date before release.
 BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE = date(2026, 11, 9)
@@ -1045,6 +1048,7 @@ async def verify_and_classify(
     actor: str = "SYSTEM",
     persist_evidence: bool = True,
     assessment_run_id=None,
+    creating_sample_id=None,
 ) -> Dict[str, Any]:
     """Run D1-D6 → B1-B4 → tier routing for a list of entity references.
 
@@ -1429,6 +1433,13 @@ async def verify_and_classify(
                     # Present ONLY when a prior risk signal is uncleared, so
                     # the snapshot shape of every other record is unchanged.
                     **({"prior_risk_not_cleared": prior_risk} if prior_risk else {}),
+                    # WHICH REVIEW CYCLE CREATED THIS REVIEW (2026-11-26), written in the same commit as the
+                    # review itself. Present ONLY when a cycle passed its sample: a review made by the
+                    # supplementary verify route, or by anything else, carries no such key. It is a statement of
+                    # origin and nothing reads it for scoping: `ReviewRecord.sample_id` is still set only when the
+                    # cycle LINKS the review to its member, because reports and queues scope on that column and a
+                    # review must not appear under a sample before its member is linked.
+                    **({CREATED_FOR_SAMPLE_KEY: str(creating_sample_id)} if creating_sample_id else {}),
                     # Present ONLY when the record submitted no NPI and the registry's NPI was withheld (same
                     # shape-preserving contract). Never carries an NPI value.
                     **({"submitted_values_basis": dict(SUBMITTED_VALUES_BASIS)} if _npi_withheld else {}),

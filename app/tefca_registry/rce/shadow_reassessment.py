@@ -709,6 +709,10 @@ async def publish_successors(db, comparison_id, *, user,
             continue
         review_id = await _allocate_review_id(db)
         vr = dict((pred.verification_results or {}) if pred else {})
+        # The predecessor's origin stamp ("created by review cycle X") is not true of this successor, which a
+        # publication created: it is not copied (the predecessor keeps it).
+        from app.tefca_registry.rce.arc_pipeline import CREATED_FOR_SAMPLE_KEY
+        vr.pop(CREATED_FOR_SAMPLE_KEY, None)
         vr["shadow_successor"] = {
             "comparison_id": str(cmp_row.id), "package_hash": cmp_row.package_hash,
             "candidate_rules_hash": cmp_row.candidate_rules_hash,
