@@ -745,6 +745,11 @@ class TestReviewCycleGate:
         monkeypatch.setattr(reconciliation, "reconcile_delivery", not_passed)
         import app.tefca_registry.qhin_sampling as qs
         monkeypatch.setattr(qs, "finalize_plan", must_not_run)
+        # Nothing downstream of the gate may start either: no classification call and no source evidence
+        # gathering (2026-11-26). Both are looked up at call time, so patching the module attribute is enough.
+        import app.tefca_registry.rce.arc_pipeline as ap
+        monkeypatch.setattr(ap, "verify_and_classify", must_not_run)
+        monkeypatch.setattr(ap, "_gather_all_evidence", must_not_run)
 
         audited = []
 
@@ -784,7 +789,8 @@ class TestReviewCycleGate:
             with pytest.raises(review_cycle.CycleRefused) as refused:
                 asyncio.run(review_cycle.create_review_cycle(Db(), spelling, user=User()))
             assert "not passed reconciliation" in str(refused.value)
-            assert drawn == [], "sampling must not run on an unreconciled delivery"
+            assert drawn == [], ("neither sampling, classification nor source evidence gathering may start "
+                                 "on an unreconciled delivery")
             assert any(getattr(r, "action", "") == "review_cycle_refused" for r in audited)
 
         # An id that is not a UUID cannot name a delivery (2026-11-26): it is refused as "No delivery" before
