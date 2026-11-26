@@ -205,6 +205,7 @@ EXCLUSION_CLEAN_SCREEN_STATE = "clear"
 #: (B3-default). Follow-up tracked: add a baseline none_of possible_match
 #: guard to the B1/B2 rules (a behavior change needing its own review round).
 PROPOSED_EXCLUSION_STATES_ENV = "RCE_PROPOSED_EXCLUSION_STATES"
+from app.Tefca import sam_screening as _sam_screening  # noqa: E402 - the run switch's class and wording
 EXCLUSION_POSSIBLE_MATCH_STATE = "possible_match"
 
 
@@ -495,6 +496,12 @@ def dimensions_to_verification_results(evidence: Dict[str, Any]) -> Dict[str, An
                     "dimension": name,
                     "rule_applied": item.get("rule_applied"),
                 }
+                # The live SAM API was switched off for the run: the STATE is the ordinary non-answer
+                # (`unavailable`), which is all the rules and the mandatory-source policy read. One additive key
+                # says why, for labels only. Absent unless the run switch produced this item.
+                if key == "sam_gov" and (item.get("normalized_values") or {}).get(
+                        "failure_class") == _sam_screening.NOT_ATTEMPTED_DISABLED:
+                    sources[key]["not_attempted"] = _sam_screening.LIVE_API_DISABLED_MARKER
 
         # Field-level signals the B2/B3 rules look for.
         if name == "ADDRESS":

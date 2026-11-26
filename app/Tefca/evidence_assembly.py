@@ -722,6 +722,7 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
 
     sam = sources.get("sam_exclusion")
     sam_name = sources.get("sam_name")
+    sam_api_not_attempted = False
     if _ok(sam) and uei:
         d = sam.data or {}
         disposition, note = _sam_disposition(d, by_name=False)
@@ -779,6 +780,8 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
         ))
     else:
         any_unavailable = True
+        sam_api_not_attempted = bool(sam and sam.error) and (
+            sam_screening.classify_failure(sam.error) == sam_screening.NOT_ATTEMPTED_DISABLED)
         items.append(EvidenceItem(
             dimension=dim, source="SAM_GOV", disposition=Disposition.UNAVAILABLE.value,
             note=(sam_screening.sanitize_reason(sam.error) if sam and sam.error else "SAM.gov was not queried."),
@@ -846,11 +849,21 @@ def _dimension_exclusion(entity: Dict[str, Any], profile: ApplicabilityProfile,
             True,
         )
     elif any_unavailable:
-        disposition, rationale, needs = (
-            Disposition.UNAVAILABLE,
-            "One or more of the three controls could not be reached. Not a finding.",
-            True,
-        )
+        # Same disposition either way. The words differ only when the live SAM API was switched off for the run:
+        # that control was not asked, which is not the same as not being reachable.
+        others_unreached = [i.source for i in items
+                            if i.disposition == Disposition.UNAVAILABLE.value and i.dimension == dim
+                            and i.source in ("OIG_LEIE", "CMS_REVOCATION")]
+        if not sam_api_not_attempted:
+            rationale = "One or more of the three controls could not be reached. Not a finding."
+        elif others_unreached:
+            rationale = (f"The live SAM.gov API was {sam_screening.LIVE_API_DISABLED_MARKER}; "
+                         f"{', '.join(sorted(set(others_unreached)))} could not be reached. Not a finding and "
+                         f"not a clearance.")
+        else:
+            rationale = (f"The live SAM.gov API was {sam_screening.LIVE_API_DISABLED_MARKER}; the other controls "
+                         f"answered and are reported separately above. Not a finding and not a clearance.")
+        disposition, needs = Disposition.UNAVAILABLE, True
     elif any_insufficient:
         disposition, rationale, needs = (
             Disposition.INSUFFICIENT_EVIDENCE,

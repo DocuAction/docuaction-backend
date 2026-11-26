@@ -416,6 +416,18 @@ def _iso(dt: Any) -> str:
     return dt.isoformat() if isinstance(dt, datetime) else _s(dt)
 
 
+#: The live SAM API was switched off for the run (`sam_screening.LIVE_API_DISABLED_ENV`). Said in the cell so
+#: "UNAVAILABLE" is never read as a missing key, an outage or a clearance.
+SAM_API_NOT_ATTEMPTED = ("live SAM.gov API not attempted - disabled for this run; not a missing key, not an "
+                         "outage, not a screening result")
+
+
+def _sam_api_not_attempted(item: Mapping[str, Any]) -> bool:
+    from app.Tefca import sam_screening
+    return (item.get("source") == "SAM_GOV" and (item.get("normalized_values") or {}).get(
+        "failure_class") == sam_screening.NOT_ATTEMPTED_DISABLED)
+
+
 def _evidence_cell(kind: str, row: Any, limitation: str = "", *, interpret: bool = True) -> str:
     """The source's ACTUAL recorded status, its interpreted classifier state
     where that differs, when it was retrieved, and - for PECOS - the recorded
@@ -434,7 +446,10 @@ def _evidence_cell(kind: str, row: Any, limitation: str = "", *, interpret: bool
     if interpret and state and state.lower() != text.lower():
         text += f" -> {state}"
     when = _s(row.retrieved_at or row.generation_timestamp or _iso(row.created_at))
-    text += f" | retrieved {when[:10]}" if when else ""
+    if _sam_api_not_attempted(item):
+        text += f" ({SAM_API_NOT_ATTEMPTED})"       # nothing was asked, so there is no retrieval date to print
+    else:
+        text += f" | retrieved {when[:10]}" if when else ""
     if kind == "pecos" and _s(row.disposition).upper() not in ("PASS", "CORROBORATED"):
         note = _s(row.note).strip()
         if note:
@@ -470,6 +485,8 @@ def _review_snapshot_screen_cell(rev: Any, source: str) -> str:
             # The same caveats the ordinary cells attach, so a quoted disposition never reads stronger here.
             if ap.is_registration_only_sam_miss(dimension.get("dimension"), item):
                 text += (" (SAM registration-only search; the exclusion question was NOT screened)")
+            if _sam_api_not_attempted(item):
+                text += f" ({SAM_API_NOT_ATTEMPTED})"
             if source == "SAM_EXTRACT_SUPPLEMENTARY":
                 orig = item.get("original_values") if isinstance(item.get("original_values"), dict) else {}
                 disp = _s(item.get("disposition")).upper()

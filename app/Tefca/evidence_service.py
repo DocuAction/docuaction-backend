@@ -304,10 +304,17 @@ class EvidenceService:
             # that `_safe_lookup` swallowed, so the org-level check silently
             # never ran and D3 fell through to INSUFFICIENT_EVIDENCE for every
             # NPI-less entity — a check that appeared wired up and was not.
+            from app.Tefca import sam_screening as _sam_screening
+
+            async def _no_sam_name_search():
+                # The run switch: the extra SAM registration search by name is not made. With no `sam_name`
+                # result, D3 reports the combined SAM check's own "not attempted" answer for this entity.
+                return None
             leie_org, sam_name = await asyncio.gather(
                 self._safe_lookup(self.manager.leie.lookup_by_name,
                                   last="", first="", org=org_name),
-                self._safe_lookup(self.manager.sam.lookup_by_name, org_name),
+                (_no_sam_name_search() if _sam_screening.live_api_attempts_disabled()
+                 else self._safe_lookup(self.manager.sam.lookup_by_name, org_name)),
                 return_exceptions=False,
             )
             if leie_org is not None:

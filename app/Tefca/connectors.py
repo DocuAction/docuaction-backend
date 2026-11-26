@@ -1079,6 +1079,9 @@ class SAMGovConnector:
         """Verify registration by UEI. Registration is a different question from exclusion;
         NPI search is documented for the v4 exclusions API but not used or verified here."""
         qp = {"uei": uei}
+        if sam_screening.live_api_attempts_disabled():       # the run switch: checked BEFORE the key, no request
+            return SourceResult.unavailable(
+                "SAM_GOV", sam_screening.LIVE_API_DISABLED_REASON, qp, self.API_VERSION)
         if not self.api_key:
             return SourceResult.unavailable(
                 "SAM_GOV", "SAM_GOV_API_KEY not set (register a free key at sam.gov)", qp, self.API_VERSION
@@ -1146,6 +1149,9 @@ class SAMGovConnector:
         a real answer, not a failure: the caller must not treat it as verified.
         """
         qp = {"legalBusinessName": legal_name}
+        if sam_screening.live_api_attempts_disabled():       # the run switch: checked BEFORE the key, no request
+            return SourceResult.unavailable(
+                "SAM_GOV", sam_screening.LIVE_API_DISABLED_REASON, qp, self.API_VERSION)
         if not self.api_key:
             return SourceResult.unavailable(
                 "SAM_GOV", "SAM_GOV_API_KEY not set (register a free key at sam.gov)",
@@ -1213,6 +1219,9 @@ class SAMGovConnector:
         never be collapsed into "clear".
         """
         qp = {k: v for k, v in (("ueiSAM", uei), ("q", legal_name)) if v}
+        if sam_screening.live_api_attempts_disabled():       # the run switch: checked BEFORE the key, no request
+            return SourceResult.unavailable(
+                "SAM_GOV_EXCLUSIONS", sam_screening.LIVE_API_DISABLED_REASON, qp, "v4")
         if not self.api_key:
             return SourceResult.unavailable(
                 "SAM_GOV_EXCLUSIONS",
@@ -1292,6 +1301,9 @@ class SAMGovConnector:
         presenting a half-answer as complete.
         """
         qp = {k: v for k, v in (("uei", uei), ("legal_name", legal_name)) if v}
+        if sam_screening.live_api_attempts_disabled():       # the run switch: neither leg is asked
+            return SourceResult.unavailable(
+                "SAM_GOV", sam_screening.LIVE_API_DISABLED_REASON, qp, self.API_VERSION)
         reg = (await self.lookup_by_uei(uei)) if uei else \
               (await self.lookup_by_name(legal_name))
         exc = await self.check_exclusions(uei=uei, legal_name=legal_name)
@@ -1354,7 +1366,10 @@ class SAMGovConnector:
         )
 
     async def probe(self) -> bool:
-        """Health probe: one bounded registration query; False without a key."""
+        """Health probe: one bounded registration query; False without a key, and False - with no request -
+        while the run switch is on (`health_check` says which)."""
+        if sam_screening.live_api_attempts_disabled():
+            return False
         if not self.api_key:
             return False
         try:
@@ -1876,7 +1891,11 @@ class SourceConnectorManager:
         # which points at the wrong fix, and did. Say which of the two states
         # this actually is.
         sam_note = "Federal Registration — GSA"
-        if not getattr(self.sam, "api_key", ""):
+        if sam_screening.live_api_attempts_disabled():
+            # Not probed and not a fault: the live API is switched off for this run. Never "requires a key".
+            sam_note += (f" ({sam_screening.LIVE_API_DISABLED_MARKER}; "
+                         f"{sam_screening.LIVE_API_DISABLED_ENV} is set; the configured key is unchanged)")
+        elif not getattr(self.sam, "api_key", ""):
             sam_note += " (requires SAM_GOV_API_KEY)"
         else:
             sam_note += (" (key configured; if UNAVAILABLE, api.sam.gov is not "

@@ -125,7 +125,9 @@ async def _run(b):
             bucket=review.classification_bucket, rule=review.classification_rule,
             rule_version=review.classification_rule_version, rationale=review.classification_rationale,
             extract_row=evidence.get("SAM_EXTRACT_SUPPLEMENTARY"), api_row=evidence.get("SAM_GOV"),
-            sources=sources)
+            sources=sources,
+            d3_rationale=next((d.get("rationale") for d in review.verification_results.get("dimensions") or []
+                               if isinstance(d, dict) and d.get("dimension") == "EXCLUSION_REVOCATION"), None))
     return out
 
 

@@ -124,9 +124,17 @@ def completeness(verification_results: Optional[Dict[str, Any]]) -> Dict[str, An
     outcomes = {name: source_outcome(raw) for name, raw in sources.items()}
     for control in EXCLUSION_CONTROLS:
         outcomes.setdefault(control, NOT_EVALUATED)
+    def _label(name, outcome):
+        # A source deliberately not asked says so; its OUTCOME stays UNAVAILABLE (still incomplete, never a pass).
+        raw = sources.get(name)
+        if isinstance(raw, dict) and raw.get("not_attempted"):
+            from app.Tefca.sam_screening import LIVE_API_DISABLED_LABEL
+            return LIVE_API_DISABLED_LABEL
+        return OUTCOME_DISPLAY[outcome]
+
     incomplete = [{"source": name, "outcome": outcome,
                    "label": SOURCE_DISPLAY.get(name, name),
-                   "outcome_label": OUTCOME_DISPLAY[outcome]}
+                   "outcome_label": _label(name, outcome)}
                   for name, outcome in sorted(outcomes.items()) if outcome in MISSING]
     return {
         "state": INCOMPLETE if incomplete else COMPLETE,

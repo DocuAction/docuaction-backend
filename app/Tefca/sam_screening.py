@@ -60,6 +60,9 @@ def matching_scope(extract_date, identifiers_tried):
 
 # ── Why a check was incomplete ───────────────────────────────────────────────
 NO_KEY = "NO_KEY"
+#: The live SAM API was deliberately NOT ASKED (the run switch below). Not a key problem, not an outage, and
+#: never an answer: the check is incomplete exactly as it is when the API does not route.
+NOT_ATTEMPTED_DISABLED = "NOT_ATTEMPTED_DISABLED"
 NOT_ROUTING = "NOT_ROUTING"            # api.sam.gov answers an empty 404: the request never reached the API
 AUTH_REJECTED = "AUTH_REJECTED"        # 401 / 403
 QUOTA = "QUOTA"                        # 429
@@ -68,8 +71,31 @@ TRANSPORT = "TRANSPORT"                # timeout / connection
 STRUCTURAL = "STRUCTURAL"              # 200 but not a readable result
 NO_IDENTIFIER = "NO_IDENTIFIER"        # nothing usable to search on
 NOT_QUERIED = "NOT_QUERIED"
-FAILURE_CLASSES = (NO_KEY, NOT_ROUTING, AUTH_REJECTED, QUOTA, UPSTREAM_ERROR, TRANSPORT, STRUCTURAL,
+FAILURE_CLASSES = (NO_KEY, NOT_ATTEMPTED_DISABLED, NOT_ROUTING, AUTH_REJECTED, QUOTA, UPSTREAM_ERROR, TRANSPORT, STRUCTURAL,
                    NO_IDENTIFIER, NOT_QUERIED)
+
+# ── The run switch: no live SAM API attempts ─────────────────────────────────
+#: Environment setting, default OFF (unset = today's behaviour). When truthy, NO request is made to api.sam.gov
+#: by `connectors.SAMGovConnector` - registration (v3, by UEI or name), exclusions (v4) or the health probe - and
+#: each leg reports "not attempted - disabled for this run". The configured SAM_GOV_API_KEY is neither changed nor
+#: reported missing. The dated public-extract screen (`sam_extract`, its own flag and its own freshness rule) is
+#: not affected. Read from the environment at CALL time, like ENABLE_SAM_EXTRACT_SCREENING, so it needs no
+#: re-import; a running process sees a change only if its environment changes, i.e. on restart.
+LIVE_API_DISABLED_ENV = "SAM_API_LIVE_ATTEMPTS_DISABLED"
+#: The words every record, cell and note carries. `classify_failure` recognises them.
+LIVE_API_DISABLED_MARKER = "not attempted - disabled for this run"
+LIVE_API_DISABLED_REASON = (f"{LIVE_API_DISABLED_MARKER}: live SAM.gov API requests are switched off "
+                            f"({LIVE_API_DISABLED_ENV}); this is not a missing key, not an outage and not a "
+                            f"screening result")
+#: The short label for cells and lists.
+LIVE_API_DISABLED_LABEL = "Not attempted - disabled for this run"
+
+
+def live_api_attempts_disabled() -> bool:
+    """True when the run switch is on. Read fresh on every call."""
+    import os
+    return (os.getenv(LIVE_API_DISABLED_ENV) or "").strip().lower() in ("1", "true", "yes", "on")
+
 
 #: Identifiers strong enough to say "this is the same party". A name never is.
 STRONG_IDENTIFIERS = ("uei", "npi", "cage")
@@ -93,6 +119,8 @@ def classify_failure(text: Optional[str]) -> str:
     t = (text or "").lower()
     if not t:
         return NOT_QUERIED
+    if LIVE_API_DISABLED_MARKER in t:          # first: this reason must never read as a key or routing problem
+        return NOT_ATTEMPTED_DISABLED
     if "api_key not set" in t or "key not set" in t:
         return NO_KEY
     if "no usable identifier" in t or "no uei" in t or "no legal name" in t or "no uei or legal name" in t:
