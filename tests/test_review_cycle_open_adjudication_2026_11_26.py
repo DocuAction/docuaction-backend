@@ -476,6 +476,33 @@ def test_status_a_passing_snapshot_reads_exactly_as_before():
     assert state["code"] == "READY_FOR_ANALYST_REVIEW" and "adjudication_open" not in state
 
 
+def test_status_other_exceptions_beside_open_adjudication_are_named_and_review_stays_where_a_passed_delivery_would():
+    """Held records and unresolved identifier conflicts are EXCEPTIONS, not reconciliation failures: on main a
+    delivery whose reconciliation passed with them reads Completed - With Exceptions and stays reviewable. With
+    adjudication also open the same holds; the exceptions are named in the outcome, and the delivery is still
+    not approvable. (Reviewed 2026-11-26: making this branch stricter than a passed reconciliation would mark
+    every real delivery with a held record Not Ready and switch off the cycle.)"""
+    snapshot = _snapshot(THE_ONE_CHECK, count=2)
+    snapshot["equation"]["held"] = 3
+    outcome = status_model.processing_outcome(
+        job_state="SUCCEEDED", job_stage="READY_FOR_REVIEW", snapshot=snapshot,
+        stages_completed=list(status_model.REQUIRED_STAGES), unresolved_conflicts=1)
+    assert outcome["classification_may_continue"] is True and outcome["approvable"] is False
+    assert "Other exceptions remain: 3 held; 1 unresolved identifier conflict(s)." in outcome["detail"]
+    # ... and the review state matches what a PASSED snapshot with the same exceptions gives, plus the notice
+    passed = _snapshot()
+    passed["equation"]["held"] = 3
+    baseline = status_model.processing_outcome(
+        job_state="SUCCEEDED", job_stage="READY_FOR_REVIEW", snapshot=passed,
+        stages_completed=list(status_model.REQUIRED_STAGES), unresolved_conflicts=1)
+    assert baseline["code"] == outcome["code"] == "COMPLETED_WITH_EXCEPTIONS"
+    base_state = status_model.review_state(outcome_code=baseline["code"], snapshot_passed=True, open_work_items=4)
+    state = status_model.review_state(outcome_code=outcome["code"], snapshot_passed=False, open_work_items=4,
+                                      adjudication_open=outcome["adjudication_open"])
+    assert state["code"] == base_state["code"] and state["approvable"] is False
+    assert state["detail"].endswith(base_state["detail"])
+
+
 def test_status_a_failed_snapshot_without_stored_checks_is_not_given_the_benefit_of_the_doubt():
     snapshot = _snapshot(THE_ONE_CHECK)
     snapshot["checks"] = []
