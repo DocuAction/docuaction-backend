@@ -657,7 +657,7 @@ async def reconciliation(
 
     from app.core.security import role_at_least
     from app.tefca_registry.rce import traceability_models as _tm
-    from app.tefca_registry.rce.reconciliation import reconcile_delivery
+    from app.tefca_registry.rce.reconciliation import reconcile_delivery, status_attribution
 
     if recompute:
         if not role_at_least(user, "qalead"):
@@ -666,6 +666,7 @@ async def reconciliation(
                      "the persisted snapshot is served without this flag.")
         result = await reconcile_delivery(db, intake_id)
         result["source"] = "live_recompute"
+        result["attribution"] = await status_attribution(db, intake_id, live_result=result)
         return result
 
     snap = (await db.execute(
@@ -677,13 +678,14 @@ async def reconciliation(
     if snap is None:
         result = await reconcile_delivery(db, intake_id)
         result["source"] = "live_compute_no_snapshot"
+        result["attribution"] = await status_attribution(db, intake_id, live_result=result)
         return result
 
     ev = snap.source_evidence or {}
     checks = list(snap.checks or [])
     accounted = (snap.created + snap.updated + snap.matched_unchanged
                  + snap.held + snap.rejected + snap.missing_key + snap.excluded)
-    return {
+    served = {
         "intake_id": str(intake_id),
         "passed": bool(snap.passed),
         "populations": ev.get("populations") or {},
@@ -717,11 +719,29 @@ async def reconciliation(
             "hash": snap.hash, "build_sha": snap.build_sha,
             "reconstructed": bool(snap.reconstructed),
         },
+        # ADDITIVE (2026-11-26): `passed` above is the STORED snapshot's verdict.
+        # This says so, and says what a live read finds now - see
+        # `reconciliation.status_attribution`. No existing field changed.
         "note": ("Served from the persisted reconciliation snapshot — the same "
                  "equation the snapshot's database CHECK constraint enforces. "
                  "Pass ?recompute=true (qalead or above) to re-derive every "
                  "population live."),
     }
+    # The live read comes LAST, after every stored value above has been read:
+    # if it fails, the snapshot is still served, with a block that says the
+    # live read could not be made. Nothing reads the session after this.
+    try:
+        served["attribution"] = await status_attribution(db, intake_id, snapshot=snap)
+    except Exception as exc:  # noqa: BLE001 - reported, never hidden
+        logger.warning("reconciliation status attribution unavailable: %s",
+                       type(exc).__name__, exc_info=True)
+        served["attribution"] = {
+            "status_source": "persisted_snapshot", "passed_now": None,
+            "live_read": "unavailable", "error_class": type(exc).__name__,
+            "statement": ("The stored snapshot is served; the live read that "
+                          "qualifies it could not be made, so whether the delivery "
+                          "passes now is not established by this read.")}
+    return served
 
 
 class ManualSnapshotRequest(BaseModel):
