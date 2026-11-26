@@ -239,6 +239,7 @@ jobs:
             tests/test_blank_npi_classified_on_submitted_values_2026_11_25.py \
             tests/test_review_cycle_identity_precheck_2026_11_25.py \
             tests/test_review_cycle_link_recovery_2026_11_26.py \
+            tests/test_review_cycle_batch_gate_characterization_2026_11_26.py \
             tests/test_deferred_disposition_processing_2026_11_18.py \
             tests/test_disposition_followups_schema_2026_11_19.py \
             tests/test_refused_correction_leaves_no_decision_2026_11_19.py \
