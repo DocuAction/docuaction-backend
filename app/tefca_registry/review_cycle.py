@@ -308,11 +308,13 @@ PRECHECK_LIST_CAP = 500
 #: The former default of 2,000 therefore needed ~410 s and the former maximum of 5,000 ~1,000 s - both beyond the
 #: App Service front end's 230 s request timeout. The caller received no response while the server finished the
 #: work anyway, and the client's re-sends then ran the same read several times at once (five overlapping
-#: executions of 419-489 s each were logged). A page must be able to RETURN. 500 (~106 s) leaves room for load;
-#: 1,000 (~206 s) is the most that still fits. Page size never changes what is checked: every member is examined
-#: by the same `_identity_precheck_detail`, and `next_after_entity_id` walks the whole frame.
-PRECHECK_DEFAULT_LIMIT = 500
-PRECHECK_MAX_LIMIT = 1000
+#: executions of 419-489 s each were logged). The binding limit observed was tighter than the gateway's: an
+#: 800-member page (~166 s) was RE-SENT by the browser after ~60 s without a response (two executions, 224 s and
+#: 184 s, logged 60 s apart). A page must return well inside a minute: default 150 (~36 s), maximum 250 (~56 s).
+#: Page size never changes what is checked: every member is examined by the same `_identity_precheck_detail`, and
+#: `next_after_entity_id` walks the whole frame.
+PRECHECK_DEFAULT_LIMIT = 150
+PRECHECK_MAX_LIMIT = 250
 
 OUTCOME_REVIEWABLE = "reviewable"
 OUTCOME_NOT_REVIEWABLE = "not_reviewable"

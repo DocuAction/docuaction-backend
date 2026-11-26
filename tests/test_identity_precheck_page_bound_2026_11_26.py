@@ -11,8 +11,9 @@ import inspect
 from app.tefca_registry import review_cycle as rc
 from app.tefca_registry import workflow_routes as wr
 
-#: App Service front-end request timeout and the measured DEV cost model.
-GATEWAY_TIMEOUT_S = 230
+#: Observed binding limit: the browser re-sent a GET that had no response after ~60 s (two server executions
+#: logged 60 s apart). App Service's own front-end timeout is 230 s. Measured DEV cost model below.
+GATEWAY_TIMEOUT_S = 60
 FIXED_S, PER_MEMBER_S = 6.0, 0.20
 
 

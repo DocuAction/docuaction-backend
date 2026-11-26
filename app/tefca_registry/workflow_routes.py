@@ -277,9 +277,9 @@ async def review_cycle_identity_precheck_route(
     intake_id: uuid.UUID,
     after_entity_id: Optional[uuid.UUID] = Query(None, description=(
         "Continue behind this entity id: the `page.next_after_entity_id` of the previous page.")),
-    limit: int = Query(500, ge=1, le=1000, description=(
-        "Members examined per call (~0.2 s each on DEV); bounded so a page returns within the 230 s gateway "
-        "timeout. Walk the frame with page.next_after_entity_id.")),
+    limit: int = Query(150, ge=1, le=250, description=(
+        "Members examined per call (~0.2 s each on DEV); bounded so a page returns inside a minute (a slower "
+        "response was re-sent by the browser and ran twice). Walk the frame with page.next_after_entity_id.")),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("program_manager")),
 ):
