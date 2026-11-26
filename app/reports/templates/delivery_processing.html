@@ -661,6 +661,10 @@
     {% endfor %}
   </tbody>
 </table>
+{% for s in verification.sources %}{% if s.get('not_attempted_disabled') %}
+<p class="sam-not-attempted-disabled-note"><b>{{ s.name|upper }}: not attempted &mdash; disabled or stopped for this run: {{ s.get('not_attempted_disabled')|number }} entity(ies).</b>
+  The live API was switched off, or live access was stopped after SAM.gov's own signal, for this run. These rows add no attempt and no unavailable outcome above (counts from other evidence rows of the same entities are unchanged); this is not an outage and not a screening result.</p>
+{% endif %}{% endfor %}
 {% for s in verification.sources %}{% if s.get('screening_legs') %}{% set legs = s.get('screening_legs') %}
 <table class="dp-tight">
   <caption>SAM.gov results by screening leg (distinct entities; legs are not additive)</caption>
@@ -672,6 +676,7 @@
   <tbody>
     <tr><th scope="row">Registration search only</th><td>{{ legs.registration_only.entities|number }}</td><td>n/a</td><td>n/a</td><td>{{ legs.registration_only.no_registration_record_found|number }}</td><td>{{ legs.registration_only.registration_record_found|number }}</td><td>{{ legs.registration_only.unavailable|number }}</td><td>{{ legs.registration_only.other|number }}</td></tr>
     <tr><th scope="row">Exclusion screening</th><td>{{ legs.exclusion.entities|number }}</td><td>{{ legs.exclusion['clear']|number }}</td><td>{{ legs.exclusion.hit|number }}</td><td>n/a</td><td>n/a</td><td>{{ legs.exclusion.unavailable|number }}</td><td>{{ legs.exclusion.other|number }}</td></tr>
+    {% if legs.get('not_attempted_disabled') and legs.not_attempted_disabled.entities %}<tr class="sam-not-attempted-disabled"><th scope="row">Live API not attempted &mdash; disabled or stopped for this run</th><td>{{ legs.not_attempted_disabled.entities|number }}</td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td><td>0 (not counted as unavailable)</td><td>n/a</td></tr>{% endif %}
     <tr><th scope="row">Screening leg not recorded</th><td>{{ legs.leg_not_recorded.entities|number }}</td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td><td>{{ legs.leg_not_recorded.unavailable|number }}</td><td>{{ legs.leg_not_recorded.not_interpreted|number }}</td></tr>
   </tbody>
 </table>

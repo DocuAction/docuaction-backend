@@ -681,7 +681,20 @@ class DeliveryProcessingDataService:
         that never ran must be told so in words, in the limitations section, every time.
         """
         sources = verification.get("sources") or []
-        idle = [x for x in sources if not (x.get("attempted") or 0)]
+        # A source switched off for the run is stated as that, with its count - on its own line, whether or not
+        # the source also has attempts - and is never folded into "not run" or "unavailable".
+        for x in sources:
+            disabled = int(x.get("not_attempted_disabled") or 0)
+            if disabled:
+                label = self._SOURCE_LABELS.get(x.get("name"), str(x.get("name")).upper())
+                self.limit(
+                    f"{label}: the live API was not attempted - disabled or stopped for this run - for {disabled} "
+                    f"eligible entity(ies). This is not an outage, not a missing key and not a screening "
+                    f"result: these rows add no attempt and no unavailable outcome at {label} (counts from "
+                    f"other evidence rows of the same entities are unchanged), and this report draws no "
+                    f"conclusion from {label} from them.")
+        idle = [x for x in sources if not (x.get("attempted") or 0)
+                and not int(x.get("not_attempted_disabled") or 0)]
         if not idle:
             return
         labels = ", ".join(self._SOURCE_LABELS.get(x.get("name"), str(x.get("name")).upper()) for x in idle)
@@ -1188,6 +1201,9 @@ def _normalise_coverage(raw: Any) -> Dict[str, Any]:
             "eligible": s.get("eligible"), "attempted": s.get("attempted"),
             "verified": s.get("verified"), "not_found": s.get("not_found"),
             "unavailable": s.get("unavailable"), "failed": s.get("failed"),
+            # Entities whose row records "not attempted - disabled for this run" (SAM only; 0 otherwise). Not in
+            # `attempted`, not in `unavailable`.
+            "not_attempted_disabled": int(s.get("not_attempted_disabled") or 0),
             "coverage_pct": s.get("coverage_pct"),
             "note": s.get("note") or s.get("detail"),
         })

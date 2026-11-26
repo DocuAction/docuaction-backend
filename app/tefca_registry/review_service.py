@@ -208,6 +208,12 @@ async def probe_sources(db, entity_id, *, name_screen: Optional[dict] = None,
             "subtitle": SOURCE_SUBTITLES.get(k)}
         for k, why in NO_CONNECTOR.items()
     }
+    # This path asks the live SAM API nothing. While the run switch is on, its standing note says so in the
+    # switch's own words instead of describing an endpoint fault.
+    from app.Tefca import sam_screening as _sam_screening
+    if _sam_screening.live_api_attempts_disabled():
+        out["sam_gov"]["reason"] = _sam_screening.LIVE_API_DISABLED_REASON
+        out["sam_gov"]["not_attempted"] = _sam_screening.LIVE_API_DISABLED_MARKER      # status is unchanged
 
     if not npi:
         for key in ("nppes", "pecos", "oig_leie"):

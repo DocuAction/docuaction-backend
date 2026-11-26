@@ -60,6 +60,9 @@ def matching_scope(extract_date, identifiers_tried):
 
 # ── Why a check was incomplete ───────────────────────────────────────────────
 NO_KEY = "NO_KEY"
+#: The live SAM API was deliberately NOT ASKED (the run switch below). Not a key problem, not an outage, and
+#: never an answer: the check is incomplete exactly as it is when the API does not route.
+NOT_ATTEMPTED_DISABLED = "NOT_ATTEMPTED_DISABLED"
 NOT_ROUTING = "NOT_ROUTING"            # api.sam.gov answers an empty 404: the request never reached the API
 AUTH_REJECTED = "AUTH_REJECTED"        # 401 / 403
 QUOTA = "QUOTA"                        # 429
@@ -68,8 +71,140 @@ TRANSPORT = "TRANSPORT"                # timeout / connection
 STRUCTURAL = "STRUCTURAL"              # 200 but not a readable result
 NO_IDENTIFIER = "NO_IDENTIFIER"        # nothing usable to search on
 NOT_QUERIED = "NOT_QUERIED"
-FAILURE_CLASSES = (NO_KEY, NOT_ROUTING, AUTH_REJECTED, QUOTA, UPSTREAM_ERROR, TRANSPORT, STRUCTURAL,
+FAILURE_CLASSES = (NO_KEY, NOT_ATTEMPTED_DISABLED, "NOT_ATTEMPTED_STOPPED", NOT_ROUTING, AUTH_REJECTED, QUOTA, UPSTREAM_ERROR, TRANSPORT, STRUCTURAL,
                    NO_IDENTIFIER, NOT_QUERIED)
+
+# ── The run switch: no live SAM API attempts ─────────────────────────────────
+#: Environment setting, default OFF (unset = today's behaviour). When truthy, NO request is made to api.sam.gov
+#: by `connectors.SAMGovConnector` - registration (v3, by UEI or name), exclusions (v4) or the health probe - and
+#: each leg reports "not attempted - disabled for this run". The configured SAM_GOV_API_KEY is neither changed nor
+#: reported missing. The dated public-extract screen (`sam_extract`, its own flag and its own freshness rule) is
+#: not affected. Read from the environment at CALL time, like ENABLE_SAM_EXTRACT_SCREENING, so it needs no
+#: re-import; a running process sees a change only if its environment changes, i.e. on restart.
+LIVE_API_DISABLED_ENV = "SAM_API_LIVE_ATTEMPTS_DISABLED"
+#: The words every record, cell and note carries. `classify_failure` recognises them.
+LIVE_API_DISABLED_MARKER = "not attempted - disabled for this run"
+LIVE_API_DISABLED_REASON = (f"{LIVE_API_DISABLED_MARKER}: live SAM.gov API requests are switched off "
+                            f"({LIVE_API_DISABLED_ENV}); this is not a missing key, not an outage and not a "
+                            f"screening result")
+#: The short label for cells and lists.
+LIVE_API_DISABLED_LABEL = "Not attempted - disabled for this run"
+
+
+def live_api_attempts_disabled() -> bool:
+    """True when the run switch is on. Read fresh on every call."""
+    import os
+    return (os.getenv(LIVE_API_DISABLED_ENV) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# ── Honouring SAM.gov's own signals: stop live attempts, never retry exhausted access (2026-11-26) ──────────────
+#: Owner: "Use live requests within permitted limits, honour rate-limit responses ... Never bypass quota limits or
+#: repeatedly retry exhausted access." Live requests stay ON by default. When SAM.gov signals that access is
+#: exhausted - HTTP 429, or `X-RateLimit-Remaining: 0` - or when the API keeps answering the empty "no route" 404,
+#: this process stops asking for a period instead of making 2-3 doomed requests (x3 retries) per record. Records
+#: reached during that period record "not attempted - live SAM.gov access stopped" with the cause; the dated public
+#: extract still screens every record (its own flag and freshness rule). The stop is per process (GSA's daily
+#: quota is per key and is not tracked durably here - stated, not hidden).
+NOT_ATTEMPTED_STOPPED = "NOT_ATTEMPTED_STOPPED"
+LIVE_API_STOPPED_MARKER = "not attempted - live SAM.gov access stopped"
+#: Consecutive empty-404 ("no route") answers before stopping, and how long a not-routing stop lasts before ONE
+#: request is tried again (if it still does not route, the stop resumes at once).
+NOT_ROUTING_STOP_AFTER_ENV = "SAM_API_NOT_ROUTING_STOP_AFTER"
+NOT_ROUTING_RETRY_SECONDS_ENV = "SAM_API_NOT_ROUTING_RETRY_SECONDS"
+#: Optional: at most this many live SAM requests per UTC day in this process (unset = no budget of our own).
+DAILY_REQUEST_BUDGET_ENV = "SAM_API_DAILY_REQUEST_BUDGET"
+
+_LIVE: Dict[str, Any] = {"stop_until": 0.0, "cause": "", "consecutive_not_routing": 0,
+                         "budget_day": "", "budget_used": 0}
+
+
+def _int_env(name: str, default: int) -> int:
+    import os
+    try:
+        return int((os.getenv(name) or "").strip() or default)
+    except ValueError:
+        return default
+
+
+def _next_utc_midnight(now: float) -> float:
+    import datetime as _dt
+    day = _dt.datetime.fromtimestamp(now, _dt.timezone.utc).date() + _dt.timedelta(days=1)
+    return _dt.datetime(day.year, day.month, day.day, tzinfo=_dt.timezone.utc).timestamp()
+
+
+def _stop(now: float, until: float, cause: str) -> None:
+    _LIVE["stop_until"] = max(float(_LIVE["stop_until"]), until)
+    _LIVE["cause"] = cause
+
+
+def live_api_stop_reason(now: Optional[float] = None) -> Optional[str]:
+    """The stored reason when live SAM attempts are stopped right now, else None. Also enforces the optional daily
+    budget (checked here, counted in `note_live_api_request`)."""
+    import time as _time
+    now = _time.time() if now is None else now
+    if now < float(_LIVE["stop_until"]):
+        import datetime as _dt
+        until = _dt.datetime.fromtimestamp(float(_LIVE["stop_until"]), _dt.timezone.utc).strftime(
+            "%Y-%m-%d %H:%M UTC")
+        return (f"{LIVE_API_STOPPED_MARKER} until {until}: {_LIVE['cause']}. No request was made; this is not a "
+                f"missing key and not a screening result")
+    return None
+
+
+def note_live_api_request(now: Optional[float] = None) -> None:
+    """Count one live request against the optional daily budget; stop at the budget."""
+    import datetime as _dt
+    import time as _time
+    now = _time.time() if now is None else now
+    day = _dt.datetime.fromtimestamp(now, _dt.timezone.utc).date().isoformat()
+    if _LIVE["budget_day"] != day:
+        _LIVE["budget_day"], _LIVE["budget_used"] = day, 0
+    _LIVE["budget_used"] += 1
+    budget = _int_env(DAILY_REQUEST_BUDGET_ENV, 0)
+    if budget > 0 and _LIVE["budget_used"] >= budget:
+        _stop(now, _next_utc_midnight(now),
+              f"the configured daily budget of {budget} live SAM.gov request(s) ({DAILY_REQUEST_BUDGET_ENV}) "
+              f"was used")
+
+
+def note_live_api_response(status: int, *, empty_body: bool = False, remaining: Optional[str] = None,
+                           retry_after: Optional[str] = None, now: Optional[float] = None) -> None:
+    """Record what SAM.gov answered, and stop live attempts when it signals exhausted access or keeps not
+    routing. Never raises."""
+    import time as _time
+    now = _time.time() if now is None else now
+    try:
+        if status == 429 or (remaining is not None and str(remaining).strip() == "0"):
+            wait = None
+            # Retry-After is honoured for a 429 only. "Remaining: 0" means the DAILY quota is used: stop until the
+            # next UTC day whatever Retry-After says, so exhausted access is not retried at its cadence.
+            quota_used = remaining is not None and str(remaining).strip() == "0"
+            if status == 429 and not quota_used and retry_after and str(retry_after).strip().isdigit():
+                wait = int(str(retry_after).strip())
+            until = now + wait if wait else _next_utc_midnight(now)
+            _stop(now, until, ("SAM.gov answered HTTP 429 (rate limit or daily quota reached)" if status == 429
+                               else "SAM.gov reported X-RateLimit-Remaining: 0 (daily quota used)")
+                  + (f"; Retry-After {wait} s honoured" if wait else "; stopped until the next UTC day"))
+            _LIVE["consecutive_not_routing"] = 0
+            return
+        if status == 404 and empty_body:
+            _LIVE["consecutive_not_routing"] += 1
+            limit = max(1, _int_env(NOT_ROUTING_STOP_AFTER_ENV, 20))
+            if _LIVE["consecutive_not_routing"] >= limit:
+                retry = max(60, _int_env(NOT_ROUTING_RETRY_SECONDS_ENV, 900))
+                _stop(now, now + retry,
+                      f"api.sam.gov served no route (empty HTTP 404) {_LIVE['consecutive_not_routing']} times in a "
+                      f"row; one request is tried again after {retry} s")
+            return
+        _LIVE["consecutive_not_routing"] = 0
+    except Exception:  # noqa: BLE001 - bookkeeping must never fail a screen
+        return
+
+
+def reset_live_api_state() -> None:
+    """Tests and a fresh run: forget any stop and counters."""
+    _LIVE.update(stop_until=0.0, cause="", consecutive_not_routing=0, budget_day="", budget_used=0)
+
 
 #: Identifiers strong enough to say "this is the same party". A name never is.
 STRONG_IDENTIFIERS = ("uei", "npi", "cage")
@@ -93,6 +228,10 @@ def classify_failure(text: Optional[str]) -> str:
     t = (text or "").lower()
     if not t:
         return NOT_QUERIED
+    if LIVE_API_DISABLED_MARKER in t:          # first: this reason must never read as a key or routing problem
+        return NOT_ATTEMPTED_DISABLED
+    if "not attempted - live sam.gov access stopped" in t:   # also first: no request was made
+        return "NOT_ATTEMPTED_STOPPED"
     if "api_key not set" in t or "key not set" in t:
         return NO_KEY
     if "no usable identifier" in t or "no uei" in t or "no legal name" in t or "no uei or legal name" in t:

@@ -159,6 +159,18 @@ class CycleRefused(RuntimeError):
     """The cycle could not be created, and the reason is stated."""
 
 
+def _sam_live_api_state(disabled: bool, extract_edition: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The SAM channel CONFIGURATION this call ran under. It states the switch, not what was asked: a call that
+    only links existing reviews, or finds the sample complete, asks no source either way. `extract_edition` is
+    the edition captured once when the interlock passed, so the audit row and the response name the same one
+    (each record's own evidence row carries the edition it was actually screened against)."""
+    from app.Tefca import sam_screening
+    if not disabled:
+        return {"live_api_attempts_disabled": False}
+    return {"live_api_attempts_disabled": True, "reason": sam_screening.LIVE_API_DISABLED_MARKER,
+            "setting": sam_screening.LIVE_API_DISABLED_ENV, "extract_edition": extract_edition}
+
+
 #: Members one call may find NOT reviewable for identity reasons before it stops walking. Each costs local reads
 #: only (no source is asked). A call that reaches it says so and returns `next_after_member_id` to continue.
 MAX_NOT_REVIEWABLE_PER_CALL = 2000
@@ -651,6 +663,24 @@ async def _create_review_cycle(
     # transaction (releasing the shared in-flight lock), which is fine: the
     # drain guarantee protects classification writes, and those happen inside
     # verify_and_classify's own guarded transaction.
+    # INTERLOCK (2026-11-26). Runs BEFORE the shared processing lock below, because it may download the extract.
+    # With the live SAM API switched off for the run, the dated public extract is the ONLY
+    # exclusion screen for SAM. The cycle is not started or continued unless that screen is enabled, loaded and
+    # within its freshness rule - checked here, before anything is drawn or classified.
+    from app.Tefca import sam_extract as _sam_extract
+    from app.Tefca import sam_screening as _sam_screening
+    sam_api_disabled = _sam_screening.live_api_attempts_disabled()
+    if sam_api_disabled:
+        not_ready = await _sam_extract.screening_not_ready_reason()
+        if not_ready:
+            raise CycleRefused(
+                f"The live SAM.gov API is switched off for this run ({_sam_screening.LIVE_API_DISABLED_ENV}), so "
+                f"the SAM public exclusions extract is the only SAM exclusion screen - and it is not ready: "
+                f"{not_ready}. No sample was drawn or continued and nothing was classified. Make the extract "
+                f"available and current, or turn the switch off.")
+    # Captured ONCE, here: the edition the interlock just found ready.
+    sam_extract_edition = _sam_extract.loaded_edition() if sam_api_disabled else None
+
     from app.tefca_registry.processing_controls import enter_processing
     await enter_processing(db)
 
@@ -968,6 +998,8 @@ async def _create_review_cycle(
                 actor_email=actor_email, ip_address=ip_address,
                 metadata={"source_intake_id": str(intake_id),
                           "sample_id": str(sample_id),
+                          # Which SAM channel this call classified under (2026-11-26).
+                          "sam_live_api": _sam_live_api_state(sam_api_disabled, sam_extract_edition),
                           "requested": verified.get("requested"),
                           "verified": verified.get("verified"),
                           "linked": linked,
@@ -1122,6 +1154,9 @@ async def _create_review_cycle(
             started_at_front and walk_exhausted and linked == 0 and remaining > 0
             and identity_count == len(not_reviewable) == remaining),
         "verification": verified,
+        # Which SAM channel this call classified under: the live API asked, or switched off for the run (then the
+        # dated extract is the only SAM exclusion screen, and it was checked ready before this call ran).
+        "sam_live_api": _sam_live_api_state(sam_api_disabled, sam_extract_edition),
         "batch": batch,
         "note": ("The sample is frozen; asking again never redraws it. "
                  "Verification runs only for members not yet linked to a "

@@ -116,6 +116,18 @@ class RecheckRefused(RuntimeError):
     """A refusal with a precise reason. Routes turn it into a 409."""
 
 
+def _refuse_while_sam_api_is_switched_off(source_id: str) -> None:
+    """A SAM.gov API recheck asks the live API again for every targeted entity. While the run switch is on it
+    would ask nothing and write the same "not attempted" answer for each, so it is refused with that reason
+    rather than queued. The extract screen is not rechecked on this path and is not affected."""
+    from app.Tefca import sam_screening
+    if source_id == sp.SAM_GOV and sam_screening.live_api_attempts_disabled():
+        raise RecheckRefused(
+            f"the live SAM.gov API is switched off for this run ({sam_screening.LIVE_API_DISABLED_ENV}); a "
+            f"{sp.SAM_GOV} recheck would ask nothing and record \"{sam_screening.LIVE_API_DISABLED_MARKER}\" "
+            f"for every entity. Turn the switch off before requesting or approving one.")
+
+
 def evidence_sources_for(source_id: str) -> List[str]:
     return sorted(k for k, v in sp.EVIDENCE_SOURCE_TO_POLICY.items() if v == source_id)
 
@@ -231,6 +243,7 @@ async def request_recheck(db, intake_id, *, trigger_kind: str, source_id: str,
         raise RecheckRefused(
             f"rechecks are supported for {SUPPORTED_SOURCES}; {source_id!r} is not "
             f"re-evaluated on this path")
+    _refuse_while_sam_api_is_switched_off(source_id)
     if not (trigger_ref or "").strip():
         raise RecheckRefused("trigger_ref is required: what recovered, which snapshot, or "
                              "which approved mapping version")
@@ -346,6 +359,7 @@ async def approve_recheck(db, job_id, *, user) -> Dict[str, Any]:
     job = await _job_or_refuse(db, job_id)
     if job.state != rm.STATE_PENDING_APPROVAL:
         raise RecheckRefused(f"job is {job.state}; only a PENDING_APPROVAL job is approved")
+    _refuse_while_sam_api_is_switched_off(job.source_id)
     actor_id, actor = _actor(user)
     same = ((actor_id and job.requested_by_id and actor_id == job.requested_by_id)
             or actor == job.requested_by)
@@ -625,6 +639,10 @@ async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str
     job = await _job_or_refuse(db, job_id)
     if job.state != rm.STATE_RUNNING:
         raise RecheckRefused(f"job is {job.state}; claim it first (only RUNNING jobs run)")
+    # Checked on EVERY batch, before anything is read or written: a job approved earlier, resumed or reaped must
+    # not append "not attempted" evidence generations while the live SAM API is switched off. The job is left as
+    # it is (RUNNING, its pending items untouched) and continues once the switch is off.
+    _refuse_while_sam_api_is_switched_off(job.source_id)
 
     if (job.processed_count or 0) == 0 and await _current_baseline(db, job) != job.baseline_hash:
         job.state = rm.STATE_REFUSED_STALE

@@ -161,7 +161,12 @@ def exclusion_screening_gaps(classifier_input: Optional[Dict[str, Any]]) -> List
         if disposition == "NOT_APPLICABLE":
             continue
         if status == "unavailable":
-            gaps.append({"control": control, "gap": GAP_UNAVAILABLE})
+            gap = {"control": control, "gap": GAP_UNAVAILABLE}
+            if isinstance(raw, dict) and raw.get("not_attempted"):
+                # Same gap (the control did not answer); the reason is that it was not asked, not that it was
+                # unreachable. Additive key, present only for a control switched off for the run.
+                gap["not_attempted"] = raw["not_attempted"]
+            gaps.append(gap)
         elif status == "failed":
             gaps.append({"control": control, "gap": GAP_FAILED})
         elif disposition == "INSUFFICIENT_EVIDENCE":

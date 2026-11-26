@@ -324,6 +324,27 @@ async def _fetch_and_index_sam_extract() -> bool:
     return True
 
 
+async def screening_not_ready_reason() -> Optional[str]:
+    """Why the extract screen could NOT answer right now, or None when it can: the flag is off, the extract
+    cannot be loaded (downloaded on first use, as a screen would), or its edition fails the freshness rule.
+    The same three checks, in the same order, every screen makes."""
+    if os.getenv(ENV_FLAG, "").strip().lower() not in ("1", "true", "yes"):
+        return f"extract screening is not enabled ({ENV_FLAG})"
+    if not await _load_sam_extract():
+        return "the extract is unavailable or was refused"
+    stale = _extract_staleness_reason(_time.time())
+    return f"stale_source: {stale}" if stale else None
+
+
+def loaded_edition() -> Dict[str, Any]:
+    """The edition currently loaded, for attribution: filename, publication date, sha256, rows."""
+    pub = _SAM_CACHE.get("publication_date")
+    return {"extract_filename": _SAM_CACHE.get("filename"),
+            "publication_date": pub.isoformat() if pub else None,
+            "extract_sha256": _SAM_CACHE.get("sha256"),
+            "list_rows_searched": _SAM_CACHE.get("row_count", 0)}
+
+
 class SAMExtractConnector:
     """Candidate-only screening against the GSA SAM public exclusions extract.
 

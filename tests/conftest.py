@@ -336,3 +336,15 @@ def _reset_list_status_cache():
     except Exception:  # noqa: BLE001 - the module may be absent in a partial checkout
         pass
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_sam_live_access_state():
+    """SAM.gov live-access stops are per process (2026-11-26): a test that drives 429s or a run of not-routing
+    answers must not leave later tests with live attempts stopped."""
+    try:
+        from app.Tefca import sam_screening as _sam
+        _sam.reset_live_api_state()
+    except Exception:  # noqa: BLE001
+        pass
+    yield

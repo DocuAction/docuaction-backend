@@ -95,6 +95,30 @@ _DIMENSION_DISPOSITION = {
 }
 OUTCOMES = ("verified", "not_found", "deactivated", "failed", "unavailable")
 
+# NOT ATTEMPTED - DISABLED FOR THIS RUN (2026-11-26). Owner: "distinguish disabled/not-attempted from
+# attempted/unavailable in coverage and reports."
+#
+# While `SAM_API_LIVE_ATTEMPTS_DISABLED` is on, the bulk writer still stores a SAM_GOV evidence row per entity
+# (disposition UNAVAILABLE, `normalized_values.failure_class = NOT_ATTEMPTED_DISABLED`) so the record shows what
+# happened. Nothing was asked, so such a row is NOT an attempt and NOT an unavailable answer: it is counted on its
+# own, under the key below, everywhere this module counts. Every other row is counted exactly as before.
+NOT_ATTEMPTED_DISABLED = "not_attempted_disabled"
+NOT_ATTEMPTED_DISABLED_LABEL = "Not attempted - live API disabled or stopped for this run"
+_DISABLED_FAILURE_CLASS = "NOT_ATTEMPTED_DISABLED"       # sam_screening.NOT_ATTEMPTED_DISABLED
+#: SQL predicate over `tefca_dimension_evidence d`: this row records a live SAM API check that was not attempted.
+#: Since 2026-11-26 also NOT_ATTEMPTED_STOPPED (sam_screening): live access stopped after SAM.gov signalled exhausted
+#: access (HTTP 429 / X-RateLimit-Remaining 0) or kept serving no route. Also not an attempt: no request was made.
+_STOPPED_FAILURE_CLASS = "NOT_ATTEMPTED_STOPPED"
+_DISABLED_ROW_SQL = ("(upper(btrim(coalesce(d.source, ''))) = 'SAM_GOV' AND "
+                     f"coalesce(d.normalized_values->>'failure_class', '') IN "
+                     f"('{_DISABLED_FAILURE_CLASS}', '{_STOPPED_FAILURE_CLASS}'))")
+
+
+def is_not_attempted_disabled(source: Optional[str], normalized_values: Any) -> bool:
+    """The Python twin of `_DISABLED_ROW_SQL`."""
+    return ((source or "").strip().upper() == "SAM_GOV" and isinstance(normalized_values, dict)
+            and normalized_values.get("failure_class") in (_DISABLED_FAILURE_CLASS, _STOPPED_FAILURE_CLASS))
+
 _ELIGIBLE_SQL = ("SELECT DISTINCT canonical_entity_id FROM rce_curated_records "
                  "WHERE source_intake_id = CAST(:i AS uuid) "
                  "AND canonical_entity_id IS NOT NULL")
@@ -133,12 +157,12 @@ async def _verification_rows(db, intake_id) -> Iterable:
 
 
 async def _dimension_rows(db, intake_id) -> Iterable:
-    """(source, disposition, entity_id) per tefca_dimension_evidence row.
+    """(source, disposition, entity_id, not_attempted_disabled) per tefca_dimension_evidence row.
 
     `entity_id` is TEXT on that table, so the population is cast to text.
     """
-    return (await db.execute(text("""
-        SELECT d.source, d.disposition, d.entity_id
+    return (await db.execute(text(f"""
+        SELECT d.source, d.disposition, d.entity_id, {_DISABLED_ROW_SQL} AS not_attempted_disabled
         FROM tefca_dimension_evidence d
         WHERE d.entity_id IN (SELECT CAST(canonical_entity_id AS TEXT)
                               FROM rce_curated_records
@@ -187,11 +211,12 @@ EVIDENCE_ROWS_CTE_SQL = f"""
         UNION ALL
         SELECT {_SOURCE_CASE.format(col='d.source')} AS key,
                d.entity_id AS eid,
-               CASE upper(btrim(coalesce(d.disposition, '')))
+               CASE WHEN {_DISABLED_ROW_SQL} THEN '{NOT_ATTEMPTED_DISABLED}'
+                    ELSE (CASE upper(btrim(coalesce(d.disposition, '')))
                     WHEN 'PASS' THEN 'verified' WHEN 'CORROBORATED' THEN 'verified'
                     WHEN 'NOT_FOUND' THEN 'not_found' WHEN 'REVIEW' THEN 'not_found'
                     WHEN 'UNAVAILABLE' THEN 'unavailable'
-                    WHEN 'FAIL' THEN 'failed' WHEN 'CONFLICT' THEN 'failed' ELSE NULL END AS outcome
+                    WHEN 'FAIL' THEN 'failed' WHEN 'CONFLICT' THEN 'failed' ELSE NULL END) END AS outcome
         FROM tefca_dimension_evidence d
         WHERE d.entity_id IN (SELECT eid FROM pop_text))
 """
@@ -204,7 +229,8 @@ _COVERAGE_COUNTS_SQL = f"""
     pop_text AS (SELECT CAST(eid AS text) AS eid FROM pop_uuid),
     {EVIDENCE_ROWS_CTE_SQL}
     SELECT key,
-           count(DISTINCT eid) AS attempted,
+           count(DISTINCT eid) FILTER (WHERE outcome IS DISTINCT FROM '{NOT_ATTEMPTED_DISABLED}') AS attempted,
+           count(DISTINCT eid) FILTER (WHERE outcome = '{NOT_ATTEMPTED_DISABLED}') AS not_attempted_disabled,
            count(DISTINCT eid) FILTER (WHERE outcome = 'verified') AS verified,
            count(DISTINCT eid) FILTER (WHERE outcome = 'not_found') AS not_found,
            count(DISTINCT eid) FILTER (WHERE outcome = 'deactivated') AS deactivated,
@@ -221,13 +247,14 @@ async def coverage_counts(db, intake_id) -> Dict[str, Dict[str, int]]:
     the evidence rows to Python. Sources with no evidence get all-zero counts,
     so callers can index every key unconditionally.
     """
-    base = {o: 0 for o in ("attempted", *OUTCOMES)}
+    base = {o: 0 for o in ("attempted", NOT_ATTEMPTED_DISABLED, *OUTCOMES)}
     out: Dict[str, Dict[str, int]] = {key: dict(base) for key in SOURCES}
     rows = (await db.execute(text(_COVERAGE_COUNTS_SQL), {"i": str(intake_id)})).all()
-    for key, attempted, verified, not_found, deactivated, failed, unavailable in rows:
+    for key, attempted, disabled, verified, not_found, deactivated, failed, unavailable in rows:
         if key not in out:
             continue
-        out[key] = {"attempted": int(attempted or 0), "verified": int(verified or 0),
+        out[key] = {"attempted": int(attempted or 0), NOT_ATTEMPTED_DISABLED: int(disabled or 0),
+                    "verified": int(verified or 0),
                     "not_found": int(not_found or 0), "deactivated": int(deactivated or 0),
                     "failed": int(failed or 0), "unavailable": int(unavailable or 0)}
     return out
@@ -311,7 +338,8 @@ _SAM_LEG_ROWS_CTE = f"""
                     WHEN lower(btrim(coalesce(d.normalized_values->>'screening_leg', '')))
                          IN ('exclusion', 'exclusion_and_registration') THEN 'exclusion'
                     ELSE 'leg_not_recorded' END AS leg,
-               upper(btrim(coalesce(d.disposition, ''))) AS disp
+               CASE WHEN {_DISABLED_ROW_SQL} THEN 'NOT_ATTEMPTED_DISABLED'
+                    ELSE upper(btrim(coalesce(d.disposition, ''))) END AS disp
         FROM tefca_dimension_evidence d
         WHERE d.entity_id IN (SELECT eid FROM pop_text)
           AND {_SOURCE_CASE.format(col='d.source')} = 'sam'
@@ -326,7 +354,8 @@ _SAM_LEG_ROWS_CTE = f"""
           AND {_SOURCE_CASE.format(col='v.source')} = 'sam'),
     sam_rows AS (
         SELECT eid, leg,
-               CASE WHEN disp = 'UNAVAILABLE' THEN 'unavailable'
+               CASE WHEN disp = 'NOT_ATTEMPTED_DISABLED' THEN '{NOT_ATTEMPTED_DISABLED}'
+                    WHEN disp = 'UNAVAILABLE' THEN 'unavailable'
                     WHEN leg = 'exclusion' AND disp IN ('PASS', 'CORROBORATED', 'NOT_FOUND') THEN 'clear'
                     WHEN leg = 'exclusion' AND disp IN ('REVIEW', 'FAIL', 'CONFLICT') THEN 'hit'
                     WHEN leg = 'registration_only' AND disp = 'NOT_FOUND' THEN 'no_registration_record_found'
@@ -348,8 +377,13 @@ def _empty_sam_legs() -> Dict[str, Any]:
             "entities": 0, "no_registration_record_found": 0,
             "registration_record_found": 0, "unavailable": 0, "other": 0},
         "exclusion": {"entities": 0, "clear": 0, "hit": 0, "unavailable": 0, "other": 0},
+        # `not_attempted_disabled`: entities with a row recording that the live API was switched off for the run.
+        # Such a row names no leg (nothing was asked), is NOT in `unavailable`, and is in `entities` of this
+        # kind only because every row is counted in exactly one kind.
         "leg_not_recorded": {"entities": 0, "unavailable": 0, "not_interpreted": 0,
+                             NOT_ATTEMPTED_DISABLED: 0,
                              "label": SAM_LEG_NOT_RECORDED_LABEL},
+        NOT_ATTEMPTED_DISABLED: {"entities": 0, "label": NOT_ATTEMPTED_DISABLED_LABEL},
     }
 
 
@@ -362,6 +396,8 @@ async def sam_screening_legs(db, intake_id) -> Dict[str, Any]:
     out = _empty_sam_legs()
     for leg, outcome, n in (await db.execute(text(_SAM_LEG_COUNTS_SQL), {"i": str(intake_id)})).all():
         out[leg][outcome] = int(n or 0)
+        if outcome == NOT_ATTEMPTED_DISABLED:
+            out[NOT_ATTEMPTED_DISABLED]["entities"] += int(n or 0)
     for leg, n in (await db.execute(text(_SAM_LEG_ENTITIES_SQL), {"i": str(intake_id)})).all():
         out[leg]["entities"] = int(n or 0)
     return out
@@ -370,7 +406,8 @@ async def sam_screening_legs(db, intake_id) -> Dict[str, Any]:
 def _tally(verification_rows, dimension_rows) -> Dict[str, Dict[str, set]]:
     """Per source: outcome -> set of entity ids, plus 'attempted'."""
     tally: Dict[str, Dict[str, set]] = {
-        key: {"attempted": set(), **{o: set() for o in OUTCOMES}} for key in SOURCES}
+        key: {"attempted": set(), NOT_ATTEMPTED_DISABLED: set(), **{o: set() for o in OUTCOMES}}
+        for key in SOURCES}
     for source, status, detail, entity_id in verification_rows:
         key = _source_key(source)
         if key is None:
@@ -382,11 +419,14 @@ def _tally(verification_rows, dimension_rows) -> Dict[str, Dict[str, set]]:
             outcome = "deactivated"
         if outcome:
             tally[key][outcome].add(eid)
-    for source, disposition, entity_id in dimension_rows:
+    for source, disposition, entity_id, *rest in dimension_rows:
         key = _source_key(source)
         if key is None:
             continue
         eid = str(entity_id)
+        if rest and rest[0]:                       # the live SAM API was not attempted - disabled for this run
+            tally[key][NOT_ATTEMPTED_DISABLED].add(eid)
+            continue
         tally[key]["attempted"].add(eid)
         outcome = _DIMENSION_DISPOSITION.get((disposition or "").strip().upper())
         if outcome:
@@ -465,7 +505,9 @@ AGGREGATION_RULE = (
     "or excluded are not promoted and are outside the eligible denominator. 'Attempted' "
     "means an evidence row exists; 'answered' means the source returned found / not found "
     "/ potential match / deactivated; unavailable, failed and not-applicable rows are not "
-    "answers. A potential match is not a confirmed result. The legacy 'pecos' key is an "
+    "answers. A SAM.gov row recording that the live API was switched off for the run is "
+    "'not attempted - disabled for this run': it is not an attempt and not an unavailable "
+    "answer, and is counted separately. A potential match is not a confirmed result. The legacy 'pecos' key is an "
     "NPPES-backed proxy and is reported separately; it is never counted as CMS enrollment. "
     "Genuine CMS enrollment evidence is only CMS_PPEF_ENROLLMENT rows ('cms_enrollment'). "
     "SAM attempts are not exclusion clearance; rows stored before the screening leg was "
@@ -494,9 +536,13 @@ _STATE_ANSWERING = ("found", "not_found", "potential_match", "deactivated")
 _STATE_CONFIRMED = ("found", "not_found", "deactivated")
 
 
-def evidence_state(table: str, value: Optional[str], detail: Optional[str] = None) -> str:
+def evidence_state(table: str, value: Optional[str], detail: Optional[str] = None, *,
+                   not_attempted_disabled: bool = False) -> str:
     """The state word for one evidence row. `table` is 'verification' or
-    'dimension'. Unmapped values are `other` (attempted, not an answer)."""
+    'dimension'. Unmapped values are `other` (attempted, not an answer). A dimension row recording that the
+    live SAM API was switched off for the run is `not_attempted_disabled`: not an attempt, not unavailable."""
+    if table == "dimension" and not_attempted_disabled:
+        return NOT_ATTEMPTED_DISABLED
     if table == "verification":
         if "deactivat" in (detail or "").lower():
             return "deactivated"
@@ -534,16 +580,19 @@ _STATE_ROWS_SQL = f"""
         WHERE v.entity_id IN (SELECT eid FROM pop_uuid)
         UNION ALL
         SELECT {_STATE_SOURCE_CASE.format(col='d.source')} AS key, d.entity_id AS eid,
-               CASE upper(btrim(coalesce(d.disposition, '')))
+               CASE WHEN {_DISABLED_ROW_SQL} THEN '{NOT_ATTEMPTED_DISABLED}'
+                    ELSE (CASE upper(btrim(coalesce(d.disposition, '')))
                     WHEN 'PASS' THEN 'found' WHEN 'CORROBORATED' THEN 'found'
                     WHEN 'NOT_FOUND' THEN 'not_found' WHEN 'REVIEW' THEN 'potential_match'
                     WHEN 'UNAVAILABLE' THEN 'unavailable'
                     WHEN 'FAIL' THEN 'failed' WHEN 'CONFLICT' THEN 'failed'
-                    WHEN 'NOT_APPLICABLE' THEN 'not_applicable' ELSE 'other' END AS state
+                    WHEN 'NOT_APPLICABLE' THEN 'not_applicable' ELSE 'other' END) END AS state
         FROM tefca_dimension_evidence d
         WHERE d.entity_id IN (SELECT eid FROM pop_text)),
     per_entity AS (
         SELECT key, eid,
+               bool_or(state <> '{NOT_ATTEMPTED_DISABLED}') AS any_attempt,
+               bool_or(state = '{NOT_ATTEMPTED_DISABLED}') AS disabled,
                bool_or(state IN ('found','not_found','potential_match','deactivated')) AS answered,
                bool_or(state = 'unavailable') AS unavailable,
                bool_or(state = 'failed') AS failed,
@@ -551,19 +600,27 @@ _STATE_ROWS_SQL = f"""
                bool_or(state IN ('found','not_found','deactivated')) AS confirmed,
                bool_or(state = 'not_applicable') AS not_applicable
         FROM state_rows WHERE key IS NOT NULL GROUP BY key, eid)
-    SELECT key, count(*) AS attempted,
+    SELECT key, count(*) FILTER (WHERE any_attempt) AS attempted,
            count(*) FILTER (WHERE answered) AS answered,
            count(*) FILTER (WHERE unavailable) AS unavailable,
            count(*) FILTER (WHERE failed) AS failed,
            count(*) FILTER (WHERE potential_match) AS potential_match,
            count(*) FILTER (WHERE confirmed) AS confirmed_result,
            count(*) FILTER (WHERE not_applicable) AS not_applicable,
-           count(*) FILTER (WHERE NOT answered AND NOT not_applicable) AS attempted_not_answered
+           count(*) FILTER (WHERE any_attempt AND NOT answered AND NOT not_applicable) AS attempted_not_answered,
+           count(*) FILTER (WHERE disabled) AS not_attempted_disabled,
+           count(*) FILTER (WHERE disabled AND NOT any_attempt) AS not_attempted_disabled_only,
+           count(*) AS with_evidence_row
     FROM per_entity GROUP BY key
 """
 
+#: `not_attempted_disabled`      entities with >=1 row recording "not attempted - disabled for this run"
+#: `not_attempted_disabled_only` ... and NO row of any other kind for the source (never actually asked)
+#: `with_evidence_row`           entities with any row at all, of either kind
+#: so, per source:  eligible = attempted + not_attempted_disabled_only + not_attempted
 _STATE_FIELDS = ("attempted", "answered", "unavailable", "failed", "potential_match",
-                 "confirmed_result", "not_applicable", "attempted_not_answered")
+                 "confirmed_result", "not_applicable", "attempted_not_answered",
+                 NOT_ATTEMPTED_DISABLED, "not_attempted_disabled_only", "with_evidence_row")
 
 
 async def source_states(db, intake_id, *, eligible: int) -> Dict[str, Any]:
@@ -581,7 +638,11 @@ async def source_states(db, intake_id, *, eligible: int) -> Dict[str, Any]:
         for field, value in zip(_STATE_FIELDS, row[1:]):
             out[key][field] = int(value or 0)
     for block in out.values():
-        block["not_attempted"] = max(0, eligible - block["attempted"])
+        # `not_attempted` keeps its meaning: NO evidence row for the source at all (the population
+        # `list_not_attempted` lists). An entity whose only row says "disabled for this run" has a row, so it
+        # is counted under `not_attempted_disabled_only` instead - never here, never under `attempted`.
+        block["not_attempted"] = max(0, eligible - block["with_evidence_row"])
+        block["not_attempted_disabled_label"] = NOT_ATTEMPTED_DISABLED_LABEL
     out["pecos"]["backing"] = "nppes_proxy"
     out["pecos"]["is_independent_cms_enrollment"] = False
     out["sam"]["is_exclusion_clearance"] = False
@@ -702,6 +763,19 @@ async def coverage_for_intake(db, intake_id, *, job=None) -> Dict[str, Any]:
     # vs leg not recorded). The headline SAM counts above are not changed.
     if isinstance(sources.get("sam"), dict):
         sources["sam"]["screening_legs"] = await sam_screening_legs(db, intake_id)
+    # Additive, every source (0 for all but SAM): entities with a row recording "not attempted - disabled for
+    # this run". Not in `attempted`, not in `unavailable`.
+    for key in SOURCES:
+        if isinstance(sources.get(key), dict):
+            sources[key][NOT_ATTEMPTED_DISABLED] = tally[key][NOT_ATTEMPTED_DISABLED]
+            sources[key]["not_attempted_disabled_label"] = NOT_ATTEMPTED_DISABLED_LABEL
+            if tally[key][NOT_ATTEMPTED_DISABLED]:
+                # The state word is unchanged (no new vocabulary). The note says what the count means, so a
+                # "Not Run" or partial SAM line is never read as an outage or as work left undone by mistake.
+                sources[key]["note"] = (
+                    f"{tally[key][NOT_ATTEMPTED_DISABLED]} entity(ies): live API not attempted - disabled or "
+                    f"stopped for this run (each record states which) - not counted as attempted and not counted as "
+                    f"unavailable. " + str(sources[key].get("note") or ""))
     states = await source_states(db, intake_id, eligible=eligible)
     provenance = None
     try:
