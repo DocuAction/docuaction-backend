@@ -379,6 +379,10 @@ def test_the_adjudication_open_outcome_is_disclosed_on_the_cover_and_a_stored_on
     def cover(name):
         return re.sub(r"\s+", " ", pdfs[name][0]["text"])
     opened = cover("adjudication_open_061")
-    assert "adjudication open (412)" in opened and "cannot be approved" in opened
+    # PDF text extraction interleaves the cover's two columns, so "(412)" can land after a neighbouring cell's
+    # text: each part of the disclosure is asserted on the cover separately.
+    assert "Reconciliation has NOT passed: 412 default-routed" in opened
+    assert "Classification may continue - adjudication open" in opened and "(412)" in opened
+    assert "The delivery cannot be approved until they are adjudicated." in opened
     stored = cover("exceptions_061")
     assert "remain undecided" in stored and "adjudication open" not in stored
