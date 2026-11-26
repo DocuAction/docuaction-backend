@@ -252,6 +252,7 @@ async def _assert_demonstration(w, res_b, res_n, b_calls):
     assert res_b["unresolved"] == [] and res_b["resolution_failures"] == [] and res_b["verified"] == 4
     assert res_b["classified_on_submitted_values"] == w.refs
     assert res_b["evidence_snapshot_only_submitted_values"] == w.refs
+    assert res_b["evidence_not_stored_unanchored"] == []               # anchored: never reported as unanchored
     assert res_n["classified_on_submitted_values"] == []               # the twins never needed the rule
     # no connector was asked about ANY NPI for delivery B - A's least of all
     assert {npi for _label, npi in b_calls if npi} == set()
@@ -534,11 +535,14 @@ async def test_the_review_cycle_reviews_the_blank_npi_members_and_reports_it(wor
     verification = result["verification"]
     assert verification["classified_on_submitted_values_count"] == 4
     assert sorted(verification["classified_on_submitted_values"]) == sorted(w.refs)
+    assert verification["evidence_not_stored_unanchored_count"] == 0   # they are anchored, and audited as such
+    assert verification["evidence_not_stored_unanchored"] == []
     assert w.sources.npis_asked() == set()                              # still no NPI-keyed question
     audit = (await w.db.execute(select(reg.TefcaRegAuditLog).where(
         reg.TefcaRegAuditLog.action == "review_cycle_members_verified"))).scalars().all()
     meta = next(a.metadata_ for a in audit if (a.metadata_ or {}).get("sample_id") == str(sample_id))
     assert meta["classified_on_submitted_values"] == 4
+    assert meta["evidence_not_stored_unanchored"] == 0 and meta["evidence_not_stored_unanchored_refs"] == []
 
 
 async def test_the_record_report_shows_the_record_classified_and_its_npi_sources_not_checked(world, monkeypatch):
@@ -753,3 +757,401 @@ async def test_this_change_touches_no_rule_no_rule_component_and_not_the_scope_o
     for module in (bucket_classifier, rule_configuration):
         source = inspect.getsource(module)
         assert "submitted_values" not in source and "BLANK_NPI" not in source, module.__name__
+
+
+# ═══ sampling and work-queue consequences of leaving the shared entity as it is ══════════════════════════════════════
+#
+# Owner: "the same record must not be repeatedly selected, and any record needing analyst attention must remain
+# visible through its review."
+
+_PM = SimpleNamespace(id=None, email="cycle@synthetic-test.docuaction.invalid", role="program_manager")
+
+
+async def _give_qhin(db, entities):
+    """The canonical `managed_by_qhin` edge the sampling frame needs (one QHIN for all)."""
+    qhin = uuid.uuid4()
+    db.add(reg.TefcaRegEntity(id=qhin, name=f"{SYN} QHIN queues", display_name=f"{SYN} QHIN",
+                              entity_level="qhin", entity_type="health_information_network",
+                              operational_status="active", verification_status="not_verified",
+                              current_version=1, is_active=True, is_test_record=False, rce_attributes={}))
+    await db.flush()
+    existing = {row for row in (await db.execute(select(reg.TefcaEntityRelationship.child_entity_id).where(
+        reg.TefcaEntityRelationship.child_entity_id.in_(list(entities)),
+        reg.TefcaEntityRelationship.relationship_type == "managed_by_qhin"))).scalars().all()}
+    for entity in entities:
+        if entity not in existing:
+            db.add(reg.TefcaEntityRelationship(
+                id=uuid.uuid4(), parent_entity_id=qhin, child_entity_id=entity,
+                relationship_type="managed_by_qhin", status="active", source="import",
+                effective_date=date(2026, 11, 1)))
+    await db.flush()
+
+
+def _real_cycle(monkeypatch, db):
+    """A REAL review cycle (real plan, members, walk, writer, gatherer); only reconciliation and the processing
+    barrier are replaced, and the resolver runs on the test session."""
+    import app.tefca_registry.processing_controls as pc
+    import app.tefca_registry.rce.reconciliation as rec
+
+    async def _enter(_db):
+        return None
+
+    async def _reconciled(_db, _intake):
+        return {"passed": True, "checks": []}
+
+    async def _resolve(_db, ref):
+        from app.Tefca.entity_resolution import resolve_from_db
+        return await resolve_from_db(db, ref)
+    monkeypatch.setattr(pc, "enter_processing", _enter)
+    monkeypatch.setattr(rec, "reconcile_delivery", _reconciled)
+    monkeypatch.setattr("app.Tefca.entity_resolution.resolve_entity", _resolve)
+
+
+async def _reviews_for_records(db, curated_by_ref, refs):
+    ids = [curated_by_ref[ref].source_record_id for ref in refs]
+    return (await db.execute(select(reg.ReviewRecord).where(
+        reg.ReviewRecord.source_record_id.in_(ids)))).scalars().all()
+
+
+async def test_a1_repeated_cycle_calls_never_review_the_record_again(world, monkeypatch):
+    w = world
+    await _give_qhin(w.db, w.entities)
+    _real_cycle(monkeypatch, w.db)
+    first = await rc._create_review_cycle(w.db, w.intake_b, user=_PM, full_population=True)
+    assert first["linked_this_call"] == 4 and first["complete"] is True
+    asked_after_first = len(w.sources.npi_calls) + len(w.sources.name_calls)
+    for _ in range(3):
+        again = await rc._create_review_cycle(w.db, w.intake_b, user=_PM, full_population=True)
+        assert again["linked_this_call"] == 0 and again["remaining"] == 0 and again["complete"] is True
+        assert again["verification"]["requested"] == 0
+    reviews = await _reviews_for_records(w.db, w.cur_b, w.refs)
+    assert len(reviews) == 4 and len({r.source_record_id for r in reviews}) == 4      # ONE review per record
+    assert len(w.sources.npi_calls) + len(w.sources.name_calls) == asked_after_first  # and no source asked again
+
+
+async def test_a2_a_second_plan_for_the_same_delivery_does_not_draw_the_record_again(world, monkeypatch):
+    """A second plan for the same delivery is a different plan key (another review type, margin, or a sample after
+    a full enumeration), so `finalize_plan` builds a new frame. BEFORE this change an ordinary reviewed record was
+    kept out of that frame by the entity status its review wrote (`in_review`); a record classified on its submitted
+    values writes no entity status, so nothing kept it out and the second plan reviewed it again. NOW the frame
+    excludes a delivered record that already has ITS OWN review classified on submitted values - keyed on the
+    record, reported with a reason, and placing no restriction on the entity."""
+    from app.tefca_registry import qhin_sampling as qs
+    w = world
+    await _give_qhin(w.db, w.entities)
+    _real_cycle(monkeypatch, w.db)
+    await rc._create_review_cycle(w.db, w.intake_b, user=_PM, full_population=True)
+    statuses = {(await w.db.get(reg.TefcaRegEntity, e)).verification_status for e in w.entities}
+    assert statuses == {"not_verified"}                              # the entity status is NOT what protects it
+
+    eligible, unresolved = await qs.resolve_qhin_strata(w.db, w.intake_b)
+    assert eligible == []
+    assert {u["exclusion"] for u in unresolved} == {qs.EXCLUSION_REVIEWED_ON_SUBMITTED_VALUES}
+    assert {u["entity_id"] for u in unresolved} == set(w.entities)
+    assert all(u["reason"] == qs.REVIEWED_ON_SUBMITTED_VALUES_REASON for u in unresolved)
+
+    record_ids = [w.cur_b[ref].source_record_id for ref in w.refs]   # plain values: a refusal rolls back
+    entity_ids, intake_b = list(w.entities), w.intake_b
+    for second_plan in ({"review_type": "weekly", "full_population": True}, {"review_type": "weekly"},
+                        {"margin": 0.1}):
+        with pytest.raises(rc.CycleRefused, match="no eligible population"):
+            await rc._create_review_cycle(w.db, intake_b, user=_PM, **second_plan)
+    reviews = (await w.db.execute(select(reg.ReviewRecord.review_id).where(
+        reg.ReviewRecord.source_record_id.in_(record_ids)))).scalars().all()
+    assert len(reviews) == 4                                         # no duplicate review
+    samples = (await w.db.execute(select(reg.SampleEntity.id).where(
+        reg.SampleEntity.entity_id.in_(entity_ids)))).scalars().all()
+    assert len(samples) == 4                                         # and no second sample membership
+
+
+async def test_a2_the_exclusion_is_the_delivered_record_and_nothing_wider(world, monkeypatch):
+    """Only two of the four records are reviewed (as their own delivery's blank-NPI records). The other two records
+    of the same delivery stay eligible; so does the SAME entity's record in delivery A; an ordinary review of the
+    same entity (no `submitted_values_basis`) excludes nothing through this key."""
+    from app.tefca_registry import qhin_sampling as qs
+    w = world
+    await _give_qhin(w.db, w.entities)
+    await ap.verify_and_classify(w.db, w.refs[:2], intake_id=w.intake_b)
+    eligible, unresolved = await qs.resolve_qhin_strata(w.db, w.intake_b)
+    assert {u["entity_id"] for u in eligible} == set(w.entities[2:])
+    assert {u["entity_id"] for u in unresolved
+            if u.get("exclusion") == qs.EXCLUSION_REVIEWED_ON_SUBMITTED_VALUES} == set(w.entities[:2])
+    # delivery A (the same entities, records that submitted the NPI): untouched by B's reviews
+    eligible_a, unresolved_a = await qs.resolve_qhin_strata(w.db, w.intake_a)
+    assert {u["entity_id"] for u in eligible_a} == set(w.entities) and unresolved_a == []
+    # an ordinary review of A's records writes the entity status; THAT exclusion is the old one, not this key
+    await ap.verify_and_classify(w.db, list(w.refs), intake_id=w.intake_a)
+    _eligible_a, unresolved_a = await qs.resolve_qhin_strata(w.db, w.intake_a)
+    assert {u.get("exclusion") for u in unresolved_a} == {qs.EXCLUSION_REVIEW_REQUIRED}
+
+
+async def test_a3_a_later_delivery_draws_the_same_entity_for_its_own_record(world, monkeypatch):
+    """Delivery B2 delivers the same organisations again (blank NPI). The entities are selectable for B2's own
+    records, B2 gets its OWN reviews anchored to ITS records, and B's reviews are neither reused nor changed."""
+    from app.tefca_registry import qhin_sampling as qs
+    w = world
+    await _give_qhin(w.db, w.entities)
+    _real_cycle(monkeypatch, w.db)
+    await rc._create_review_cycle(w.db, w.intake_b, user=_PM, full_population=True)
+    b_reviews = {r.review_id: r.source_record_id for r in await _reviews_for_records(w.db, w.cur_b, w.refs)}
+
+    rows_b2 = [dict(r, name=r["name"]) for r in _rows("9.99.780.1", npis=[""] * len(VARIANTS))]
+    for row in rows_b2:
+        row["address_line"] = "2 Later Delivery Way"                 # a different file, the same organisations
+    intake_b2 = await _ingest(w.db, rows_b2)
+    cur_b2 = await _curated(w.db, intake_b2)
+    assert [cur_b2[ref].canonical_entity_id for ref in w.refs] == w.entities          # the same entities
+
+    eligible, unresolved = await qs.resolve_qhin_strata(w.db, intake_b2)
+    assert {u["entity_id"] for u in eligible} == set(w.entities)     # selectable for the later delivery
+    assert [u for u in unresolved if u.get("exclusion") == qs.EXCLUSION_REVIEWED_ON_SUBMITTED_VALUES] == []
+
+    cycle = await rc._create_review_cycle(w.db, intake_b2, user=_PM, full_population=True)
+    assert cycle["linked_this_call"] == 4 and cycle["complete"] is True
+    b2_reviews = {r.review_id: r.source_record_id for r in await _reviews_for_records(w.db, cur_b2, w.refs)}
+    assert len(b2_reviews) == 4 and set(b2_reviews).isdisjoint(b_reviews)            # its own, new reviews
+    assert set(b2_reviews.values()) == {cur_b2[ref].source_record_id for ref in w.refs}
+    assert {r.review_id: r.source_record_id
+            for r in await _reviews_for_records(w.db, w.cur_b, w.refs)} == b_reviews  # B's are as they were
+
+
+async def test_b_a_record_needing_attention_is_visible_and_assignable_through_its_review(world, monkeypatch):
+    """Every analyst / supervisor queue is built from ReviewRecord rows, not from the entity status this change no
+    longer writes. Under the composed ONC-scope rules the four records are one B4 (RULE-006) and three default B3:
+    each is in the available-cases queue and the operations work queue with its bucket, tier-routing reason and
+    `submitted_values_basis`; each opens in the analyst workspace with the basis and the (unchanged) entity status;
+    each can be assigned; and the QHIN workload rollup counts it under review."""
+    from app.tefca_registry import case_assignment as ca
+    from app.tefca_registry import qhin_workload, supervisor_ops, workspace
+    from app.tefca_registry.rule_configuration import compose
+    w = world
+    await _give_qhin(w.db, w.entities)
+    _real_cycle(monkeypatch, w.db)
+    rules = [{**r, "version": 99} for r in compose({"treatment_b4_onc_scope"})]
+
+    async def _rule_set(_db):
+        return rules
+    monkeypatch.setattr(ap, "_rule_set", _rule_set)
+    cycle = await rc._create_review_cycle(w.db, w.intake_b, user=_PM, full_population=True)
+    assert cycle["linked_this_call"] == 4
+    reviews = {r.source_record_id: r for r in await _reviews_for_records(w.db, w.cur_b, w.refs)}
+    by_variant = {v[0]: reviews[w.cur_b[ref].source_record_id] for v, ref in zip(VARIANTS, w.refs)}
+    assert (by_variant["sole_treatment_active"].classification_bucket,
+            by_variant["sole_treatment_active"].classification_rule) == ("B4", "RULE-006")
+    assert {by_variant[v].classification_bucket for v in ("combined_treatment", "non_treatment",
+                                                          "inactive_treatment")} == {"B3"}
+    review_ids = {r.review_id for r in reviews.values()}
+    # the entity status says nothing - visibility cannot be coming from it
+    assert {(await w.db.get(reg.TefcaRegEntity, e)).verification_status for e in w.entities} == {"not_verified"}
+
+    # 1. the analysts' "available cases" queue (review-driven)
+    available = await ca.available_cases(w.db, queue_source=rc.QUEUE_SOURCE, intake_id=w.intake_b)
+    assert {c["review_id"] for c in available} == review_ids
+    # 2. the supervisor operations work queue (review-driven), with bucket, reason and the basis
+    queue = await supervisor_ops.work_queue(w.db, intake_id=w.intake_b, limit=50)
+    items = {i["review_id"]: i for i in queue["items"]}
+    assert set(items) == review_ids
+    for item in items.values():
+        assert item["submitted_values_basis"] == ap.SUBMITTED_VALUES_BASIS
+        assert item["source_record_id"] and item["queue_source"] == rc.QUEUE_SOURCE and item["work_reasons"]
+    # 3. the analyst workspace for the case: bucket, rule, rationale, the basis, and the untouched entity status
+    b4 = by_variant["sole_treatment_active"]
+    page = await workspace.workspace(w.db, b4.review_id)
+    status = page["verification_status"]
+    assert status["classification_bucket"] == "B4" and status["rule"]["rule_code"] == "RULE-006"
+    assert status["submitted_values_basis"] == ap.SUBMITTED_VALUES_BASIS
+    assert status["entity_verification_status"] == "not_verified"
+    assert all(npi not in json.dumps(page, default=str) for npi in A_NPIS)           # and still no NPI of A's
+    # 4. assignable: a supervisor assigns it, and it leaves the unowned queue for the analyst's own work list
+    from app.models.database import User
+    analyst = (await w.db.execute(select(User).limit(1))).scalars().first()
+    if analyst is not None:
+        supervisor = SimpleNamespace(id=analyst.id, email=analyst.email, role="program_manager")
+        assigned = await ca.assign(w.db, b4.review_id, user=supervisor, to_user_id=analyst.id, reason="synthetic")
+        assert assigned["assigned_to_user_id"] == str(analyst.id)
+        assert b4.review_id not in {c["review_id"] for c in await ca.available_cases(
+            w.db, queue_source=rc.QUEUE_SOURCE, intake_id=w.intake_b)}
+        mine = await ca.my_work(w.db, user=supervisor, queue_source=rc.QUEUE_SOURCE, intake_id=w.intake_b)
+        assert b4.review_id in {c["review_id"] for c in mine}
+    # 5. the QHIN workload rollup: placed, under review through the review, labelled - never "held"
+    placed, unplaced, summary = await qhin_workload.placement_units(w.db, w.intake_b)
+    assert summary["reviewed_on_submitted_values"] == 4 and summary["held"] == 0 and unplaced == []
+    assert {u["draw_eligibility"] for u in placed} == {"reviewed_on_submitted_values"}
+
+
+# ═══ final-code review of #249: answering sources, the DEV-like rule composition, report cells, edge values ══════════
+
+def _answering_sources(monkeypatch, sources, *, extract_candidate):
+    """The NAME-keyed sources ANSWER (as on DEV, where the extract screen is ON): LEIE by organisation - no
+    exclusion found; SAM by name - a registration answer, not excluded; the public extract - clear or a candidate.
+    Result shapes are the connectors' own (`OIGLEIEConnector._build`, `SAMExtractConnector._build`): neither puts a
+    top-level `npi` in its data; a candidate ROW may carry the excluded party's own NPI, as here."""
+    from app.Tefca import connectors, sam_extract
+    monkeypatch.setenv("ENABLE_SAM_EXTRACT_SCREENING", "true")
+
+    async def _leie_name(self_, last="", first="", org="", **k):
+        sources.name_calls.append(("OIG_LEIE", org or last))
+        return SourceResult.ok("OIG_LEIE", {
+            "excluded": False, "exclusion_found": False, "active_exclusions": [], "historical_exclusions": [],
+            "exclusion_count": 0, "exclusion_date": None, "exclusion_type": None, "reinstatement_date": None,
+            "list_rows_searched": 80000, "list_loaded_at_epoch": 1764000000.0,
+            "match_methods": ["exact_business_name", "normalized_business_name"],
+            "candidates_exact": 0, "candidates_normalized_only": 0},
+            {"last": last, "first": first, "org": org}, "LEIE-CSV")
+
+    async def _sam_verify(self_, uei="", legal_name="", **k):
+        sources.name_calls.append(("SAM_GOV.verify", legal_name))
+        return SourceResult.ok("SAM_GOV", {"found": True, "matched_by": "name", "ambiguous": False,
+                                           "excluded": False, "exclusions": [], "match_count": 1},
+                               {"uei": uei, "legal_name": legal_name}, "SAM-v3/v4")
+
+    async def _sam_name(self_, legal_name, *a, **k):
+        sources.name_calls.append(("SAM_GOV", legal_name))
+        return SourceResult.ok("SAM_GOV", {"found": True, "matched_by": "name", "ambiguous": False,
+                                           "excluded": False, "exclusions": [], "match_count": 1},
+                               {"legal_name": legal_name}, "SAM-v3/v4")
+
+    async def _extract(self_, npi, org_name, *a, **k):
+        sources.npi_calls.append(("SAM_EXTRACT", str(npi or "")))
+        sources.name_calls.append(("SAM_EXTRACT", org_name))
+        rows = ([{"name": "SYNTHETIC EXCLUDED PARTY", "npi": "1003000126", "classification": "Firm"}]
+                if extract_candidate else [])
+        return SourceResult.ok("SAM_EXTRACT", {
+            "candidate_match": bool(rows), "candidate_count": len(rows), "candidates": rows,
+            "match_methods": ["normalized_business_name"], "source_dataset": "SAM_Exclusions_Public_Extract_V2",
+            "publication_date": "2026-11-24", "extract_sha256": "b" * 64, "list_rows_searched": 160000},
+            {"npi": npi, "org": org_name}, "GSA-Public-Extract-V2")
+
+    monkeypatch.setattr(connectors.OIGLEIEConnector, "lookup_by_name", _leie_name)
+    monkeypatch.setattr(connectors.SAMGovConnector, "verify", _sam_verify)
+    monkeypatch.setattr(connectors.SAMGovConnector, "lookup_by_name", _sam_name)
+    monkeypatch.setattr(sam_extract.SAMExtractConnector, "screen", _extract)
+
+
+def _dev_like_rules(monkeypatch):
+    """The composition closest to DEV that the code allows: the ONC-scope Treatment rule, exclusion candidates to
+    B3, the mandatory-source guards and structural NPI handling - with the EX-3 producer flag the consistency guard
+    requires alongside `exclusion_candidate_b3`. Composed and handed to the writer; nothing is activated or stored."""
+    from app.tefca_registry.rule_configuration import compose
+    monkeypatch.setenv(ap.PROPOSED_EXCLUSION_STATES_ENV, "true")
+    return [{**r, "version": 99} for r in compose({
+        "treatment_b4_onc_scope", "exclusion_candidate_b3", "mandatory_source_guards", "structural_npi_handling"})]
+
+
+@pytest.mark.parametrize("extract_candidate", [False, True])
+async def test_equivalence_holds_when_the_name_keyed_sources_answer_and_the_extract_screen_is_on(
+        world, monkeypatch, capsys, extract_candidate):
+    """The demonstration above runs with every source "unavailable". Here the name-keyed sources ANSWER and the
+    SAM extract screen is ON, under the DEV-like rule composition with an active mandatory sam_gov policy. The
+    blank-NPI record still equals its no-NPI twin (bucket, rule, version, tier, whole classifier input), no
+    NPI-keyed question was asked about the withheld NPI, and a name-keyed result that carries an excluded PARTY's
+    NPI in a candidate row is not mistaken for evidence keyed on the withheld NPI (the record is not refused)."""
+    from test_mandatory_source_parity_2026_11_11 import _policy
+    w = world
+    _answering_sources(monkeypatch, w.sources, extract_candidate=extract_candidate)
+    res_b, res_n, b_calls = await _demonstrate(w, monkeypatch, rules=_dev_like_rules(monkeypatch),
+                                               policies=[_policy()])
+    table = await _assert_demonstration(w, res_b, res_n, b_calls)
+    assert res_b["resolution_failures"] == []                          # nobody refused for the candidate row's NPI
+    asked = {label for label, _name in w.sources.name_calls}
+    assert {"OIG_LEIE", "SAM_EXTRACT"} <= asked                        # the name screens really ran
+    review = await _review_of(w.db, res_b["outcomes"][0]["review_id"])
+    sources_seen = {i["source"] for d in review.verification_results["dimensions"] for i in d.get("evidence") or []}
+    assert {"OIG_LEIE", "SAM_EXTRACT_SUPPLEMENTARY"} <= sources_seen
+    extract = [i for d in review.verification_results["dimensions"] for i in d.get("evidence") or []
+               if i["source"] == "SAM_EXTRACT_SUPPLEMENTARY"][0]
+    assert extract["disposition"] == ("REVIEW" if extract_candidate else "PASS")
+    assert str(extract["query_identifier"]).startswith("org=")         # keyed on the NAME
+    assert not ap._evidence_carries_npi({"dimensions": review.verification_results["dimensions"]})
+    with capsys.disabled():
+        print(f"\nDEMONSTRATION (DEV-like rules + mandatory sam_gov policy, sources answering, extract "
+              f"{'CANDIDATE' if extract_candidate else 'clear'}):", table)
+
+
+async def test_the_screen_cells_of_such_a_record_come_from_its_own_review_never_from_shared_entity_evidence(
+        world, monkeypatch):
+    """Delivery A is reviewed first, so the shared entity store holds A's NPI-keyed LEIE / SAM rows. B's report
+    cells must not read those ("not attributed ... queried by an NPI") and must not print "clear": they quote what
+    B's OWN review recorded for the name-keyed screens, labelled as such. One facts list feeds every rendering
+    (CSV, Excel, PDF, frozen JSON), and each rendering is checked for the same three properties."""
+    w = world
+    _answering_sources(monkeypatch, w.sources, extract_candidate=True)
+    await ap.verify_and_classify(w.db, list(w.refs), intake_id=w.intake_a)           # A's rows are in the store
+    res_b = await ap.verify_and_classify(w.db, list(w.refs), intake_id=w.intake_b)
+    review_ids = {o["source_record_id"]: o["review_id"] for o in res_b["outcomes"]}
+    out = await ld.load_record_facts(w.db, intake_id=w.intake_b, evidence_cutoff=datetime.utcnow() + timedelta(days=1))
+    assert len(out["facts"]) == 4
+    for fact in out["facts"]:
+        assert fact["nppes"] == fact["pecos"] == ld.NOT_CHECKED_NO_SUBMITTED_NPI
+        for key, recorded in (("leie", "NOT_FOUND"), ("sam_extract", "REVIEW")):
+            cell = fact[key]
+            assert cell.startswith("From this record's own review REV-") and "not taken from shared entity" in cell
+            assert cell.endswith(f"recorded {recorded}"), cell
+        assert fact["sam"].startswith(("From this record's own review REV-", "Not checked for this record: its own"))
+        for key in ("nppes", "pecos", "leie", "sam", "sam_extract"):
+            cell = fact[key].lower()
+            assert "clear" not in cell and "not attributed" not in cell and "queried by" not in cell, (key, cell)
+            assert all(npi not in fact[key] for npi in A_NPIS + ["1003000126"]), key
+    assert any(rid in f["leie"] for f in out["facts"] for rid in review_ids.values())
+    assert out["meta"]["stats"]["screen_cells_from_review_snapshot"] == 12
+    # The CSV, Excel, PDF and frozen-JSON renderings are all produced from ONE shared dataset
+    # (`load_dataset` -> `october_review_dataset.build_dataset`); the same properties hold in it.
+    dataset = await ld.load_dataset(w.db, intake_id=w.intake_b, report_id="DA-TEST-BLANK-NPI",
+                                    evidence_cutoff=datetime.utcnow() + timedelta(days=1))
+    body = json.dumps(dataset, default=str)
+    assert body.count("From this record's own review") >= 8 and ld.NOT_CHECKED_NO_SUBMITTED_NPI in body
+    assert all(npi not in body for npi in A_NPIS + ["1003000126"])
+    assert "queried by" not in body.lower()
+    # delivery A's own report still reads ITS rows from the entity store
+    out_a = await ld.load_record_facts(w.db, intake_id=w.intake_a, evidence_cutoff=datetime.utcnow() + timedelta(days=1))
+    assert all("From this record's own review" not in json.dumps(f, default=str) for f in out_a["facts"])
+    assert out_a["meta"]["stats"].get("screen_cells_from_review_snapshot", 0) == 0
+
+
+@pytest.mark.parametrize("submitted,takes_the_path", [
+    ("   ", True),            # whitespace only: blank, as delivered and stripped
+    ("\t", True),             # a tab
+    ("0", False),             # a value: not blank, not the registry's NPI -> refused exactly as before
+    ("N/A", False),
+    ("1234567893;1245319599", False),     # a multi-value cell
+])
+async def test_what_counts_as_a_blank_submitted_npi(world, monkeypatch, submitted, takes_the_path):
+    w = world
+    ref = w.refs[0]
+    rec = await w.db.get(m.RceSourceRecord, w.cur_b[ref].source_record_id)
+    rec.parsed = {**rec.parsed, "NPI": submitted}
+    rec.npi = submitted
+    await w.db.flush()
+    w.sources.npi_calls.clear()
+    res = await ap.verify_and_classify(w.db, [ref], intake_id=w.intake_b)
+    if takes_the_path:
+        assert res["verified"] == 1 and res["classified_on_submitted_values"] == [ref]
+        assert w.sources.npis_asked() == set()
+        review = await _review_of(w.db, res["outcomes"][0]["review_id"])
+        fields = review.verification_results["classifier_input"]["fields"]
+        raw = [s["raw_npi"] for s in fields.values() if isinstance(s, dict) and "raw_npi" in s]
+        assert all(not str(value).strip() for value in raw)             # the classifier sees no NPI
+    else:
+        assert res["verified"] == 0 and res["classified_on_submitted_values"] == []
+        assert res["resolution_failures"] == [{"entity_ref": ref, "reason": ap.REFUSAL_SUBMITTED_NPI_DIFFERS}]
+        assert w.sources.npi_calls == []
+    assert rec.parsed["NPI"] == submitted                               # the delivered value is never rewritten
+
+
+async def test_records_spread_over_several_gather_chunks_are_all_classified_on_their_submitted_values(
+        world, monkeypatch):
+    w = world
+    monkeypatch.setattr(ap, "_GATHER_CHUNK_SIZE", 1)                    # four records, four chunks
+    res = await ap.verify_and_classify(w.db, list(w.refs), intake_id=w.intake_b)
+    assert res["verified"] == 4 and res["classified_on_submitted_values"] == w.refs
+    assert res["evidence_snapshot_only_submitted_values"] == w.refs and res["evidence_not_stored_unanchored"] == []
+    assert [o["entity_ref"] for o in res["outcomes"]] == w.refs and w.sources.npis_asked() == set()
+    assert await _evidence_rows(w.db, w.entities) == []
+
+
+def test_the_supplementary_verify_route_states_that_it_does_not_filter_held_records():
+    import inspect
+    from app.tefca_registry.rce import routes as rce_routes
+    doc = inspect.getdoc(rce_routes.verify)
+    assert "NO HELD FILTER" in doc and "Do not use this" in doc
+    assert "record_status" not in inspect.getsource(rce_routes.verify).split('"""')[2]     # behaviour unchanged

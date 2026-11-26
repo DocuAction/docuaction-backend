@@ -78,6 +78,22 @@ class SamplingRefused(RuntimeError):
 #: not in the frame of a NEW draw until the finding is resolved. Historical
 #: samples are never touched: `finalize_plan` never redraws an existing plan.
 EXCLUSION_REVIEW_REQUIRED = "REVIEW_REQUIRED"
+#: A delivered record that already has ITS OWN anchored review, classified on its submitted values
+#: (`arc_pipeline.SUBMITTED_VALUES_BASIS`), is not drawn again for the same delivery (2026-11-25).
+#:
+#: Before, a reviewed record was normally kept out of a second draw by the entity status the review wrote
+#: (`in_review`, the exclusion above). For a record classified on its submitted values that status is deliberately
+#: NOT written - the shared entity is left as it is - so nothing would stop a second plan for the same delivery
+#: (another review type, margin, or full-population) from selecting the same record and minting a second review.
+#:
+#: THE KEY IS THE DELIVERED RECORD, not the entity: a review whose `source_record_id` is this curated row's own
+#: source record and whose results carry `submitted_values_basis`. A source record belongs to one delivery and one
+#: line of it, so this cannot exclude another record of the same entity, the same entity's record in a later
+#: delivery, or any record reviewed the ordinary way.
+EXCLUSION_REVIEWED_ON_SUBMITTED_VALUES = "REVIEWED_ON_SUBMITTED_VALUES"
+REVIEWED_ON_SUBMITTED_VALUES_REASON = (
+    "this delivered record already has its own review, classified on its submitted values; it is not drawn again "
+    "for this delivery. The review is the work item; the shared entity's status was not changed.")
 REVIEW_REQUIRED_REASON = ("unresolved blocking post-promotion finding "
                           "(verification_status=in_review); excluded from new "
                           "sample draws until resolved through the analyst/QA "
@@ -148,7 +164,8 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
     rows = (await db.execute(
         select(m.RceCuratedRecord.canonical_entity_id,
                m.RceCuratedRecord.rce_org_oid,
-               m.RceCuratedRecord.record_status)
+               m.RceCuratedRecord.record_status,
+               m.RceCuratedRecord.source_record_id)
         .where(m.RceCuratedRecord.source_intake_id == intake_id))).all()
 
     if not rows:
@@ -220,9 +237,19 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
                     reg.TefcaRegEntity.id.in_(promoted),
                     reg.TefcaRegEntity.verification_status == REVIEW_REQUIRED_STATUS))).all()}
 
+    # Delivered records of THIS delivery that already carry their own review classified on submitted values (see
+    # EXCLUSION_REVIEWED_ON_SUBMITTED_VALUES). Same subquery discipline as above; read-only.
+    reviewed_on_submitted_values = {
+        row[0] for row in (await db.execute(
+            select(reg.ReviewRecord.source_record_id).where(
+                reg.ReviewRecord.source_record_id.in_(
+                    select(m.RceCuratedRecord.source_record_id)
+                    .where(m.RceCuratedRecord.source_intake_id == intake_id)),
+                reg.ReviewRecord.verification_results.has_key("submitted_values_basis")))).all()}  # noqa: W601
+
     eligible: List[Dict[str, Any]] = []
     unresolved: List[Dict[str, Any]] = []
-    for entity_id, org_oid, record_status in rows:
+    for entity_id, org_oid, record_status, source_record_id in rows:
         parents = by_child.get(entity_id, [])
         unit = {"entity_id": entity_id, "rce_org_oid": org_oid,
                 "record_status": record_status}
@@ -248,6 +275,11 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
                                "reason": (REVIEW_REQUIRED_REASON_BLOCKING_ONLY
                                           if blocking_only
                                           else REVIEW_REQUIRED_REASON)})
+            continue
+        if source_record_id in reviewed_on_submitted_values:
+            unresolved.append({**unit, "qhin": str(parents[0]),
+                               "exclusion": EXCLUSION_REVIEWED_ON_SUBMITTED_VALUES,
+                               "reason": REVIEWED_ON_SUBMITTED_VALUES_REASON})
             continue
         eligible.append({**unit, "qhin": str(parents[0])})
     return eligible, unresolved

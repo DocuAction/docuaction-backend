@@ -995,6 +995,11 @@ def _evidence_carries_npi(evidence) -> bool:
             if any(part.split("npi=", 1)[1].strip("'\"") for part in query.replace(";", "&").split("&")
                    if "npi=" in part):
                 return True
+            if query.startswith(_NAME_SCREEN_PREFIXES):
+                # A NAME-keyed screen (LEIE `org=`, SAM `legal_name=`, the extract by name). What it returned can
+                # mention an NPI - an excluded party's own, in a candidate row - without the screen having been
+                # asked about one. That is not evidence keyed on the withheld NPI.
+                continue
             values = item.get("original_values") if isinstance(item.get("original_values"), dict) else {}
             if str(values.get("npi") or "").strip():
                 return True
@@ -1256,7 +1261,9 @@ async def verify_and_classify(
                 if store_evidence:
                     evidence_snapshot_only.append(ref)
                 store_evidence = False
-            if persist_evidence and not store_evidence:
+            if persist_evidence and not store_evidence and not _npi_withheld:
+                # UNANCHORED references only. A record classified on its submitted values is anchored; it is
+                # reported under `evidence_snapshot_only_submitted_values` above, never here.
                 evidence_not_stored.append({"entity_ref": ref, "lineage": _lineage})
             if store_evidence:
                 rows = evidence_rows_for_persistence(

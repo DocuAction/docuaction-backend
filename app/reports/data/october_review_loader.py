@@ -181,6 +181,15 @@ NPI_MATCH_ONLY = "NPI match only [N1]"
 #: The record's own review says it submitted no NPI and was classified on its submitted values (the registry's NPI
 #: withheld; `arc_pipeline.SUBMITTED_VALUES_BASIS`). An NPI-keyed source was therefore not asked for THIS record:
 #: whatever NPI-keyed row the linked entity has on file is another record's and is not shown here.
+#: For the same record, the screens that are NOT NPI-keyed (LEIE, SAM, the SAM extract): what its own review
+#: recorded, read from that review's evidence snapshot. The shared entity store is not read for these cells - its
+#: rows for this entity are another record's, queried by an NPI this record did not submit. The recorded
+#: disposition is quoted as recorded and never interpreted here ("clear" is never printed).
+REVIEW_SNAPSHOT_SCREEN = ("From this record's own review {review} (name-keyed screen; not taken from shared entity "
+                          "evidence): recorded {recorded}")
+REVIEW_SNAPSHOT_NO_SCREEN = ("Not checked for this record: its own review {review} holds no {source} screen result "
+                             "(no NPI was submitted, and a name screen is recorded only when the delivered name is "
+                             "established to be the entity's). Not taken from shared entity evidence")
 NOT_CHECKED_NO_SUBMITTED_NPI = ("Not checked for this record: the record submitted no NPI, so this NPI-keyed source "
                                 "was not asked (an NPI the registry holds for the linked entity was not used)")
 NOT_ATTRIBUTED_ANSWER = ("Not attributed to this record [N2]: the stored row concerns {why} ({basis}); "
@@ -433,6 +442,24 @@ def _evidence_cell(kind: str, row: Any, limitation: str = "", *, interpret: bool
     if limitation:
         text += f" | Limitation: {limitation}"
     return text
+
+
+def _review_snapshot_screen_cell(rev: Any, source: str) -> str:
+    """The screen result(s) for `source` held in a review's OWN evidence snapshot, quoted as recorded. Only items
+    that were not keyed on an NPI are quoted; no identifier and no returned value is printed."""
+    recorded = []
+    for dimension in (rev.verification_results or {}).get("dimensions") or []:
+        for item in dimension.get("evidence") or []:
+            if not isinstance(item, dict) or item.get("source") != source:
+                continue
+            if str(item.get("query_identifier") or "").strip().lower().replace(" ", "").startswith("npi="):
+                continue
+            word = _s(item.get("disposition")).upper() or "NO DISPOSITION"
+            if word not in recorded:
+                recorded.append(word)
+    if not recorded:
+        return REVIEW_SNAPSHOT_NO_SCREEN.format(review=rev.review_id, source=source)
+    return REVIEW_SNAPSHOT_SCREEN.format(review=rev.review_id, recorded=", ".join(recorded))
 
 
 def _sam_extract_cell(row: Any) -> str:
@@ -736,12 +763,16 @@ async def load_record_facts(
                 if ent is None:
                     cells[key] = NOT_PROMOTED
                     continue
-                if (source in NPI_ANSWER_SOURCES and rev is not None
-                        and isinstance(rev.verification_results, dict)
+                if (rev is not None and isinstance(rev.verification_results, dict)
                         and rev.verification_results.get("submitted_values_basis")):
-                    stats["npi_sources_not_checked_no_submitted_npi"] = (
-                        stats.get("npi_sources_not_checked_no_submitted_npi", 0) + 1)
-                    cells[key] = NOT_CHECKED_NO_SUBMITTED_NPI
+                    if source in NPI_ANSWER_SOURCES:
+                        stats["npi_sources_not_checked_no_submitted_npi"] = (
+                            stats.get("npi_sources_not_checked_no_submitted_npi", 0) + 1)
+                        cells[key] = NOT_CHECKED_NO_SUBMITTED_NPI
+                    else:
+                        stats["screen_cells_from_review_snapshot"] = (
+                            stats.get("screen_cells_from_review_snapshot", 0) + 1)
+                        cells[key] = _review_snapshot_screen_cell(rev, source)
                     continue
                 row = evidence.get((ent, source))
                 if row is None:
