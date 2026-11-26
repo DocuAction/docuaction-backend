@@ -178,7 +178,8 @@ def note_live_api_response(status: int, *, empty_body: bool = False, remaining: 
             wait = None
             # Retry-After is honoured for a 429 only. "Remaining: 0" means the DAILY quota is used: stop until the
             # next UTC day whatever Retry-After says, so exhausted access is not retried at its cadence.
-            if status == 429 and retry_after and str(retry_after).strip().isdigit():
+            quota_used = remaining is not None and str(remaining).strip() == "0"
+            if status == 429 and not quota_used and retry_after and str(retry_after).strip().isdigit():
                 wait = int(str(retry_after).strip())
             until = now + wait if wait else _next_utc_midnight(now)
             _stop(now, until, ("SAM.gov answered HTTP 429 (rate limit or daily quota reached)" if status == 429

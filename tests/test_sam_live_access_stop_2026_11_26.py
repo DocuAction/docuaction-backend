@@ -177,8 +177,8 @@ def test_the_report_cell_says_not_attempted_and_why():
 
 async def test_remaining_zero_stops_until_the_next_utc_day_even_with_retry_after(wired):
     """Review 2026-11-26: Retry-After is honoured for a 429 only; "Remaining: 0" means the daily quota is used."""
-    import time
-    now = time.time()
+    import datetime as dt
+    now = dt.datetime(2026, 11, 26, 8, 0, tzinfo=dt.timezone.utc).timestamp()      # fixed, well before midnight
     sam_screening.note_live_api_response(200, remaining="0", retry_after="60", now=now)
     assert sam_screening.live_api_stop_reason(now=now + 120) is not None          # not resumed after 60 s
     assert sam_screening._LIVE["stop_until"] == sam_screening._next_utc_midnight(now)
@@ -197,3 +197,33 @@ async def test_a_call_that_already_sent_a_request_keeps_its_real_failure(wired, 
     assert sam_screening.classify_failure(result.error) != sam_screening.NOT_ATTEMPTED_STOPPED
     _stopped(await connector.lookup_by_name(f"{SYN} next"))      # the NEXT call sends nothing
     assert client.attempts == 1
+
+
+async def test_zero_remaining_outranks_retry_after_on_a_429(wired):
+    import datetime as dt
+    now = dt.datetime(2026, 11, 26, 8, 0, tzinfo=dt.timezone.utc).timestamp()
+    sam_screening.note_live_api_response(429, remaining="0", retry_after="60", now=now)
+    assert sam_screening._LIVE["stop_until"] == sam_screening._next_utc_midnight(now)
+    sam_screening.reset_live_api_state()
+    sam_screening.note_live_api_response(429, retry_after="60", now=now)        # quota not reported as used
+    assert sam_screening._LIVE["stop_until"] == now + 60
+
+
+async def test_a_sent_request_that_timed_out_keeps_its_transport_failure(wired, monkeypatch):
+    """Review 2026-11-26: the budget is used by a request that then times out; the call reports the timeout
+    (attempted), never 'No request was made'."""
+    monkeypatch.setenv(sam_screening.DAILY_REQUEST_BUDGET_ENV, "1")
+
+    class _Timeout:
+        attempts = 0
+
+        async def get(self, url, params=None, headers=None, timeout=None):
+            self.attempts += 1
+            raise httpx.ReadTimeout("synthetic timeout", request=httpx.Request("GET", url))
+    client = _Timeout()
+    connector = wired(client)
+    result = await connector.lookup_by_name(f"{SYN} timeout")
+    assert client.attempts == 1
+    assert result.success is False
+    assert sam_screening.classify_failure(result.error) != sam_screening.NOT_ATTEMPTED_STOPPED
+    assert "No request was made" not in result.error

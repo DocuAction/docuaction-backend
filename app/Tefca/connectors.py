@@ -479,6 +479,7 @@ async def _get_with_retry(
     client = _shared_http_client()
     limiter = _rate_limiter_for(source)
     sent: List[httpx.Response] = []
+    tried = {"n": 0, "last_exc": None}     # requests SENT by this call, and the last transport failure
     async for attempt in AsyncRetrying(
         stop=(stop_after_attempt(RETRY_ATTEMPTS) | stop_after_delay(SOURCE_TIMEOUT_SECONDS)),
         wait=wait_exponential(multiplier=1, min=1, max=4),
@@ -491,14 +492,22 @@ async def _get_with_retry(
                 # Re-checked per ATTEMPT: concurrent records past the entry-point check must not keep asking.
                 stopped = sam_screening.live_api_stop_reason()
                 if stopped:
+                    # A call that already SENT a request keeps that request's real outcome - its response (e.g.
+                    # HTTP 500) or its transport failure (e.g. a timeout) - never "not attempted". Only a call that
+                    # sent nothing is recorded as stopped.
                     if sent:
-                        # This call already sent a request: it keeps that request's real outcome (e.g. HTTP 500),
-                        # never "not attempted". Only a call that sent nothing is recorded as stopped.
                         return sent[-1]
+                    if tried["n"] and tried["last_exc"] is not None:
+                        raise tried["last_exc"]
                     raise SamLiveAccessStopped(stopped)
                 sam_screening.note_live_api_request()
-            resp = await client.get(url, params=params, headers=headers,
-                                    timeout=httpx.Timeout(timeout))
+            tried["n"] += 1
+            try:
+                resp = await client.get(url, params=params, headers=headers,
+                                        timeout=httpx.Timeout(timeout))
+            except Exception as exc:  # noqa: BLE001 - recorded, then re-raised unchanged
+                tried["last_exc"] = exc
+                raise
             sent.append(resp)
             if source in _SAM_SOURCES:
                 try:
