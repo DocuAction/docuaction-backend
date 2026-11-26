@@ -241,6 +241,7 @@ jobs:
             tests/test_sam_extract_bulk_run_trace_2026_11_26.py \
             tests/test_sam_api_run_switch_2026_11_26.py \
             tests/test_pending_extract_candidate_visibility_2026_11_26.py \
+            tests/test_sam_disabled_coverage_2026_11_26.py \
             tests/test_review_cycle_identity_precheck_2026_11_25.py \
             tests/test_review_cycle_link_recovery_2026_11_26.py \
             tests/test_deferred_disposition_processing_2026_11_18.py \

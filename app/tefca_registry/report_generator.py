@@ -99,9 +99,13 @@ def build_limitations(source_coverage: Dict[str, Dict[str, int]],
     """Always returns at least one line. Never empty."""
     lines: List[str] = []
 
+    from app.Tefca import sam_screening as _sam_screening
     for src, why in KNOWN_GAPS.items():
         seen = source_coverage.get(src)
         if not seen or (seen.get(VERIFIED, 0) + seen.get(NOT_FOUND, 0)) == 0:
+            if src == "sam_gov" and _sam_screening.live_api_attempts_disabled():
+                # The live API is switched off for the run: said as that, not as an endpoint fault.
+                why = _sam_screening.LIVE_API_DISABLED_REASON
             lines.append(f"{src}: {why}")
 
     for src, row in sorted(source_coverage.items()):

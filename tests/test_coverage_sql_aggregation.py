@@ -121,7 +121,9 @@ async def test_coverage_sql_matches_python_oracle(seeded):
         # oracle: the OLD Python path
         oracle = vc._tally(await vc._verification_rows(db, intake_id),
                            await vc._dimension_rows(db, intake_id))
-        oracle_counts = {k: {o: len(oracle[k][o]) for o in ("attempted", *vc.OUTCOMES)}
+        # (2026-11-26: plus the additive "not attempted - disabled for this run" count, 0 for this seed)
+        oracle_counts = {k: {o: len(oracle[k][o])
+                             for o in ("attempted", vc.NOT_ATTEMPTED_DISABLED, *vc.OUTCOMES)}
                          for k in vc.SOURCES}
         # new SQL path
         sql_counts = await vc.coverage_counts(db, intake_id)

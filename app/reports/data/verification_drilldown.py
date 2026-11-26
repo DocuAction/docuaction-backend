@@ -68,6 +68,7 @@ from typing import Any, AsyncIterator, Dict, Optional
 from sqlalchemy import text
 
 from app.tefca_registry.rce.verification_coverage import (EVIDENCE_ROWS_CTE_SQL,
+                                                           NOT_ATTEMPTED_DISABLED,
                                                            OUTCOMES, SOURCES)
 
 #: Reconciliation pending (see module docstring): never list or export this
@@ -167,8 +168,11 @@ def validate_source_outcome(source: str, outcome: str) -> None:
 def _validate(source: str, outcome: str) -> None:
     if source not in SOURCES:
         raise UnknownSourceOrOutcome(f"source must be one of {sorted(SOURCES)}; got {source!r}")
+    if outcome == NOT_ATTEMPTED_DISABLED:
+        return                  # "not attempted - disabled for this run": its own list, never under unavailable
     if outcome not in OUTCOMES:
-        raise UnknownSourceOrOutcome(f"outcome must be one of {OUTCOMES}; got {outcome!r}")
+        raise UnknownSourceOrOutcome(
+            f"outcome must be one of {OUTCOMES + (NOT_ATTEMPTED_DISABLED,)}; got {outcome!r}")
     if outcome == _OUTCOME_EXPOSURE_BLOCKED:
         raise UnprovenOutcomeRefused(
             "The 'failed' outcome's population is not exposed: it is a "
