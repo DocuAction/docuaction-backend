@@ -1,31 +1,32 @@
-"""CHARACTERIZATION (2026-11-26): the adjudication check blocks the NEXT classification batch.
+"""The review-cycle gate and unadjudicated default-routed reviews (2026-11-26).
 
-Observed on DEV (backend e9064c2, synthetic 5-record delivery): one review-cycle call classified four members,
-two of them default-routed (rule code DEFAULT-UNMATCHED, bucket B3). Every later call for that delivery was refused
-409 with "Failed: Every default-routed determination is adjudicated", while `GET .../reconciliation` and the
-delivery page still said the delivery had passed.
+SUPERSEDED EXPECTATIONS - READ THIS FIRST
+─────────────────────────────────────────
+On main, and on the PR this branch is stacked on (#252), this file CHARACTERIZES the gate as it is: after the
+first batch writes a default-routed (DEFAULT-UNMATCHED) review, every later review-cycle call is refused 409
+"Failed: Every default-routed determination is adjudicated", and a later delivery of the same organisations is
+refused on its first call. Those expectations are intact there.
 
-This file REPRODUCES that, on unmodified main, with the real parts:
+THIS branch proposes Option A (OWNER DECISION REQUIRED - not approved): when that adjudication check is the ONLY
+failed check, classification may continue and the requirement is reported as open. So in THIS branch only, the
+three "refused" expectations below are deliberately replaced by "proceeds, and says what is open". Each replaced
+expectation is marked `SUPERSEDED BY OPTION A`. If the owner declines Option A, this file reverts to its #252
+content with the application change.
 
-    real intake -> quality -> curation -> promotion        (rce_traceability_support)
-    real `reconcile_delivery`                              (NOT replaced - every other cycle test replaces it)
-    real `persist_snapshot` (trigger PIPELINE)             (what the delivery job stores at its RECONCILIATION stage)
-    real review cycle: plan, members, walk, writer, gatherer, classifier, shipped rules
-    sources: recorders that answer "unavailable"           (nothing leaves the machine)
+What does NOT change, and is still asserted here exactly as on #252: the live evaluation fails exactly ONE check
+(the adjudication one) and every population-closure and classification-integrity check passes; reconciliation
+reads NOT passed; the stored PIPELINE snapshot still says passed and `current` still says current (the staleness
+#252 attributes). The full Option A behaviour, and everything that must still refuse, is in
+tests/test_review_cycle_open_adjudication_2026_11_26.py.
 
-It asserts what the code DOES today, not what it should do. A change to what blocks the cycle must change this
-file deliberately, in the same commit, with the owner's adjudication-policy decision recorded.
-
-Why no earlier test saw it: every review-cycle test in the suite replaces `reconcile_delivery` with a stub that
-returns `{"passed": True}` (see `_real_cycle` in tests/test_blank_npi_classified_on_submitted_values_2026_11_25.py),
-and the adjudication check's own test (tests/test_default_routing_provenance.py) never runs a cycle.
+Real intake -> quality -> curation -> promotion, real `reconcile_delivery` (NOT replaced), real
+`persist_snapshot`, real cycle, writer, gatherer, classifier and shipped rules; sources are recorders.
 """
 from __future__ import annotations
 
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.tefca_registry import models as reg
@@ -34,7 +35,6 @@ from app.tefca_registry.rce import arc_pipeline as ap
 from app.tefca_registry.rce import disposition_followups
 from app.tefca_registry.rce import reconciliation
 from app.tefca_registry.rce import routes as rce_routes
-from app.tefca_registry.rce import status_model
 from app.tefca_registry.rce.delivery_jobs import job_for_intake
 from app.tefca_registry.rce.promotion import promote_delivery
 from rce_traceability_support import (  # noqa: F401 - `rolled_back_db` is a fixture
@@ -95,7 +95,8 @@ async def delivery(rolled_back_db, monkeypatch):
         db, intake_id, at_job_end, job_id=job_id, actor=SYN, trigger="PIPELINE")
     return SimpleNamespace(db=db, intake=intake_id, job_id=job_id, sources=sources, entities=entities,
                            snapshot_id=str(snapshot.id), snapshot_sequence=snapshot.sequence,
-                           checks_at_job_end=len(at_job_end["checks"]))
+                           checks_at_job_end=len(at_job_end["checks"]),
+                           check_names=[c["check"] for c in at_job_end["checks"]])
 
 
 def text_entities(intake_id):
@@ -111,36 +112,20 @@ async def _default_routed(db, entities):
         reg.ReviewRecord.classification_rule == ap.UNMATCHED_RULE_CODE))).scalars().all()
 
 
-async def test_the_first_batch_with_a_default_routed_review_blocks_every_later_batch(delivery):
+async def test_the_first_batch_with_a_default_routed_review_no_longer_blocks_the_next_batch(delivery):
     d = delivery
 
-    # ── batch 1: the gate passes (no review exists yet), two members are classified ──
+    # ── batch 1: the gate passes (no review exists yet), two members are classified - as on #252 ──
     first = await rc._create_review_cycle(d.db, d.intake, user=_PM, full_population=True, batch=BATCH)
-    assert first["reconciliation_passed"] is True
+    assert first["reconciliation_passed_at_gate"] is True
     assert first["members"] == MEMBERS and first["linked_this_call"] == BATCH
     assert first["remaining"] == MEMBERS - BATCH and first["complete"] is False
     default_routed = await _default_routed(d.db, d.entities)
     assert len(default_routed) >= 1, "the first batch must produce at least one default-routed review"
     assert {r.classification_bucket for r in default_routed} == {"B3"}
     assert all(r.reviewer_resolution is None for r in default_routed)
-    asked = len(d.sources.npi_calls) + len(d.sources.name_calls)
 
-    # ── batch 2: refused, with exactly the reason seen on DEV; four members stay unclassified ──
-    with pytest.raises(rc.CycleRefused) as refused:
-        await rc._create_review_cycle(d.db, d.intake, user=_PM, full_population=True, batch=BATCH)
-    assert str(refused.value) == (
-        f"Delivery {d.intake} has not passed reconciliation; a review cycle cannot be drawn from a population "
-        f"that does not close. Failed: {ADJUDICATION_CHECK}.")
-    assert len(d.sources.npi_calls) + len(d.sources.name_calls) == asked           # no source was asked
-    members = (await d.db.execute(select(reg.SampleEntity).where(
-        reg.SampleEntity.entity_id.in_(list(d.entities))))).scalars().all()
-    assert sum(1 for mbr in members if mbr.review_id is None) == MEMBERS - BATCH   # ... and nothing more linked
-    audit = (await d.db.execute(select(reg.TefcaRegAuditLog).where(
-        reg.TefcaRegAuditLog.action == "review_cycle_refused"))).scalars().all()
-    assert [(a.metadata_ or {}).get("failed_checks") for a in audit] == [[ADJUDICATION_CHECK]]
-
-    # ── the LIVE evaluation: ONE check fails, and it is the adjudication one. Every population-closure and
-    #    classification-integrity check still passes: the population closes exactly as it did at the job's end ──
+    # ── the LIVE evaluation - UNCHANGED from #252: ONE check fails, and it is the adjudication one ──
     live = await reconciliation.reconcile_delivery(d.db, d.intake)
     assert live["passed"] is False
     assert [c["check"] for c in live["failed_checks"]] == [ADJUDICATION_CHECK]
@@ -149,16 +134,24 @@ async def test_the_first_batch_with_a_default_routed_review_blocks_every_later_b
     assert live["dimensions"]["verification"]["without_rule"] == 0
     assert live["equation"]["holds"] is True
 
+    # ── batch 2. SUPERSEDED BY OPTION A: on #252 this call raises CycleRefused "... Failed: Every default-routed
+    #    determination is adjudicated." Here it proceeds, and says that reconciliation has NOT passed ──
+    second = await rc._create_review_cycle(d.db, d.intake, user=_PM, full_population=True, batch=BATCH)
+    assert second["linked_this_call"] == BATCH and second["remaining"] == MEMBERS - 2 * BATCH
+    assert second["reconciliation_passed"] is False and second["reconciliation_passed_at_gate"] is False
+    assert second["adjudication_open"] is True and second["default_routed_unadjudicated"] >= len(default_routed)
+    audit = (await d.db.execute(select(reg.TefcaRegAuditLog).where(
+        reg.TefcaRegAuditLog.action == "review_cycle_refused"))).scalars().all()
+    assert audit == []
+
 
 async def test_the_stored_snapshot_and_every_stored_status_still_say_passed(delivery):
-    """The stale "passed": what the API and the delivery page read after the gate has started refusing."""
+    """The stale "passed" - unchanged by Option A: what the API reads from the stored snapshot after reviews
+    exist. (The cycle still writes no snapshot.)"""
     d = delivery
     await rc._create_review_cycle(d.db, d.intake, user=_PM, full_population=True, batch=BATCH)
-    with pytest.raises(rc.CycleRefused):
-        await rc._create_review_cycle(d.db, d.intake, user=_PM, full_population=True, batch=BATCH)
+    # SUPERSEDED BY OPTION A: on #252 a second call here is refused; the stored facts below are the same either way.
 
-    # GET /api/tefca/rce/deliveries/{id}/reconciliation (default: no recompute) - the stored snapshot, taken
-    # before any review existed.
     served = await rce_routes.reconciliation(str(d.intake), recompute=False, db=d.db, user=VIEWER)
     assert served["source"] == "persisted_snapshot" and served["snapshot"]["id"] == d.snapshot_id
     assert served["passed"] is True and served["failed_checks"] == []
@@ -166,59 +159,50 @@ async def test_the_stored_snapshot_and_every_stored_status_still_say_passed(deli
     stored_check = next(c for c in served["checks"] if c["check"] == ADJUDICATION_CHECK)
     assert stored_check["passed"] is True and stored_check["detail"].startswith("0 default-routed")
     assert served["dimensions"]["verification"]["reviews"] == 0        # the snapshot predates every review
+    assert served["attribution"]["passed_now"] is False                # ... and #252's attribution says so
 
-    # Nothing the cycle does writes a snapshot: the one from the job's end is still the latest.
     latest = await reconciliation.latest_snapshot(d.db, d.job_id)
     assert str(latest.id) == d.snapshot_id and latest.passed is True
     assert await reconciliation.snapshot_history_count(d.db, d.job_id) == 1
 
-    # "reconciliation_passed ... snapshot ... passed=True" on the delivery page is this basis line, built from
-    # that stored snapshot.
-    outcome = status_model.processing_outcome(
-        job_state="SUCCEEDED", job_stage="READY_FOR_REVIEW", snapshot=latest.to_dict(),
-        stages_completed=list(status_model.REQUIRED_STAGES))
-    basis = next(b for b in outcome["basis"] if b["criterion"] == "reconciliation_passed")
-    assert basis["held"] is True and f"snapshot {d.snapshot_id} passed=True" in basis["detail"]
-
-    # "Reconciliation current: CURRENT" is NOT a comparison with a live evaluation. It only says no recorded
-    # analyst finding-decision has delivery processing outstanding.
     processing = await disposition_followups.summary(d.db, d.intake)
     assert processing["reconciliation_current"] is True
 
-    # The same question asked live (qalead and above: ?recompute=true) gives the opposite answer.
     assert (await job_for_intake(d.db, d.intake)) is not None
     live = await reconciliation.reconcile_delivery(d.db, d.intake)
     assert live["passed"] is False
 
 
-async def test_a_later_delivery_of_the_same_organisations_is_refused_on_its_first_call(delivery):
-    """The check is scoped by ENTITY, not by delivery, sample or source record: it counts every unadjudicated
-    default-routed review of any entity this delivery promoted to - including reviews made for an EARLIER
-    delivery. So a later delivery of the same organisations cannot start its cycle at all."""
+async def test_a_later_delivery_of_the_same_organisations_is_no_longer_refused_on_its_first_call(delivery):
+    """The check is scoped by ENTITY (unchanged): it counts every unadjudicated default-routed review of any
+    entity this delivery promoted to, including reviews made for an EARLIER delivery.
+
+    SUPERSEDED BY OPTION A: on #252 the later delivery's first call is refused before a plan is drawn. Here it
+    proceeds - and the count it reports INCLUDES the earlier delivery's reviews, and says so."""
     d = delivery
     await rc._create_review_cycle(d.db, d.intake, user=_PM, full_population=True, batch=BATCH)
     earlier = await _default_routed(d.db, d.entities)
     assert earlier and all(r.verification_results.get("source_intake_id") == str(d.intake) for r in earlier)
 
-    # The same organisations (same ids), delivered again; one address line differs so the file is a new file.
     later, _job = await seed_intake(d.db, make_rows(MEMBERS, arc="9.99.781.1", address_line="2 Synthetic Way"))
     await run_quality_and_curation(d.db, later)
     await promote_delivery(d.db, later, actor=SYN)
     assert set((await d.db.execute(text_entities(later))).scalars().all()) == set(d.entities)
-    assert not (await d.db.execute(select(reg.ReviewRecord).where(
-        reg.ReviewRecord.verification_results["source_intake_id"].astext == str(later)))).scalars().all()
 
-    with pytest.raises(rc.CycleRefused) as refused:
-        await rc._create_review_cycle(d.db, later, user=_PM, full_population=True, batch=BATCH)
-    assert str(refused.value).endswith(f"Failed: {ADJUDICATION_CHECK}.")
-    live = await reconciliation.reconcile_delivery(d.db, later)
+    live = await reconciliation.reconcile_delivery(d.db, later)                 # unchanged: NOT passed
     assert [c["check"] for c in live["failed_checks"]] == [ADJUDICATION_CHECK]
     assert live["dimensions"]["verification"]["default_unadjudicated"] == len(earlier)
-    assert not (await d.db.execute(select(reg.ReviewSample).where(
-        reg.ReviewSample.strata_config["source_intake_id"].astext == str(later)))).scalars().all()   # no plan drawn
+
+    first = await rc._create_review_cycle(d.db, later, user=_PM, full_population=True, batch=BATCH)
+    assert first["linked_this_call"] == BATCH
+    assert first["reconciliation_passed"] is False and first["reconciliation_passed_at_gate"] is False
+    assert first["default_routed_unadjudicated_at_gate"] == len(earlier)        # the earlier delivery's reviews
+    assert first["default_routed_unadjudicated"] >= len(earlier)
+    assert "earlier delivery" in first["open_requirements"][0]["scope"]
 
 
-async def test_the_route_answers_409(delivery):
+async def test_the_route_no_longer_answers_409_for_an_open_adjudication_requirement(delivery):
+    """SUPERSEDED BY OPTION A: on #252 the second call is HTTP 409."""
     from app.tefca_registry import workflow_routes as wr
 
     d = delivery
@@ -226,6 +210,6 @@ async def test_the_route_answers_409(delivery):
     request = SimpleNamespace(headers={}, client=SimpleNamespace(host="127.0.0.1"))
     first = await wr.create_review_cycle_route(str(d.intake), body, request, db=d.db, user=_PM)
     assert first["linked_this_call"] == BATCH
-    with pytest.raises(HTTPException) as refused:
-        await wr.create_review_cycle_route(str(d.intake), body, request, db=d.db, user=_PM)
-    assert refused.value.status_code == 409 and ADJUDICATION_CHECK in refused.value.detail
+    second = await wr.create_review_cycle_route(str(d.intake), body, request, db=d.db, user=_PM)
+    assert second["linked_this_call"] == BATCH and second["adjudication_open"] is True
+    assert second["reconciliation_passed"] is False

@@ -86,6 +86,32 @@ def _n(value) -> int:
         return 0
 
 
+# ── adjudication open is not "the populations do not close" ─────────────────
+
+def adjudication_only_open(snapshot: Optional[Dict[str, Any]]) -> Optional[int]:
+    """PROPOSED 2026-11-26 (owner decision required). For a snapshot that did
+    NOT pass: the number of default-routed determinations awaiting
+    adjudication when that is the ONLY check that failed, else None.
+
+    Read from the snapshot's own stored `checks` and `dimensions`; nothing is
+    recomputed and the snapshot still says passed=false. None for a passing
+    snapshot, for any other failed check (alone or beside it), and for a
+    snapshot whose checks are not stored.
+    """
+    if not snapshot or snapshot.get("passed"):
+        return None
+    from app.tefca_registry.rce.reconciliation import gate_view
+
+    if not gate_view(snapshot.get("checks"))["only_adjudication_open"]:
+        return None
+    verification = (snapshot.get("dimensions") or {}).get("verification") or {}
+    return _n(verification.get("default_unadjudicated"))
+
+
+def adjudication_open_label(count: int) -> str:
+    return f"Classification may continue - adjudication open ({_n(count)})"
+
+
 # ── processing outcome ───────────────────────────────────────────────────────
 
 def processing_outcome(*, job_state: Optional[str], job_stage: Optional[str],
@@ -147,10 +173,22 @@ def processing_outcome(*, job_state: Optional[str], job_stage: Optional[str],
     note("reconciliation_passed", passed,
          f"snapshot {snapshot.get('id')} passed={passed}; received {eq.get('received')} "
          f"accounted {eq.get('accounted')}")
-    if not passed:
+    open_adjudication = adjudication_only_open(snapshot)
+    if not passed and open_adjudication is None:
         return _result(OUTCOME_PARTIAL, basis,
                        "Reconciliation did not pass: " + (snapshot.get("failure_reason")
                                                           or "the populations do not close."))
+    if open_adjudication is not None:
+        # The ONLY failed check is the adjudication one: every population
+        # closes. That is not "partially processed" - and it is not reconciled
+        # either: `reconciliation_passed` above stays false and is never
+        # rewritten, so this can never read Completed - Clean.
+        note("populations_close", True,
+             "every population-closure and classification-integrity check passed; "
+             "the only failed check is the adjudication one")
+        note("default_routed_determinations_adjudicated", False,
+             f"{open_adjudication} default-routed determination(s) await an analyst "
+             f"resolution")
 
     checks = (
         ("no_unresolved_findings", _n(unresolved_findings) == 0,
@@ -172,6 +210,19 @@ def processing_outcome(*, job_state: Optional[str], job_stage: Optional[str],
     for criterion, held, detail in checks:
         note(criterion, held, detail)
         clean = clean and held
+    if open_adjudication is not None:
+        other = [b["detail"] for b in basis
+                 if not b["held"] and b["criterion"] not in (
+                     "reconciliation_passed", "default_routed_determinations_adjudicated")]
+        return _result(
+            OUTCOME_EXCEPTIONS, basis,
+            "Processing completed and every population closes. Reconciliation has NOT "
+            f"passed: {open_adjudication} default-routed determination(s) await an analyst "
+            f"resolution. {adjudication_open_label(open_adjudication)}. The delivery "
+            "cannot be approved until they are adjudicated."
+            + (" Other exceptions remain: " + "; ".join(other) + "." if other else ""),
+            adjudication_open=open_adjudication, classification_may_continue=True,
+            approvable=False)
     if clean:
         return _result(OUTCOME_CLEAN, basis,
                        "Every received record reconciled; no undecided HIGH/CRITICAL "
@@ -215,7 +266,8 @@ def review_state(*, outcome_code: str, snapshot_passed: bool,
                  open_work_items: int = 0, claimed_work_items: int = 0,
                  determined_items: int = 0, qa_pending: int = 0,
                  qa_in_progress: int = 0, qa_approved: int = 0,
-                 closed: bool = False, open_breakdown=None) -> Dict[str, Any]:
+                 closed: bool = False, open_breakdown=None,
+                 adjudication_open: Optional[int] = None) -> Dict[str, Any]:
     """Where the humans are. Never a statement about data quality.
 
     Counts come from review records tied to the delivery (DQ bridge cases and
@@ -223,13 +275,40 @@ def review_state(*, outcome_code: str, snapshot_passed: bool,
     """
     if closed:
         return _review(REVIEW_CLOSED, "The delivery's review has been closed.")
+    # PROPOSED 2026-11-26 (owner decision required): `adjudication_open` is the
+    # count from `adjudication_only_open` - the snapshot did not pass and the
+    # ONLY failed check is the adjudication one. Review is the work that
+    # closes it, so the delivery is not held at Not Ready; the state then
+    # says, in words, that adjudication is open and the delivery not approvable.
+    adjudication_only = adjudication_open is not None and not snapshot_passed
     if outcome_code in ("QUEUED", "PROCESSING", "FAILED", "PARTIALLY_PROCESSED") \
-            or not snapshot_passed:
+            or (not snapshot_passed and not adjudication_only):
         return _review(REVIEW_NOT_READY,
                        "Review cannot start until processing has completed and "
                        "reconciliation has passed.")
     total = _n(open_work_items) + _n(claimed_work_items) + _n(determined_items) \
         + _n(qa_pending) + _n(qa_in_progress) + _n(qa_approved)
+    if adjudication_only:
+        # Stated on whichever state follows. QA Approved is never reached here:
+        # an unadjudicated determination is by definition not approved.
+        out = review_state(
+            outcome_code=outcome_code, snapshot_passed=True,
+            open_work_items=open_work_items, claimed_work_items=claimed_work_items,
+            determined_items=determined_items, qa_pending=qa_pending,
+            qa_in_progress=qa_in_progress, qa_approved=qa_approved, closed=closed,
+            open_breakdown=open_breakdown)
+        if out["value"] == REVIEW_QA_APPROVED:
+            out = _review(REVIEW_UNDER_REVIEW,
+                          "Every sampled item is QA approved, but default-routed "
+                          "determinations still await adjudication.")
+        out["detail"] = (
+            f"{adjudication_open_label(adjudication_open)}. Reconciliation has NOT "
+            f"passed and the delivery cannot be approved until "
+            f"{_n(adjudication_open)} default-routed determination(s) are adjudicated. "
+            + out["detail"])
+        out["adjudication_open"] = _n(adjudication_open)
+        out["approvable"] = False
+        return out
     if _n(qa_in_progress) > 0:
         return _review(REVIEW_QA_REVIEW, f"{_n(qa_in_progress)} item(s) under QA review.")
     if _n(qa_pending) > 0 and _n(open_work_items) == 0 and _n(claimed_work_items) == 0:

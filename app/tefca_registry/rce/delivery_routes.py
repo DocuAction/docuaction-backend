@@ -450,6 +450,7 @@ async def _fallback_status(db, job) -> Dict[str, Any]:
     review_state = status_model.review_state(
         outcome_code=outcome["code"],
         snapshot_passed=bool(snapshot_dict and snapshot_dict.get("passed")),
+        adjudication_open=outcome.get("adjudication_open"),
         **review)
     return {"processing_outcome": outcome, "review_state": review_state,
             "derived_by": "delivery_routes._fallback_status",

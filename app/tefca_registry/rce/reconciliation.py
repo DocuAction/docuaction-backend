@@ -529,6 +529,71 @@ async def reconcile_delivery(db, intake_id) -> Dict[str, Any]:
     }
 
 
+# ── "may classification continue" is a different question from "passed" ──────
+#
+# PROPOSED 2026-11-26 - AN ADJUDICATION-POLICY CHANGE THAT NEEDS THE OWNER'S
+# DECISION. Nothing below changes `reconcile_delivery`, its `checks`,
+# `dimensions`, `equation` or `passed`, or what any snapshot stores: a delivery
+# with an unadjudicated default-routed determination still does NOT pass, every
+# snapshot of it still stores passed=false, and approval still refuses it.
+#
+# These helpers only READ a result (or a stored snapshot's `checks`) and answer
+# one narrower question for the review-cycle gate and the status wording: is
+# the adjudication check the ONLY thing that fails? If so the populations close
+# and every determination traces to evidence and cites a rule - what is open is
+# analyst work on determinations already made, which more classification
+# neither needs nor disturbs.
+
+#: What an open adjudication requirement keeps blocked, stated wherever the
+#: requirement is reported.
+ADJUDICATION_STILL_BLOCKS = (
+    "approval of the delivery snapshot (final acceptance)",
+    "a passing reconciliation: every reconciliation snapshot of this delivery "
+    "stores passed=false until the determinations are adjudicated",
+)
+
+#: The scope of the count, in words (see `default_routed_unadjudicated`).
+ADJUDICATION_SCOPE_NOTE = (
+    "The count covers every default-routed review of an entity this delivery "
+    "promoted to, including reviews made for an earlier delivery of the same "
+    "organisation, by Priority Review or by shadow reassessment.")
+
+
+def gate_view(checks) -> Dict[str, Any]:
+    """Read `checks` (a live result's or a stored snapshot's) for the cycle
+    gate and the status wording. Pure; reads only names and pass flags.
+
+    `only_adjudication_open` is true when EXACTLY ONE check fails and it is
+    `ADJUDICATION_CHECK`. No failed check at all, any other failed check - alone
+    or beside it - or a malformed entry makes it false.
+    """
+    failed: List[Any] = []
+    for c in checks or []:
+        if not isinstance(c, dict) or not c.get("passed"):
+            failed.append(c.get("check") if isinstance(c, dict) else None)
+    return {
+        "failed_checks": failed,
+        "blocking_for_classification": [f for f in failed if f != ADJUDICATION_CHECK],
+        "adjudication_open": ADJUDICATION_CHECK in failed,
+        "only_adjudication_open": failed == [ADJUDICATION_CHECK],
+    }
+
+
+def open_adjudication_requirement(count: int) -> Dict[str, Any]:
+    """The open requirement, as every surface reports it."""
+    return {
+        "requirement": ADJUDICATION_CHECK,
+        "open": True,
+        "count": int(count),
+        "detail": _adjudication_detail(int(count)),
+        "classification_may_continue": True,
+        "approvable": False,
+        "still_blocks": list(ADJUDICATION_STILL_BLOCKS),
+        "scope": ADJUDICATION_SCOPE_NOTE,
+        "label": f"Classification may continue - adjudication open ({int(count)})",
+    }
+
+
 # ── which evaluation does a status come from? ────────────────────────────────
 
 SOURCE_LIVE = "live_evaluation"
