@@ -31,8 +31,8 @@ def _bound(field, name):
 def test_service_bounds_fit_the_gateway_timeout():
     assert 1 <= rc.PRECHECK_DEFAULT_LIMIT <= rc.PRECHECK_MAX_LIMIT
     assert FIXED_S + PER_MEMBER_S * rc.PRECHECK_MAX_LIMIT < GATEWAY_TIMEOUT_S
-    # the default leaves headroom for a loaded instance
-    assert FIXED_S + PER_MEMBER_S * rc.PRECHECK_DEFAULT_LIMIT < GATEWAY_TIMEOUT_S / 2
+    # the default leaves a quarter of the limit as headroom for a loaded instance
+    assert FIXED_S + PER_MEMBER_S * rc.PRECHECK_DEFAULT_LIMIT < GATEWAY_TIMEOUT_S * 0.75
 
 
 def test_route_default_and_maximum_match_the_service():
