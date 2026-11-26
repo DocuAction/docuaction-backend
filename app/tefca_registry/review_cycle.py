@@ -303,8 +303,16 @@ class IdentityPrecheckUnavailable(RuntimeError):
 
 #: Not-reviewable members listed per page of the preview; the counts are always exact.
 PRECHECK_LIST_CAP = 500
-PRECHECK_DEFAULT_LIMIT = 2000
-PRECHECK_MAX_LIMIT = 5000
+#: Members examined per call. MEASURED on DEV 2026-11-26 (real November delivery, 9,501-member frame, one
+#: request at a time): a fixed ~6 s per call plus ~0.20 s per member examined (limit=1: 6.0 s; limit=200: 46.6 s).
+#: The former default of 2,000 therefore needed ~410 s and the former maximum of 5,000 ~1,000 s - both beyond the
+#: App Service front end's 230 s request timeout. The caller received no response while the server finished the
+#: work anyway, and the client's re-sends then ran the same read several times at once (five overlapping
+#: executions of 419-489 s each were logged). A page must be able to RETURN. 500 (~106 s) leaves room for load;
+#: 1,000 (~206 s) is the most that still fits. Page size never changes what is checked: every member is examined
+#: by the same `_identity_precheck_detail`, and `next_after_entity_id` walks the whole frame.
+PRECHECK_DEFAULT_LIMIT = 500
+PRECHECK_MAX_LIMIT = 1000
 
 OUTCOME_REVIEWABLE = "reviewable"
 OUTCOME_NOT_REVIEWABLE = "not_reviewable"
