@@ -682,8 +682,32 @@ async def delivery_job_detail(
         return await status_for_job(s, job)
 
     async def _snapshot_pair(s):
+        # The snapshot is selected ONCE: the row displayed and the row the
+        # attribution describes are the same object, so a snapshot persisted
+        # while this request runs cannot make the two blocks name different
+        # sequences. The attribution's live read comes last: if it fails,
+        # nothing reads this session after it.
         snap = await latest_snapshot(s, job_id)
-        return snap, await snapshot_history_count(s, job_id)
+        history = await snapshot_history_count(s, job_id)
+        return snap, history, await _attribution_of(s, snap)
+
+    async def _attribution_of(s, snap):
+        # ADDITIVE (2026-11-26): which evaluation the snapshot shown below is, and
+        # what a live read finds now. A failure is reported in the block and
+        # never fails the page.
+        if intake_id is None:
+            return None
+        from app.tefca_registry.rce import reconciliation as _recon
+        try:
+            return await _recon.status_attribution(s, intake_id, snapshot=snap)
+        except Exception as exc:  # noqa: BLE001 - reported, never hidden
+            logger.warning("reconciliation status attribution unavailable: %s",
+                           type(exc).__name__, exc_info=True)
+            return {"status_source": "unavailable", "passed_now": None,
+                    "error_class": type(exc).__name__,
+                    "statement": ("The live read that qualifies the stored snapshot "
+                                  "could not be made; whether the delivery passes "
+                                  "now is not established by this read.")}
 
     fanout = [
         _own_session(stage_events.timeline, job_id),
@@ -703,7 +727,7 @@ async def delivery_job_detail(
     from app.tefca_registry.rce import disposition_followups as _followups
     disposition_processing = await _followups.summary(db, intake_id)
     results = await asyncio.gather(*fanout)
-    events, status, (snapshot, history_count), reports, verification = results[:5]
+    events, status, (snapshot, history_count, attribution), reports, verification = results[:5]
     exceptions_block_value = results[exceptions_idx] if exceptions_idx is not None else None
 
     summary = stage_events.summarise(events)
@@ -811,6 +835,10 @@ async def delivery_job_detail(
             # while any exist the snapshot above predates them (2026-11-18).
             "disposition_processing": disposition_processing,
             "current": bool(disposition_processing.get("reconciliation_current", True)),
+            # Which evaluation `snapshot.passed` is, and what a live read finds
+            # now (`passed_now`: false = a check fails now; null = not
+            # established). `current` above keeps its meaning.
+            "attribution": attribution,
         },
         "dispositions": disposition_block,
         "exceptions": blocks["exceptions"],

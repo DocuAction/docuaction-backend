@@ -114,8 +114,11 @@ def test_failed_job_without_intake_renders_failed_not_ready_and_guidance(client,
     # also says whether recorded analyst decisions are still being processed.
     # A job with no intake has none, so the snapshot facts are exactly as before
     # and the two new fields say "nothing outstanding".
+    # 2026-11-26 contract ADDITION (status attribution): `attribution` says which
+    # evaluation the snapshot is and what a live read finds now. A job with no
+    # intake has nothing to read, so it is null; every other field is as before.
     assert body["reconciliation"] == {
-        "snapshot": None, "history_count": 0, "current": True,
+        "snapshot": None, "history_count": 0, "current": True, "attribution": None,
         "disposition_processing": {
             "store_present": False, "received": 0, "queued": 0, "processing": 0,
             "pending": 0, "failed": 0, "oldest_pending_at": None,
