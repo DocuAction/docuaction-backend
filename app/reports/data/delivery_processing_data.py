@@ -1101,6 +1101,7 @@ class DeliveryProcessingDataService:
         review = status_model.review_state(
             outcome_code=outcome["code"],
             snapshot_passed=bool(snapshot and snapshot.get("passed")),
+            adjudication_open=outcome.get("adjudication_open"),
             open_work_items=counts["open"] + findings["open_high"],
             claimed_work_items=counts["claimed"],
             determined_items=0,

@@ -178,6 +178,10 @@ def _remaining(received, job, status) -> Optional[int]:
     return max(received - processed, 0)
 
 
+#: The populations close and the ONLY failed check is the adjudication one.
+ADJUDICATION_OPEN_STATE = "ADJUDICATION_OPEN"
+
+
 def _status(job, recon) -> Dict[str, Any]:
     """The single word the screen leads with, plus why it says that.
 
@@ -202,6 +206,22 @@ def _status(job, recon) -> Dict[str, Any]:
         return {"state": "READY_FOR_REVIEW", "stage": "READY_FOR_REVIEW",
                 "detail": ("Reconciliation passed: the A-F populations close "
                            "exactly. A review cycle may be created.")}
+    # PROPOSED 2026-11-26 (owner decision required). The populations DO close;
+    # the only failed check is the adjudication one. That is neither
+    # "reconciliation failed: populations do not close" nor "passed".
+    from app.tefca_registry.rce import reconciliation as _recon
+    if _recon.gate_view(recon.get("checks"))["only_adjudication_open"]:
+        open_count = int((((recon.get("dimensions") or {}).get("verification") or {})
+                          .get("default_unadjudicated")) or 0)
+        return {"state": ADJUDICATION_OPEN_STATE, "stage": "READY_FOR_REVIEW",
+                "reconciliation_passed": False, "adjudication_open": open_count,
+                "approvable": False,
+                "detail": (f"Classification may continue - adjudication open "
+                           f"({open_count}). The A-F populations close exactly, but "
+                           f"reconciliation has NOT passed: {open_count} default-routed "
+                           f"determination(s) await an analyst resolution. The review "
+                           f"cycle may be created or continued; the delivery cannot be "
+                           f"approved until they are adjudicated.")}
     return {"state": "RECONCILIATION_FAILED", "stage": "RECONCILIATION",
             "detail": ("The A-F populations do not close. Review must not "
                        "start from a population that cannot be accounted for.")}
@@ -258,6 +278,14 @@ def _stages(job, recon, integrity) -> Dict[str, Dict[str, Any]]:
 
     if recon:
         out["RECONCILIATION"]["state"] = "PASS" if recon.get("passed") else "FAIL"
+        from app.tefca_registry.rce import reconciliation as _recon
+        if not recon.get("passed") and _recon.gate_view(
+                recon.get("checks"))["only_adjudication_open"]:
+            # Not PASS, and not the population failure FAIL has always meant.
+            out["RECONCILIATION"]["state"] = ADJUDICATION_OPEN_STATE
+            out["RECONCILIATION"]["note"] = (
+                "Populations close; default-routed determinations await adjudication. "
+                "Reconciliation has not passed.")
     return out
 
 
@@ -267,7 +295,7 @@ def _actions(status, recon, status_counts) -> Dict[str, Dict[str, Any]]:
     Returned as data with an explicit reason for every refusal. A disabled
     button with no explanation is the thing that generates a support call.
     """
-    ready = status.get("state") == "READY_FOR_REVIEW"
+    ready = status.get("state") in ("READY_FOR_REVIEW", ADJUDICATION_OPEN_STATE)
     return {
         ACTION_VIEW_EXCEPTIONS: {
             "available": True,

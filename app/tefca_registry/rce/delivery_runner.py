@@ -382,6 +382,15 @@ async def _run_after_area1(db, job, detail: Dict[str, Any], intake_id,
         await jobs.finish_failed(db, job_id, stage_error, detail=detail)
         return RceDeliveryJob.STATE_FAILED
 
+    # PROPOSED 2026-11-26 (owner decision required). The ONLY failed check is
+    # the adjudication one (an earlier delivery of the same organisations left
+    # default-routed determinations unadjudicated): the populations close, so
+    # the delivery is ready for review - and it is still NOT reconciled. The
+    # job stores reconciliation_passed=false and the event says what is open.
+    adjudication_only = False
+    if not passed and snapshot is not None:
+        from app.tefca_registry.rce import reconciliation as _recon
+        adjudication_only = _recon.gate_view(snapshot.checks)["only_adjudication_open"]
     if passed and snapshot is not None:
         await stage_events.record_instant(
             db, job_id, "READY_FOR_REVIEW", intake_id=intake_id,
@@ -389,8 +398,22 @@ async def _run_after_area1(db, job, detail: Dict[str, Any], intake_id,
             detail={"snapshot_id": str(snapshot.id),
                     "note": ("Readiness for review is a workflow state, not a "
                              "statement that the data is clean.")})
+    elif adjudication_only:
+        open_count = int((((snapshot.dimensions or {}).get("verification") or {})
+                          .get("default_unadjudicated")) or 0)
+        await stage_events.record_instant(
+            db, job_id, "READY_FOR_REVIEW", intake_id=intake_id,
+            output_count=record_count,
+            detail={"snapshot_id": str(snapshot.id),
+                    "reconciliation_passed": False,
+                    "adjudication_open": open_count,
+                    "note": (f"Classification may continue - adjudication open "
+                             f"({open_count}). Reconciliation has NOT passed and "
+                             f"the delivery cannot be approved until the "
+                             f"default-routed determinations are adjudicated.")})
     await jobs.finish_succeeded(
         db, job_id, reconciliation_passed=passed,
+        classification_may_continue=adjudication_only,
         records_processed=_reconciled_count(
             detail.get(RceDeliveryJob.STAGE_RECONCILIATION)),
         detail=detail)

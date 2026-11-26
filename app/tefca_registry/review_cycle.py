@@ -641,6 +641,7 @@ async def _create_review_cycle(
     """
     from app.tefca_registry.qhin_sampling import SamplingRefused, finalize_plan
     from app.tefca_registry.rce.arc_pipeline import verify_and_classify
+    from app.tefca_registry.rce import reconciliation as _recon
     from app.tefca_registry.rce.reconciliation import reconcile_delivery
 
     # ONE spelling of the delivery id from here on (2026-11-26). The per-delivery advisory lock below is keyed on
@@ -687,8 +688,24 @@ async def _create_review_cycle(
     batch = max(1, min(int(batch or DEFAULT_BATCH), MAX_BATCH))
 
     # ── the gate ─────────────────────────────────────────────────────────────
+    # PROPOSED 2026-11-26 (owner decision required). Every check is still
+    # evaluated live on every call and ANY failure other than the one named
+    # below refuses exactly as before. The single exception: when the ONLY
+    # failed check is `reconciliation.ADJUDICATION_CHECK` - default-routed
+    # determinations an analyst has not adjudicated yet - the populations
+    # close and every determination traces to evidence and cites a rule, so
+    # classifying the remaining members may continue. The requirement is NOT
+    # passed: it is reported as open on the response and in the audit trail,
+    # reconciliation still reads NOT passed, and approval still refuses.
     recon = await reconcile_delivery(db, intake_id)
-    if not recon.get("passed"):
+    gate = _recon.gate_view(recon.get("checks"))
+    unadjudicated_at_gate = int((((recon.get("dimensions") or {}).get("verification") or {})
+                                 .get("default_unadjudicated")) or 0)
+    # ... and the result's own count must agree that something is open: a result
+    # naming the check as failed while counting nothing open is not this case.
+    adjudication_open_at_gate = bool(not recon.get("passed") and gate["only_adjudication_open"]
+                                     and unadjudicated_at_gate > 0)
+    if not recon.get("passed") and not adjudication_open_at_gate:
         failed = [c["check"] for c in recon.get("checks", []) if not c["passed"]]
         reg_audit.record(
             db, "review_cycle_refused", None, actor_id=actor_id,
@@ -701,6 +718,18 @@ async def _create_review_cycle(
             f"Delivery {intake_id} has not passed reconciliation; a review "
             f"cycle cannot be drawn from a population that does not close. "
             f"Failed: {', '.join(failed[:5]) or 'see reconciliation'}.")
+
+    if adjudication_open_at_gate:
+        reg_audit.record(
+            db, "review_cycle_continued_adjudication_open", None, actor_id=actor_id,
+            actor_email=actor_email, ip_address=ip_address,
+            metadata={"source_intake_id": str(intake_id),
+                      "reconciliation_passed": False,
+                      "failed_checks": gate["failed_checks"],
+                      "default_routed_unadjudicated": unadjudicated_at_gate,
+                      "open_requirement": _recon.open_adjudication_requirement(
+                          unadjudicated_at_gate)})
+        await db.commit()
 
     # ── one creator per delivery at a time ───────────────────────────────────
     lock_key = f"review_cycle:{intake_id}"
@@ -974,6 +1003,8 @@ async def _create_review_cycle(
                           "requested": verified.get("requested"),
                           "verified": verified.get("verified"),
                           "linked": linked,
+                          "reconciliation_passed_at_gate": bool(recon.get("passed")),
+                          "default_routed_unadjudicated_at_gate": unadjudicated_at_gate,
                           "unresolved": len(verified.get("unresolved") or []),
                           "skipped_held": skipped_held,
                           # Counted here, listed in the response: members walked
@@ -1012,8 +1043,18 @@ async def _create_review_cycle(
                           "review_type": review_type,
                           "sample_size": plan.get("sample_size"),
                           "population_size": plan.get("population_size"),
-                          "reconciliation_passed": True})
+                          # the live verdict at the gate, not a constant
+                          "reconciliation_passed": bool(recon.get("passed")),
+                          "adjudication_open": adjudication_open_at_gate,
+                          "default_routed_unadjudicated": unadjudicated_at_gate})
             await db.commit()
+        # Counted AFTER this call's reviews were written, with the adjudication
+        # check's own statement: what is open NOW, not what was open at the gate.
+        # Inside the locked block, so a failure here takes the one failure path
+        # this function already has (roll back, unlock, raise) instead of a new
+        # one after the unlock. The work above is committed; a repeat call is
+        # idempotent.
+        unadjudicated_now = await _recon.default_routed_unadjudicated(db, intake_id)
     finally:
         try:
             # A failed statement must be rolled back before unlocking; otherwise
@@ -1044,7 +1085,20 @@ async def _create_review_cycle(
         "intake_id": str(intake_id),
         "review_cycle_id": str(review_cycle_id),
         "plan": plan,
-        "reconciliation_passed": True,
+        # NOT a constant any more. True only when every check passed at this
+        # call's gate AND no default-routed determination awaits adjudication
+        # after it. The other checks are NOT re-run after this call's writes:
+        # this is the gate's verdict qualified by the one count that this call
+        # can move, not a fresh reconciliation.
+        # `reconciliation_passed_at_gate` is the gate's verdict alone.
+        "reconciliation_passed": bool(recon.get("passed")) and unadjudicated_now == 0,
+        "reconciliation_passed_at_gate": bool(recon.get("passed")),
+        "adjudication_open": unadjudicated_now > 0,
+        "default_routed_unadjudicated": unadjudicated_now,
+        "default_routed_unadjudicated_at_gate": unadjudicated_at_gate,
+        # What is open and what it still blocks. Empty when nothing is open.
+        "open_requirements": ([_recon.open_adjudication_requirement(unadjudicated_now)]
+                              if unadjudicated_now else []),
         "members": plan.get("membership_count"),
         "linked_this_call": linked,
         # Of `linked_this_call`: members linked to their OWN review that already existed - the record had been

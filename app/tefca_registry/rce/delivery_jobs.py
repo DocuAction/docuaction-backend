@@ -276,7 +276,8 @@ async def bind_intake(db, job_id, intake_id, *, records_received: int) -> None:
 
 async def finish_succeeded(db, job_id, *, reconciliation_passed: bool,
                            records_processed: Optional[int] = None,
-                           detail: Optional[Dict[str, Any]] = None) -> None:
+                           detail: Optional[Dict[str, Any]] = None,
+                           classification_may_continue: bool = False) -> None:
     """Terminal success: the pipeline ran to completion.
 
     SUCCEEDED means the pipeline RAN to completion, not that reconciliation
@@ -290,6 +291,13 @@ async def finish_succeeded(db, job_id, *, reconciliation_passed: bool,
     at RECONCILIATION — because that is where the delivery actually is — and the
     derived processing outcome reads Partially Processed.
 
+    PROPOSED 2026-11-26 (owner decision required): `classification_may_continue`
+    is true when reconciliation did NOT pass and the ONLY failed check is the
+    adjudication one (an earlier delivery of the same organisations left
+    default-routed determinations unadjudicated). The populations close, so the
+    stage is READY_FOR_REVIEW - review is the work that closes the requirement -
+    while `reconciliation_passed` is stored FALSE, exactly as computed.
+
     `active_marker` is cleared LAST and in the same commit: while it is set the
     partial unique index refuses another job for this identity, and clearing it
     is what makes a legitimate re-delivery possible.
@@ -301,7 +309,8 @@ async def finish_succeeded(db, job_id, *, reconciliation_passed: bool,
         return
     now = datetime.utcnow()
     job.state = RceDeliveryJob.STATE_SUCCEEDED
-    job.stage = (RceDeliveryJob.STAGE_READY if reconciliation_passed
+    job.stage = (RceDeliveryJob.STAGE_READY
+                 if (reconciliation_passed or classification_may_continue)
                  else RceDeliveryJob.STAGE_RECONCILIATION)
     job.completed_at = now
     job.heartbeat_at = now
@@ -374,16 +383,22 @@ async def reap_stale_jobs(db, threshold_seconds: int = STALE_HEARTBEAT_SECONDS
         if snapshot is not None:
             outcome = "recovered_succeeded"
             job.state = RceDeliveryJob.STATE_SUCCEEDED
-            job.stage = (RceDeliveryJob.STAGE_READY if snapshot.passed
+            job.stage = (RceDeliveryJob.STAGE_READY
+                         if (snapshot.passed or reconciliation.gate_view(
+                             snapshot.checks)["only_adjudication_open"])
                          else RceDeliveryJob.STAGE_RECONCILIATION)
             job.completed_at = datetime.utcnow()
             job.reconciliation_passed = snapshot.passed
             job.active_marker = None
             await stage_events.close_dangling_started(
                 db, job.id, "RECONCILIATION",
-                detail={"note": "closed by the reaper: a passing snapshot "
-                                 "already existed when the worker's "
-                                 "heartbeat went stale"})
+                detail={"note": ("closed by the reaper: a passing snapshot "
+                                  "already existed when the worker's "
+                                  "heartbeat went stale" if snapshot.passed else
+                                  "closed by the reaper: a snapshot already existed "
+                                  "when the worker's heartbeat went stale; it did "
+                                  "NOT pass"),
+                        "snapshot_passed": bool(snapshot.passed)})
         else:
             outcome = "failed"
             job.state = RceDeliveryJob.STATE_FAILED
@@ -641,6 +656,7 @@ async def _status_for_job_reference(db, job) -> Dict[str, Any]:
     review = status_model.review_state(
         outcome_code=outcome["code"],
         snapshot_passed=bool(snapshot_dict and snapshot_dict.get("passed")),
+        adjudication_open=outcome.get("adjudication_open"),
         open_work_items=review_counts["open"],
         open_breakdown=review_counts.get("open_breakdown"),
         claimed_work_items=review_counts["claimed"],
@@ -1100,6 +1116,7 @@ async def status_for_jobs(db, jobs) -> List[Dict[str, Any]]:
         review = status_model.review_state(
             outcome_code=outcome["code"],
             snapshot_passed=bool(snapshot_dict and snapshot_dict.get("passed")),
+            adjudication_open=outcome.get("adjudication_open"),
             open_work_items=review_counts["open"],
             open_breakdown=review_counts.get("open_breakdown"),
             claimed_work_items=review_counts["claimed"],
