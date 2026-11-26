@@ -126,7 +126,8 @@ async def test_the_delivery_report_states_it_separately(batch, monkeypatch):
     builder = SimpleNamespace(limit=limits.append, _SOURCE_LABELS=dpd.DeliveryProcessingDataService._SOURCE_LABELS)
     dpd.DeliveryProcessingDataService._note_coverage_limits(builder, shaped)
     # (the legacy PECOS proxy key has no rows on the bulk path and keeps its own, older "not run" sentence)
-    assert not any("No check was attempted" in line and "SAM.gov" in line for line in limits)
+    assert len(limits) == 2 and limits[1].startswith(
+        "No check was attempted at PECOS (legacy NPPES proxy) (0 attempted, 0% coverage at that source).")
     assert limits[:1] == [
         f"SAM.gov: the live API was not attempted - disabled for this run - for {N} eligible entity(ies). This is "
         f"not an outage, not a missing key and not a screening result; those entities are not counted as attempted "
@@ -179,7 +180,8 @@ async def test_a_real_cycle_records_the_sam_channel_on_its_audit_row_and_respons
     _real_cycle(monkeypatch, b.db)
     monkeypatch.setenv(SWITCH, "1")
     result = await rc._create_review_cycle(b.db, b.intake_id, user=_PM, full_population=True)
-    expected = {"attempted": False, "reason": "not attempted - disabled for this run", "setting": SWITCH,
+    expected = {"live_api_attempts_disabled": True, "reason": "not attempted - disabled for this run",
+                "setting": SWITCH,
                 "extract_edition": {"extract_filename": EXTRACT_FILE, "publication_date": _today(),
                                     "extract_sha256": "0" * 64, "list_rows_searched": 160_000}}
     assert result["sam_live_api"] == expected

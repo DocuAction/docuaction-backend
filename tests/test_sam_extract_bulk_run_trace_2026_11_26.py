@@ -115,6 +115,9 @@ async def _run(b):
         evidence = {row.source: row for row in (await b.db.execute(
             select(TEFCADimensionEvidence).where(
                 TEFCADimensionEvidence.entity_id == outcome["entity_id"],
+                # THIS run's evidence generation only: the review stores the generation it was classified on.
+                TEFCADimensionEvidence.generation_timestamp == review.verification_results[
+                    "generation_timestamp"],
                 TEFCADimensionEvidence.evidence_dimension == "EXCLUSION_REVOCATION"))).scalars().all()}
         name = b.names[label]
         api = Counter(r.path for r in b.requests if r.host == "api.sam.gov" and r.about == name)
@@ -139,7 +142,18 @@ NAME_ONLY = [label for label, npi, _x in BATCH if not npi]
 
 
 def _today():
-    return datetime.now(timezone.utc).date().isoformat()
+    """The synthetic extract's edition date AS SEEDED by the fixture - read back from the loaded extract, never
+    from the clock again, so an expectation cannot disagree with the seed across midnight."""
+    return sam_extract._SAM_CACHE["publication_date"].isoformat()
+
+
+def _retrieved(row):
+    """The day the report cell prints for a row, from the row's own timestamps (as the loader reads them)."""
+    return ld._s(row.retrieved_at or row.generation_timestamp or ld._iso(row.created_at))[:10]
+
+
+def _checked(row):
+    return ld._s(row.query_timestamp or row.retrieved_at or ld._iso(row.created_at))[:10]
 
 
 async def test_api_not_routing__the_extract_screens_every_record_and_the_api_is_still_asked_for_each(batch):
@@ -171,7 +185,7 @@ async def test_api_not_routing__the_extract_screens_every_record_and_the_api_is_
         assert f.api_row.disposition == "UNAVAILABLE"
         assert f.api_row.normalized_values["failure_class"] == "NOT_ROUTING"
         assert f.api_row.normalized_values["outcome"] == "INCOMPLETE"
-        assert ld._evidence_cell("sam", f.api_row) == f"UNAVAILABLE | retrieved {_today()}"
+        assert ld._evidence_cell("sam", f.api_row) == f"UNAVAILABLE | retrieved {_retrieved(f.api_row)}"
 
     # 3. THE EXTRACT SCREEN, per record, with its edition on the evidence row and in the report cell.
     expected_screen = {
@@ -199,7 +213,8 @@ async def test_api_not_routing__the_extract_screens_every_record_and_the_api_is_
         cell = ld._sam_extract_cell(row)
         head = ("CANDIDATE MATCH (1) - NOT a confirmed exclusion; analyst determination required"
                 if disposition == "REVIEW" else "No candidate match in the extract")
-        assert cell == (f"{head} | edition {_today()} ({EXTRACT_FILE}) | sha256 000000000000 | checked {_today()} | "
+        assert cell == (f"{head} | edition {_today()} ({EXTRACT_FILE}) | sha256 000000000000 | checked "
+                        f"{_checked(row)} | "
                         f"supplementary to, not a substitute for, the live SAM.gov API check")
 
     # 4. MANDATORY-SOURCE HANDLING AND THE RESULT.
@@ -249,7 +264,8 @@ async def test_api_answering__the_same_number_of_requests_and_registration_decid
             assert f.sam_gov == "clear", label
             assert f.api_row.normalized_values["screening_leg"] == "exclusion_and_registration"
             assert f.api_row.rule_applied == "SAM_DEBARMENT_CHECK"
-            assert ld._evidence_cell("sam", f.api_row) == f"NOT_FOUND -> clear | retrieved {_today()}"
+            assert ld._evidence_cell("sam", f.api_row) == (
+                f"NOT_FOUND -> clear | retrieved {_retrieved(f.api_row)}")
         else:
             assert f.sam_gov == "unavailable", label
             assert f.api_row.normalized_values["screening_leg"] == "registration_only"

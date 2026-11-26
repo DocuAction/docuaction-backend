@@ -369,10 +369,11 @@ async def test_bulk_writer(delivery, name):
     if name == "7_extract_candidate_with_no_active_policy_row":
         # Since 2026-11-26 the candidate is at least SAID on the review (still B1, still marked verified: with no
         # active policy row nothing routes an extract candidate to review).
-        from datetime import datetime as _dt, timezone as _tz
+        # The edition AS SEEDED (read back from the loaded extract, not from the clock again).
         expected_text += (
             f" Pending exclusion concern: the dated SAM public exclusions extract (edition "
-            f"{_dt.now(_tz.utc).date().isoformat()}, SAM_Exclusions_Public_Extract_V2_SYNTHETIC.ZIP) returned 1 "
+            f"{sam_extract._SAM_CACHE['publication_date'].isoformat()}, "
+            f"SAM_Exclusions_Public_Extract_V2_SYNTHETIC.ZIP) returned 1 "
             f"candidate match(es) for this record (matched by npi). A candidate is not a confirmed exclusion; an "
             f"analyst must confirm or dismiss it. The bucket and rule above are unchanged.")
     assert facts["rationale"] == expected_text

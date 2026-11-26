@@ -639,6 +639,10 @@ async def run_batch(db, job_id, *, batch_size: Optional[int] = None) -> Dict[str
     job = await _job_or_refuse(db, job_id)
     if job.state != rm.STATE_RUNNING:
         raise RecheckRefused(f"job is {job.state}; claim it first (only RUNNING jobs run)")
+    # Checked on EVERY batch, before anything is read or written: a job approved earlier, resumed or reaped must
+    # not append "not attempted" evidence generations while the live SAM API is switched off. The job is left as
+    # it is (RUNNING, its pending items untouched) and continues once the switch is off.
+    _refuse_while_sam_api_is_switched_off(job.source_id)
 
     if (job.processed_count or 0) == 0 and await _current_baseline(db, job) != job.baseline_hash:
         job.state = rm.STATE_REFUSED_STALE

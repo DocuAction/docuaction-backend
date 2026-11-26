@@ -159,13 +159,16 @@ class CycleRefused(RuntimeError):
     """The cycle could not be created, and the reason is stated."""
 
 
-def _sam_live_api_state(disabled: bool) -> Dict[str, Any]:
-    from app.Tefca import sam_extract, sam_screening
+def _sam_live_api_state(disabled: bool, extract_edition: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The SAM channel CONFIGURATION this call ran under. It states the switch, not what was asked: a call that
+    only links existing reviews, or finds the sample complete, asks no source either way. `extract_edition` is
+    the edition captured once when the interlock passed, so the audit row and the response name the same one
+    (each record's own evidence row carries the edition it was actually screened against)."""
+    from app.Tefca import sam_screening
     if not disabled:
-        return {"attempted": True}
-    return {"attempted": False, "reason": sam_screening.LIVE_API_DISABLED_MARKER,
-            "setting": sam_screening.LIVE_API_DISABLED_ENV,
-            "extract_edition": sam_extract.loaded_edition()}
+        return {"live_api_attempts_disabled": False}
+    return {"live_api_attempts_disabled": True, "reason": sam_screening.LIVE_API_DISABLED_MARKER,
+            "setting": sam_screening.LIVE_API_DISABLED_ENV, "extract_edition": extract_edition}
 
 
 #: Members one call may find NOT reviewable for identity reasons before it stops walking. Each costs local reads
@@ -676,6 +679,8 @@ async def _create_review_cycle(
                 f"the SAM public exclusions extract is the only SAM exclusion screen - and it is not ready: "
                 f"{not_ready}. No sample was drawn or continued and nothing was classified. Make the extract "
                 f"available and current, or turn the switch off.")
+    # Captured ONCE, here: the edition the interlock just found ready.
+    sam_extract_edition = _sam_extract.loaded_edition() if sam_api_disabled else None
 
     actor_id, actor_email = reg_audit.actor_of(user)
     batch = max(1, min(int(batch or DEFAULT_BATCH), MAX_BATCH))
@@ -964,7 +969,7 @@ async def _create_review_cycle(
                 metadata={"source_intake_id": str(intake_id),
                           "sample_id": str(sample_id),
                           # Which SAM channel this call classified under (2026-11-26).
-                          "sam_live_api": _sam_live_api_state(sam_api_disabled),
+                          "sam_live_api": _sam_live_api_state(sam_api_disabled, sam_extract_edition),
                           "requested": verified.get("requested"),
                           "verified": verified.get("verified"),
                           "linked": linked,
@@ -1096,7 +1101,7 @@ async def _create_review_cycle(
         "verification": verified,
         # Which SAM channel this call classified under: the live API asked, or switched off for the run (then the
         # dated extract is the only SAM exclusion screen, and it was checked ready before this call ran).
-        "sam_live_api": _sam_live_api_state(sam_api_disabled),
+        "sam_live_api": _sam_live_api_state(sam_api_disabled, sam_extract_edition),
         "batch": batch,
         "note": ("The sample is frozen; asking again never redraws it. "
                  "Verification runs only for members not yet linked to a "

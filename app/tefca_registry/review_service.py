@@ -213,6 +213,7 @@ async def probe_sources(db, entity_id, *, name_screen: Optional[dict] = None,
     from app.Tefca import sam_screening as _sam_screening
     if _sam_screening.live_api_attempts_disabled():
         out["sam_gov"]["reason"] = _sam_screening.LIVE_API_DISABLED_REASON
+        out["sam_gov"]["not_attempted"] = _sam_screening.LIVE_API_DISABLED_MARKER      # status is unchanged
 
     if not npi:
         for key in ("nppes", "pecos", "oig_leie"):

@@ -25,7 +25,8 @@ from app.tefca_registry.rce import verification_completeness as vc
 from rce_traceability_support import rolled_back_db  # noqa: F401 - fixture
 from test_mandatory_sam_policy_cases_2026_11_26 import _policy_text, configuration  # noqa: F401 - fixture
 from test_sam_extract_bulk_run_trace_2026_11_26 import (  # noqa: F401 - `batch` is a fixture
-    B1, BATCH, EXTRACT_FILE, NAME_ONLY, POLICY_B3, UNMATCHED_B3, WITH_NPI, _Client, _run, _today, batch,
+    B1, BATCH, EXTRACT_FILE, NAME_ONLY, POLICY_B3, UNMATCHED_B3, WITH_NPI, _Client, _retrieved, _run, _today,
+    batch,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -114,7 +115,8 @@ async def test_switch_on__no_request_is_made_and_every_decision_is_what_it_was_w
         cell = ld._evidence_cell("sam", row)
         assert cell == ("UNAVAILABLE (live SAM.gov API not attempted - disabled for this run; not a missing key, "
                         "not an outage, not a screening result)")          # and no "retrieved <date>"
-        assert ld._evidence_cell("sam", off[label].api_row) == f"UNAVAILABLE | retrieved {_today()}"
+        assert ld._evidence_cell("sam", off[label].api_row) == (
+            f"UNAVAILABLE | retrieved {_retrieved(off[label].api_row)}")
         # a stored state the policy treats as INCOMPLETE - never a new disposition, never a new state
         assert on[label].sources["sam_gov"]["disposition"] == "UNAVAILABLE"
         assert on[label].sam_gov in sp.INCOMPLETE_STATES
@@ -277,6 +279,10 @@ async def test_switch_on__the_single_record_path_says_the_same_and_asks_nothing(
     assert _sam_requests(b) == []
     sam = review.verification_results["sources"]["sam_gov"]
     assert sam["status"] == "not_checked" and WORDS in sam["reason"]
+    # the same marker the bulk path stores, so the completeness line reads the same on both paths
+    assert sam["not_attempted"] == WORDS
+    line = next(i for i in vc.completeness(review.verification_results)["incomplete"] if i["source"] == "sam_gov")
+    assert line["outcome_label"] == "Not attempted - disabled for this run"
     assert "404" not in sam["reason"] and "API key configured" not in sam["reason"]
     # No stored extract evidence yet for this record on this path: still B3, the requirement not completed.
     assert (review.classification_bucket, review.classification_rule) == ("B3", "SOURCE-POLICY-M4")
@@ -300,6 +306,47 @@ async def test_switch_on__a_sam_api_recheck_is_refused_and_nothing_else_is(monke
     with pytest.raises(rechecks.RecheckRefused, match="trigger_ref is required"):
         await rechecks.request_recheck(None, None, trigger_kind="source_recovery", source_id=policy_ids.SAM_GOV,
                                        trigger_ref="", rationale="x", user=None)
+
+
+async def test_switch_on__a_running_sam_recheck_job_writes_nothing(monkeypatch):
+    """A SAM job approved BEFORE the switch went on (queued, resumed or reaped) is stopped at the top of every
+    batch: nothing is read, nothing is written, the job and its pending items are left as they are."""
+    from types import SimpleNamespace
+    from app.Tefca import source_policy as policy_ids
+    from app.tefca_registry.rce import recheck_models as rm
+    from app.tefca_registry.rce import rechecks
+
+    touched = []
+
+    class _Db:
+        async def execute(self, *a, **k):
+            touched.append("execute")
+
+        async def commit(self):
+            touched.append("commit")
+
+    def _job(source_id):
+        return SimpleNamespace(id="job", state=rm.STATE_RUNNING, source_id=source_id, processed_count=0,
+                               baseline_hash="x", batch_size=5)
+
+    async def _sam_job(_db, _job_id):
+        return job
+    monkeypatch.setattr(rechecks, "_job_or_refuse", _sam_job)
+    monkeypatch.setenv(SWITCH, "1")
+    job = _job(policy_ids.SAM_GOV)
+    with pytest.raises(rechecks.RecheckRefused, match="switched off for this run"):
+        await rechecks.run_batch(_Db(), "job")
+    assert touched == [] and job.state == rm.STATE_RUNNING and job.processed_count == 0
+    # a job for another source is not stopped by the switch (it goes on to read its baseline)
+    job = _job(policy_ids.OIG_LEIE)
+
+    async def _baseline(_db, _job):
+        touched.append("baseline")
+        raise RuntimeError("reached the baseline read")
+    monkeypatch.setattr(rechecks, "_current_baseline", _baseline)
+    with pytest.raises(RuntimeError, match="reached the baseline read"):
+        await rechecks.run_batch(_Db(), "job")
+    assert touched == ["baseline"]
 
 
 class _CycleDb:
@@ -390,19 +437,27 @@ async def test_interlock__with_the_api_switched_off_a_cycle_needs_a_ready_extrac
     assert loads == []
 
 
-async def test_the_cycle_records_which_sam_channel_it_classified_under(monkeypatch):
-    """On the cycle's audit row and in its response: whether the live API was asked, and - when it was switched
-    off - the reason, the setting and the extract edition (filename, publication date, hash, rows)."""
+async def test_the_cycle_records_the_sam_switch_state_and_one_extract_edition(monkeypatch):
+    """What the cycle records is the SWITCH STATE it ran under - not a claim that a request was made - and, when
+    the switch is on, the extract edition captured ONCE when the interlock passed. A later reload of the extract
+    does not change what is recorded. (The real-cycle run is in test_sam_disabled_coverage_2026_11_26.py.)"""
     import time
+    from datetime import date
     from app.tefca_registry import review_cycle
-    for key, value in (("publication_date", datetime.now(timezone.utc).date()), ("row_count", 160_000),
+    for key, value in (("publication_date", date(2026, 11, 25)), ("row_count", 160_000),
                        ("loaded_at", time.time()), ("filename", EXTRACT_FILE), ("sha256", "0" * 64)):
         monkeypatch.setitem(sam_extract._SAM_CACHE, key, value)
-    assert review_cycle._sam_live_api_state(False) == {"attempted": True}
-    assert review_cycle._sam_live_api_state(True) == {
-        "attempted": False, "reason": WORDS, "setting": SWITCH,
-        "extract_edition": {"extract_filename": EXTRACT_FILE, "publication_date": _today(),
-                            "extract_sha256": "0" * 64, "list_rows_searched": 160_000}}
+    assert review_cycle._sam_live_api_state(False) == {"live_api_attempts_disabled": False}
+    captured = sam_extract.loaded_edition()
+    assert captured == {"extract_filename": EXTRACT_FILE, "publication_date": "2026-11-25",
+                        "extract_sha256": "0" * 64, "list_rows_searched": 160_000}
+    # the extract is reloaded mid-cycle with a newer edition ...
+    monkeypatch.setitem(sam_extract._SAM_CACHE, "publication_date", date(2026, 11, 26))
+    monkeypatch.setitem(sam_extract._SAM_CACHE, "sha256", "f" * 64)
+    # ... and the recorded state still names the edition that was captured
+    assert review_cycle._sam_live_api_state(True, captured) == {
+        "live_api_attempts_disabled": True, "reason": WORDS, "setting": SWITCH, "extract_edition": captured}
     import inspect
     source = inspect.getsource(review_cycle._create_review_cycle)
-    assert source.count('"sam_live_api": _sam_live_api_state(sam_api_disabled)') == 2      # audit row + response
+    assert source.count("sam_extract_edition = _sam_extract.loaded_edition() if sam_api_disabled else None") == 1
+    assert source.count('"sam_live_api": _sam_live_api_state(sam_api_disabled, sam_extract_edition)') == 2
