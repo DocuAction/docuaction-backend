@@ -292,6 +292,11 @@ _SAM_EXTRACT_EDITION_NOT_COVERED_COUNT_SQL = """
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
+#: The ONE unsuccessful screen that is a fact about the entity rather than the source:
+#: `SAMExtractConnector.screen` found neither a usable NPI nor an organisation name. Only this is recorded as
+#: "attempted, not screened" against the pinned edition; every other unsuccessful screen is retried.
+NOT_SCREENABLE_ENTITY_PREFIX = "no_usable_identifier"
+
 
 class SamExtractEditionRefused(RuntimeError):
     """An edition-bound batch cannot run as asked: no valid pinned edition, the extract cannot screen now, or the
@@ -616,7 +621,11 @@ async def record_sam_extract_attempt(db, *, ref: str,
         else:
             from app.Tefca import sam_extract as _se
             loaded = _se.loaded_edition()
-            if (loaded.get("extract_sha256") or "").lower() != pinned:
+            entity_specific = (getattr(screen, "error", None) or "").startswith(NOT_SCREENABLE_ENTITY_PREFIX)
+            if not entity_specific or (loaded.get("extract_sha256") or "").lower() != pinned:
+                # Flag off, extract unavailable/refused (e.g. a failed 24 h refetch mid-run), stale edition, or a
+                # different edition loaded: the attempt against the pinned edition did not happen. Persist
+                # nothing, so the entity stays selected and is screened when the source recovers.
                 return {"ref": ref, "entity_id": str(entity_uuid) if entity_uuid else None,
                         "outcome": OUTCOME_RETRY_PENDING,
                         "reason": "extract not screenable against the pinned edition now; not persisted"}

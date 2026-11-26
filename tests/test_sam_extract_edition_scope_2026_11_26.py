@@ -161,6 +161,26 @@ async def test_not_screenable_is_recorded_against_the_pinned_edition_never_as_cl
     assert {(r.disposition, r.pub, r.st) for r in new_rows} == {("UNAVAILABLE", "2026-11-26", "not_screened")}
 
 
+@pytest.mark.parametrize("source_failure", [
+    "extract unavailable or refused",
+    "stale_source: extract edition 2026-11-26 is 2.1 day(s) old",
+    "ENABLE_SAM_EXTRACT_SCREENING not enabled",
+])
+async def test_a_source_failure_mid_run_is_retried_never_recorded_as_screened(screened_on_old_edition,
+                                                                              source_failure):
+    """E.g. the 24 h cache refetch fails part-way through a long run while loaded_edition() still names the pinned
+    hash: the attempt did not happen, so nothing is persisted and the entity stays selected."""
+    db, intake_id = screened_on_old_edition
+    a, b = _loaded(NEW, "2026-11-26")
+    failed = SourceResult(source_name="SAM_EXTRACT", success=False, error=source_failure)
+    with a, b, patch("app.Tefca.sam_extract.SAMExtractConnector.screen", new=AsyncMock(return_value=failed)):
+        result = await av.run_coverage_batch(db, intake_id, batch_size=100,
+                                             scope=av.SCOPE_SAM_EXTRACT_EDITION, edition_sha256=NEW)
+    assert result["by_outcome"] == {av.OUTCOME_RETRY_PENDING: 3}
+    assert result["remaining"] == 3
+    assert {r.sha for r in await _rows(db, intake_id)} == {OLD}
+
+
 async def test_candidate_on_the_pinned_edition_is_review_never_exclusion(screened_on_old_edition):
     db, intake_id = screened_on_old_edition
     a, b = _loaded(NEW, "2026-11-26")
