@@ -71,7 +71,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select, text
+from sqlalchemy import case, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.tefca_registry import audit as reg_audit
@@ -312,6 +312,16 @@ async def preview_identity_precheck(db, intake_id, *, after_entity_id=None,
     rule_applies = assessment.value >= ap.BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE
 
     eligible, unresolved = await resolve_qhin_strata(db, intake_uuid, include_held=False)
+    # Entities with MORE THAN ONE promoted, not-HELD record in this delivery - whatever the frame says about each.
+    # The cycle works one member per entity; it must not be started while this is above zero.
+    from sqlalchemy import func as _func
+    entities_with_several_records = len((await db.execute(
+        select(m.RceCuratedRecord.canonical_entity_id)
+        .where(m.RceCuratedRecord.source_intake_id == intake_uuid,
+               m.RceCuratedRecord.canonical_entity_id.isnot(None),
+               m.RceCuratedRecord.record_status != "HELD")
+        .group_by(m.RceCuratedRecord.canonical_entity_id)
+        .having(_func.count() > 1))).all())
     member_ids = sorted({unit["entity_id"] for unit in eligible})
     not_in_frame: Dict[str, int] = {}
     for unit in unresolved:
@@ -398,7 +408,10 @@ async def preview_identity_precheck(db, intake_id, *, after_entity_id=None,
             "members_total": len(member_ids),
             # One eligible unit per member is what the cycle assumes. False means some entity has more than one
             # eligible record in this delivery: DO NOT START THE CYCLE until that is understood.
-            "frame_consistent": len(eligible) == len(member_ids),
+            # Computed from the delivery's own records, NOT from the frame above: a record that is out of the
+            # frame only because it was already reviewed must not make a two-record entity look like one.
+            "frame_consistent": entities_with_several_records == 0,
+            "entities_with_several_records": entities_with_several_records,
             "eligible_units": len(eligible),
             "not_in_frame_total": len(unresolved),
             "not_in_frame_by_reason": [{"reason": reason, "count": n}
@@ -971,11 +984,27 @@ async def _refs_for(db, intake_id, entity_ids: List[Any]) -> Dict[Any, str]:
         return {}
     rows = (await db.execute(
         select(m.RceCuratedRecord.canonical_entity_id,
-               m.RceCuratedRecord.rce_org_oid)
+               m.RceCuratedRecord.rce_org_oid,
+               m.RceCuratedRecord.source_record_id)
         .where(m.RceCuratedRecord.source_intake_id == intake_id,
                m.RceCuratedRecord.canonical_entity_id.in_(entity_ids),
-               m.RceCuratedRecord.rce_org_oid.isnot(None)))).all()
+               m.RceCuratedRecord.rce_org_oid.isnot(None))
+        # DETERMINISTIC (2026-11-25): an entity with more than one record in the delivery used to get whichever
+        # row the database returned first. Now: a record that is not HELD before one that is (the member is in
+        # the frame through its not-HELD record), then the lowest reference. One record per entity - the normal
+        # case - is unaffected.
+        .order_by(m.RceCuratedRecord.canonical_entity_id,
+                  case((m.RceCuratedRecord.record_status == "HELD", 1), else_=0),
+                  m.RceCuratedRecord.rce_org_oid,
+                  m.RceCuratedRecord.source_record_id))).all()
+    # A record that already has its OWN review classified on submitted values is never handed to the writer
+    # again through a sibling record's membership (nothing is asked for a delivery before the effective date).
+    from app.tefca_registry.qhin_sampling import source_records_reviewed_on_submitted_values
+    already_reviewed = (await source_records_reviewed_on_submitted_values(db, intake_id, entity_ids=entity_ids)
+                        if rows else set())
     out: Dict[Any, str] = {}
-    for entity_id, ref in rows:
+    for entity_id, ref, source_record_id in rows:
+        if source_record_id in already_reviewed:
+            continue
         out.setdefault(entity_id, ref)
     return out

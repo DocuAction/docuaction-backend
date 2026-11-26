@@ -1086,10 +1086,14 @@ async def test_the_screen_cells_of_such_a_record_come_from_its_own_review_never_
         for key, recorded in (("leie", "NOT_FOUND"), ("sam_extract", "REVIEW")):
             cell = fact[key]
             assert cell.startswith("From this record's own review REV-") and "not taken from shared entity" in cell
-            assert cell.endswith(f"recorded {recorded}"), cell
+            assert f"recorded {recorded} (keyed on the organisation name)" in cell, cell
+        # the extract cell carries the ordinary cell's caveats: a candidate is never a confirmed exclusion, and the
+        # screen is supplementary to the api.sam.gov check
+        assert "NOT a confirmed exclusion" in fact["sam_extract"] and "edition 2026-11-24" in fact["sam_extract"]
+        assert "supplementary to, not a substitute for, the api.sam.gov check" in fact["sam_extract"]
         assert fact["sam"].startswith(("From this record's own review REV-", "Not checked for this record: its own"))
         for key in ("nppes", "pecos", "leie", "sam", "sam_extract"):
-            cell = fact[key].lower()
+            cell = fact[key].lower().replace("not exclusion clearance", "")     # the caveat itself
             assert "clear" not in cell and "not attributed" not in cell and "queried by" not in cell, (key, cell)
             assert all(npi not in fact[key] for npi in A_NPIS + ["1003000126"]), key
     assert any(rid in f["leie"] for f in out["facts"] for rid in review_ids.values())
@@ -1155,3 +1159,106 @@ def test_the_supplementary_verify_route_states_that_it_does_not_filter_held_reco
     doc = inspect.getdoc(rce_routes.verify)
     assert "NO HELD FILTER" in doc and "Do not use this" in doc
     assert "record_status" not in inspect.getsource(rce_routes.verify).split('"""')[2]     # behaviour unchanged
+
+
+# ═══ delta review of a6a257c: the exclusion is audited on the plan; the cell says what was keyed; no cost before ════
+
+async def test_the_plan_its_audit_rows_and_the_preview_state_the_reviewed_on_submitted_values_exclusion(
+        world, monkeypatch):
+    """Two of the four records are already reviewed on their submitted values. The preview says so; the official
+    plan drawn next FREEZES the count and the units in its `strata_config`; the plan's audit row counts them and a
+    `sampling_eligibility_excluded` audit row names them with the exclusion and its reason."""
+    from app.tefca_registry import qhin_sampling as qs
+    w = world
+    await _give_qhin(w.db, w.entities)
+    await ap.verify_and_classify(w.db, w.refs[:2], intake_id=w.intake_b)
+    excluded_units = sorted((str(e), ref) for e, ref in zip(w.entities[:2], w.refs[:2]))
+
+    preview = await qs.preview_plan(w.db, w.intake_b)
+    assert preview["excluded_reviewed_on_submitted_values"] == 2 and preview["eligible_population"] == 2
+    assert preview["excluded_review_required"] == 0
+
+    _real_cycle(monkeypatch, w.db)
+    cycle = await rc._create_review_cycle(w.db, w.intake_b, user=_PM, full_population=True)
+    assert cycle["members"] == 2 and cycle["linked_this_call"] == 2
+    sample = await w.db.get(reg.ReviewSample, uuid.UUID(cycle["plan"]["sample_id"]))
+    config = sample.strata_config
+    assert config["excluded_reviewed_on_submitted_values"] == 2 and config["excluded_review_required"] == 0
+    assert sorted((u["entity_id"], u["rce_org_oid"])
+                  for u in config["excluded_reviewed_on_submitted_values_units"]) == excluded_units
+    audit = (await w.db.execute(select(reg.TefcaRegAuditLog).where(
+        reg.TefcaRegAuditLog.action.in_(("sampling_plan_finalized", "sampling_eligibility_excluded"))))).scalars().all()
+    mine = [a for a in audit if (a.metadata_ or {}).get("sample_id") == str(sample.id)]
+    finalized = next(a.metadata_ for a in mine if a.action == "sampling_plan_finalized")
+    assert finalized["excluded_reviewed_on_submitted_values"] == 2
+    excluded_rows = [a.metadata_ for a in mine if a.action == "sampling_eligibility_excluded"]
+    assert len(excluded_rows) == 1 and excluded_rows[0]["count"] == 2
+    assert excluded_rows[0]["exclusion"] == qs.EXCLUSION_REVIEWED_ON_SUBMITTED_VALUES
+    assert excluded_rows[0]["reason"] == qs.REVIEWED_ON_SUBMITTED_VALUES_REASON
+    assert sorted(excluded_rows[0]["entity_ids"]) == sorted(str(e) for e in w.entities[:2])
+    assert sorted(excluded_rows[0]["references"]) == sorted(w.refs[:2])
+
+
+def test_the_review_snapshot_cell_says_what_each_item_was_keyed_on_and_carries_the_ordinary_caveats():
+    """A quoted disposition must never read stronger than the ordinary cell for the same result: each item is
+    labelled by what it was ACTUALLY keyed on, a SAM registration-only miss says the exclusion question was not
+    screened, and the extract line keeps its "supplementary / not clearance" caveat, edition and check date."""
+    rev = SimpleNamespace(review_id="REV-2026-000001", verification_results={"dimensions": [
+        {"dimension": ap.EXCLUSION_DIMENSION, "evidence": [
+            {"source": "SAM_GOV", "disposition": "NOT_FOUND", "query_identifier": "uei=ABCDEF123456",
+             "normalized_values": {"screening_leg": "registration_only"}, "query_timestamp": "2026-11-25T10:00:00"},
+            {"source": "SAM_GOV", "disposition": "PASS", "query_identifier": "legal_name=SYNTHETIC ORG"},
+            {"source": "SAM_GOV", "disposition": "PASS"},
+            {"source": "SAM_GOV", "disposition": "PASS", "query_identifier": "npi=1234567893"},     # never quoted
+            {"source": "OIG_LEIE", "disposition": "NOT_FOUND", "query_identifier": "org=SYNTHETIC ORG"},
+            {"source": "SAM_EXTRACT_SUPPLEMENTARY", "disposition": "PASS", "query_identifier": "org=SYNTHETIC ORG",
+             "original_values": {"publication_date": "2026-11-24"}, "query_timestamp": "2026-11-25T10:00:00"},
+        ]}]})
+    sam = ld._review_snapshot_screen_cell(rev, "SAM_GOV")
+    parts = sam.split(": ", 1)[1].split(" | ")
+    assert len(parts) == 3                                                   # the npi= item is not quoted
+    assert parts[0].startswith("recorded NOT_FOUND (keyed on an identifier other than NPI (UEI))")
+    assert "SAM registration-only search; the exclusion question was NOT screened" in parts[0]
+    assert "checked 2026-11-25" in parts[0]
+    assert parts[1].startswith("recorded PASS (keyed on the organisation name)")
+    assert parts[2].startswith("recorded PASS (key not recorded)") and "check date not recorded" in parts[2]
+    assert "ABCDEF123456" not in sam and "SYNTHETIC ORG" not in sam and "1234567893" not in sam   # no identifier
+    assert "name-keyed" not in sam and "clear" not in sam.lower().replace("clearance", "")
+    leie = ld._review_snapshot_screen_cell(rev, "OIG_LEIE")
+    assert "recorded NOT_FOUND (keyed on the organisation name)" in leie
+    extract = ld._review_snapshot_screen_cell(rev, "SAM_EXTRACT_SUPPLEMENTARY")
+    assert "no candidate match in the extract" in extract and "edition 2026-11-24" in extract
+    assert "supplementary to, not a substitute for, the api.sam.gov check" in extract
+    assert "a non-match is not exclusion clearance" in extract and "checked 2026-11-25" in extract
+    none = ld._review_snapshot_screen_cell(SimpleNamespace(review_id="REV-X", verification_results={}), "SAM_GOV")
+    assert none.startswith("Not checked for this record: its own review REV-X holds no SAM_GOV screen result")
+
+
+async def test_the_frame_pays_nothing_for_a_delivery_assessed_before_the_effective_date(world, monkeypatch):
+    """The reviewed-on-submitted-values read is not issued at all for a delivery assessed before the effective
+    date (no such review can exist for it), and is issued for a later one."""
+    from sqlalchemy import event
+    from app.tefca_registry import qhin_sampling as qs
+    w = world
+    await _give_qhin(w.db, w.entities)
+    seen = []
+    sync_conn = (await w.db.connection()).sync_connection
+
+    def _capture(_conn, _cursor, statement, *_rest):
+        if "review_records" in statement and "verification_results" in statement:
+            seen.append(statement)
+    event.listen(sync_conn, "before_cursor_execute", _capture)
+    try:
+        run = (await w.db.execute(select(m.RceIngestionRun).where(
+            m.RceIngestionRun.source_intake_id == w.intake_b))).scalars().first()
+        run.assessment_metadata = {"assessment_date": "2026-11-08", "source": "pinned_param"}
+        await w.db.flush()
+        eligible, _unresolved = await qs.resolve_qhin_strata(w.db, w.intake_b)
+        assert len(eligible) == 4 and seen == []                        # October-dated: the read is skipped
+        assert await rc._refs_for(w.db, w.intake_b, list(w.entities)) and seen == []
+        run.assessment_metadata = {"assessment_date": "2026-11-09", "source": "pinned_param"}
+        await w.db.flush()
+        await qs.resolve_qhin_strata(w.db, w.intake_b)
+        assert len(seen) == 1                                           # from the effective date: one read
+    finally:
+        event.remove(sync_conn, "before_cursor_execute", _capture)

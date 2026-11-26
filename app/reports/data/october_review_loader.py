@@ -185,8 +185,8 @@ NPI_MATCH_ONLY = "NPI match only [N1]"
 #: recorded, read from that review's evidence snapshot. The shared entity store is not read for these cells - its
 #: rows for this entity are another record's, queried by an NPI this record did not submit. The recorded
 #: disposition is quoted as recorded and never interpreted here ("clear" is never printed).
-REVIEW_SNAPSHOT_SCREEN = ("From this record's own review {review} (name-keyed screen; not taken from shared entity "
-                          "evidence): recorded {recorded}")
+REVIEW_SNAPSHOT_SCREEN = ("From this record's own review {review} (not taken from shared entity evidence): "
+                          "{recorded}")
 REVIEW_SNAPSHOT_NO_SCREEN = ("Not checked for this record: its own review {review} holds no {source} screen result "
                              "(no NPI was submitted, and a name screen is recorded only when the delivered name is "
                              "established to be the entity's). Not taken from shared entity evidence")
@@ -447,19 +447,48 @@ def _evidence_cell(kind: str, row: Any, limitation: str = "", *, interpret: bool
 def _review_snapshot_screen_cell(rev: Any, source: str) -> str:
     """The screen result(s) for `source` held in a review's OWN evidence snapshot, quoted as recorded. Only items
     that were not keyed on an NPI are quoted; no identifier and no returned value is printed."""
+    from app.tefca_registry.rce import arc_pipeline as ap
+
     recorded = []
     for dimension in (rev.verification_results or {}).get("dimensions") or []:
         for item in dimension.get("evidence") or []:
             if not isinstance(item, dict) or item.get("source") != source:
                 continue
-            if str(item.get("query_identifier") or "").strip().lower().replace(" ", "").startswith("npi="):
+            query = str(item.get("query_identifier") or "").strip().lower().replace(" ", "")
+            if query.startswith("npi="):
                 continue
-            word = _s(item.get("disposition")).upper() or "NO DISPOSITION"
-            if word not in recorded:
-                recorded.append(word)
+            # What THIS item was keyed on - never assumed to be the name.
+            if not query:
+                keyed = "key not recorded"
+            elif query.startswith(("org=", "legal_name=")):
+                keyed = "keyed on the organisation name"
+            elif "=" in query:
+                keyed = f"keyed on an identifier other than NPI ({query.split('=', 1)[0].upper()})"
+            else:
+                keyed = "key not recorded"
+            text = f"recorded {_s(item.get('disposition')).upper() or 'NO DISPOSITION'} ({keyed})"
+            # The same caveats the ordinary cells attach, so a quoted disposition never reads stronger here.
+            if ap.is_registration_only_sam_miss(dimension.get("dimension"), item):
+                text += (" (SAM registration-only search; the exclusion question was NOT screened)")
+            if source == "SAM_EXTRACT_SUPPLEMENTARY":
+                orig = item.get("original_values") if isinstance(item.get("original_values"), dict) else {}
+                disp = _s(item.get("disposition")).upper()
+                if disp == "REVIEW":
+                    text += " - CANDIDATE MATCH, NOT a confirmed exclusion; analyst determination required"
+                elif disp == "PASS":
+                    text += " - no candidate match in the extract"
+                elif disp == "UNAVAILABLE":
+                    text += " - extract screen unavailable, not performed"
+                text += (f"; edition {_s(orig.get('publication_date')) or 'date not recorded'}; supplementary "
+                         f"to, not a substitute for, the api.sam.gov check; a non-match is not exclusion "
+                         f"clearance")
+            when = _s(item.get("query_timestamp") or item.get("retrieved_at"))
+            text += f"; checked {when[:10]}" if when else "; check date not recorded"
+            if text not in recorded:
+                recorded.append(text)
     if not recorded:
         return REVIEW_SNAPSHOT_NO_SCREEN.format(review=rev.review_id, source=source)
-    return REVIEW_SNAPSHOT_SCREEN.format(review=rev.review_id, recorded=", ".join(recorded))
+    return REVIEW_SNAPSHOT_SCREEN.format(review=rev.review_id, recorded=" | ".join(recorded))
 
 
 def _sam_extract_cell(row: Any) -> str:

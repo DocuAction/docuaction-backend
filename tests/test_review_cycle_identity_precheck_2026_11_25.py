@@ -454,3 +454,71 @@ async def test_frame_consistency_and_the_held_split_are_reported(rolled_back_db,
     again = await _page(db, delivery)
     assert again["frame"]["eligible_units"] == again["frame"]["members_total"] + 1
     assert again["frame"]["frame_consistent"] is False
+
+
+# ═══ an entity with more than one record in the delivery (delta review of a6a257c) ═══════════════════════════════════
+
+async def _two_blank_records_of_one_entity(db, delivery):
+    """Release the HELD record of the member `also_held`, and make BOTH of that entity's records blank-NPI records
+    on an entity the registry holds an NPI for. Returns (entity, lower reference, higher reference)."""
+    entity = delivery.entity["also_held"]
+    rows = (await db.execute(select(m.RceCuratedRecord).where(
+        m.RceCuratedRecord.source_intake_id == delivery.intake_id,
+        m.RceCuratedRecord.canonical_entity_id == entity)
+        .order_by(m.RceCuratedRecord.rce_org_oid))).scalars().all()
+    assert len(rows) == 2
+    for row in rows:
+        row.record_status = "CLEAN"
+        record = await db.get(m.RceSourceRecord, row.source_record_id)
+        record.parsed = {**(record.parsed or {}), "NPI": ""}
+        record.npi = None
+        delivery.registry_npi[row.rce_org_oid] = NPI
+    await db.flush()
+    return entity, rows[0].rce_org_oid, rows[1].rce_org_oid
+
+
+async def test_a_member_with_two_records_is_never_sent_back_to_the_record_already_reviewed(
+        rolled_back_db, monkeypatch):
+    """The reference picked for a member is deterministic (the lowest), and once that record has its own review
+    classified on submitted values the member is given its OTHER record - the reviewed one is not verified a second
+    time through the sibling's membership."""
+    db = rolled_back_db
+    delivery = await _Delivery().build(db, monkeypatch)
+    await _assess_on(db, delivery, "2026-11-09")
+    entity, low, high = await _two_blank_records_of_one_entity(db, delivery)
+    for _ in range(3):                                                  # deterministic, call after call
+        assert (await rc._refs_for(db, delivery.intake_id, [entity])) == {entity: low}
+
+    first = await ap.verify_and_classify(db, [low], intake_id=delivery.intake_id)
+    assert first["classified_on_submitted_values"] == [low]
+    assert (await rc._refs_for(db, delivery.intake_id, [entity])) == {entity: high}   # never `low` again
+
+    await ap.verify_and_classify(db, [high], intake_id=delivery.intake_id)
+    assert (await rc._refs_for(db, delivery.intake_id, [entity])) == {}               # both reviewed: nothing left
+    reviews = (await db.execute(select(reg.ReviewRecord.source_record_id).where(
+        reg.ReviewRecord.entity_id == entity))).scalars().all()
+    assert len(reviews) == 2 and len(set(reviews)) == 2                 # one review per record, no duplicate
+    # every one-record member is exactly as before: its single reference
+    single = delivery.entity["reviewable"]
+    assert (await rc._refs_for(db, delivery.intake_id, [single])) == {single: delivery.ref["reviewable"]}
+
+
+async def test_frame_consistency_is_not_hidden_by_an_already_reviewed_record(rolled_back_db, monkeypatch):
+    """Two eligible records of one entity: `frame_consistent` is false. After ONE of them is reviewed on its
+    submitted values it leaves the frame, so eligible units equal members again - but the entity still has two
+    records, and the pre-check keeps saying so (`entities_with_several_records`, `frame_consistent: false`)."""
+    db = rolled_back_db
+    delivery = await _Delivery().build(db, monkeypatch)
+    await _assess_on(db, delivery, "2026-11-09")
+    before = (await _page(db, delivery))["frame"]
+    assert before["frame_consistent"] is True and before["entities_with_several_records"] == 0   # one HELD: not two
+
+    _entity, low, _high = await _two_blank_records_of_one_entity(db, delivery)
+    two = (await _page(db, delivery))["frame"]
+    assert two["entities_with_several_records"] == 1 and two["frame_consistent"] is False
+    assert two["eligible_units"] == two["members_total"] + 1
+
+    await ap.verify_and_classify(db, [low], intake_id=delivery.intake_id)
+    after = (await _page(db, delivery))["frame"]
+    assert after["eligible_units"] == after["members_total"]            # the exclusion made the counts agree ...
+    assert after["entities_with_several_records"] == 1 and after["frame_consistent"] is False    # ... not the truth
