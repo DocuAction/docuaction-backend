@@ -197,6 +197,24 @@ NOT_REVIEWABLE_ALREADY_REVIEWED = (
 WHY_OTHER_ENTITY = "it is a review of a different entity"
 WHY_OTHER_SAMPLE = "it belongs to another sample"
 WHY_OTHER_MEMBER = "it is already linked to a sample member"
+WHY_SEVERAL_RECORDS = ("the entity has {n} promoted, not-HELD records in this delivery; a member is linked to an "
+                       "existing review only when it has exactly one")
+WHY_NOT_THAT_RECORD = "it does not cover the member's one promoted, not-HELD record in this delivery"
+WHY_SEVERAL_REVIEWS = ("{n} reviews classified on submitted values exist for that record ({reviews}); none is "
+                       "chosen")
+WHY_NOT_THIS_CYCLE = ("it was not created by this review cycle (created for sample: {created}); only a review this "
+                      "cycle itself wrote is linked")
+WHY_NO_PLAN_YET = "no review cycle of this delivery created it"
+WHY_ASSESSMENT_DATE = "it was assessed as of {theirs}, and this cycle assesses as of {ours}"
+WHY_ASSESSMENT_RUN = "it took its assessment date from another run than this cycle does"
+WHY_ASSESSMENT_FALLBACK = ("its assessment date, or this cycle's, is a fallback and not a run's own date "
+                           "({source})")
+WHY_OLDER_THAN_PLAN = "it was created before this sample was drawn"
+WHY_TOUCHED = "it has already been worked ({what})"
+WHY_RULES_CHANGED = ("the rules or source policies now in force classify its stored input as {now}, and it is "
+                     "recorded as {then}")
+WHY_NO_RULES_IN_FORCE = "no review rule is in force now, so its rule context cannot be compared"
+WHY_NO_CLASSIFIER_INPUT = "it stores no classifier input, so its rule context cannot be compared"
 
 
 async def _identity_precheck(db, intake_uuid, member_entity_id, ref, *, assessment_date=None) -> Optional[str]:
@@ -356,6 +374,7 @@ async def preview_identity_precheck(db, intake_id, *, after_entity_id=None,
     on_submitted_values_total = 0
     will_link: List[Dict[str, Any]] = []
     will_link_total = 0
+    rules_context = None               # rules and policies in force, read once and only if a member needs them
 
     def _count(entity_id, ref, reason, kind, outcome):
         nonlocal listed_total, held_not_reviewable
@@ -379,20 +398,30 @@ async def preview_identity_precheck(db, intake_id, *, after_entity_id=None,
             if not ref and existing_reviews.get(entity_id):
                 # Already reviewed on its submitted values: the cycle will LINK the member to that review (no new
                 # review, no source call), or report why it cannot - never "no delivered reference".
+                # The SAME decision the cycle makes, against the cycle that created the review: "will link" is
+                # said only when that cycle would link it (the entity is an unlinked member of that sample, and
+                # every condition of `_own_existing_review` holds).
+                sample = await _creating_sample(db, intake_uuid, entity_id, existing_reviews[entity_id])
+                if rules_context is None:
+                    rules_context = await _link_context(db, intake_uuid, None, assessment)
                 own, refused = await _own_existing_review(
-                    db, entity_id, existing_reviews[entity_id], sample_id=None)
+                    db, entity_id, existing_reviews[entity_id], context={**rules_context, "sample": sample})
+                ref_shown = existing_reviews[entity_id][0]["rce_org_oid"]
                 if own is not None:
                     counts[OUTCOME_REVIEWABLE] += 1
                     will_link_total += 1
                     if entity_id in held_members:
                         held_reviewable += 1
                     if len(will_link) < PRECHECK_LIST_CAP:
-                        will_link.append({"entity_id": str(entity_id), "entity_ref": own["rce_org_oid"],
-                                          "existing_review": own["review_id"]})
+                        will_link.append({"entity_id": str(entity_id), "entity_ref": ref_shown,
+                                          "existing_review": own, "sample_id": str(sample.id)})
                 else:
-                    _count(entity_id, existing_reviews[entity_id][0]["rce_org_oid"],
+                    _count(entity_id, ref_shown,
                            NOT_REVIEWABLE_ALREADY_REVIEWED.format(review=refused[0], why=refused[1]),
                            KIND_ALREADY_REVIEWED, OUTCOME_NOT_REVIEWABLE)
+                    if listed and listed[-1]["entity_id"] == str(entity_id):
+                        listed[-1]["existing_review"] = refused[0]
+                        listed[-1]["not_linked_because"] = refused[1]
                 continue
             if not ref:
                 _count(entity_id, None, NOT_REVIEWABLE_NO_REFERENCE, KIND_IDENTITY, OUTCOME_NOT_REVIEWABLE)
@@ -480,9 +509,11 @@ async def preview_identity_precheck(db, intake_id, *, after_entity_id=None,
             # They WILL BE CLASSIFIED ON THEIR SUBMITTED VALUES (the registry NPI withheld, NPI-keyed sources not
             # asked). Always 0 when blank_npi_rule.applies_to_this_delivery is false.
             "classified_on_submitted_values": on_submitted_values_total,
-            # Of `reviewable`: members whose record ALREADY has its own review classified on submitted values and
-            # is not linked to any sample. The cycle will link the member to that review - no new review, no
-            # source call.
+            # Of `reviewable`: members whose one record ALREADY has its own review classified on submitted values,
+            # created by a review cycle of this delivery that did not get to link it. THAT cycle (the sample named
+            # on each entry) will link the member to that review - no new review, no source call - under every
+            # condition of `_own_existing_review`. A cycle called with other plan parameters draws another sample
+            # and will NOT link it.
             "will_link_existing_submitted_values_review": will_link_total,
         },
         # The members counted under counts.classified_on_submitted_values (bounded like the list below).
@@ -610,6 +641,13 @@ async def _create_review_cycle(
     from app.tefca_registry.rce.arc_pipeline import verify_and_classify
     from app.tefca_registry.rce.reconciliation import reconcile_delivery
 
+    # ONE spelling of the delivery id from here on (2026-11-26). The per-delivery advisory lock below is keyed on
+    # this value; keyed on the caller's raw string, the same delivery written in another letter case took a
+    # DIFFERENT lock and two creators could run at once.
+    try:
+        intake_id = intake_id if isinstance(intake_id, uuid.UUID) else uuid.UUID(str(intake_id))
+    except (ValueError, AttributeError, TypeError):
+        raise CycleRefused(f"No delivery {intake_id}")
     intake = await db.get(m.RceSourceIntake, intake_id)
     if intake is None:
         raise CycleRefused(f"No delivery {intake_id}")
@@ -748,6 +786,8 @@ async def _create_review_cycle(
                     break
         not_reviewable: List[Dict[str, Any]] = []
         cycle_assessment_date = None       # this delivery's own assessment date, read once when first needed
+        cycle_assessment = None            # ... and the whole context it came from (date, source, run)
+        link_context = None                # sample, assessment, rules and policies: read once, only if needed
         limit_reached = False
         last_examined = None
         refs: Dict[Any, str] = {}
@@ -769,7 +809,8 @@ async def _create_review_cycle(
                     break
                 if cycle_assessment_date is None:
                     from app.tefca_registry.rce.assessment_context import resolve_assessment_date
-                    cycle_assessment_date = (await resolve_assessment_date(db, intake_uuid)).value
+                    cycle_assessment = await resolve_assessment_date(db, intake_uuid)
+                    cycle_assessment_date = cycle_assessment.value
                 if position >= refs_loaded_to:
                     chunk = members[position:position + _REF_CHUNK]
                     chunk_refs, chunk_existing = await _refs_with_existing_reviews(
@@ -787,14 +828,19 @@ async def _create_review_cycle(
                     # a crash or timeout between the two - or a review made outside the cycle - leaves exactly
                     # this. Its own existing review is linked: no new review, no source asked. Anything else is
                     # reported with the review id; it is never reported as "no delivered reference".
+                    if link_context is None:
+                        link_context = await _link_context(
+                            db, intake_uuid, await db.get(reg.ReviewSample, sample_id), cycle_assessment)
                     own, refused = await _own_existing_review(
-                        db, entity_id, existing_reviews[entity_id], sample_id=sample_id)
+                        db, entity_id, existing_reviews[entity_id], context=link_context)
                     if own is None:
                         _set_aside(entity_id, existing_reviews[entity_id][0]["rce_org_oid"],
                                    NOT_REVIEWABLE_ALREADY_REVIEWED.format(review=refused[0], why=refused[1]),
                                    KIND_ALREADY_REVIEWED)
                         not_reviewable[-1]["existing_review"] = refused[0]
+                        not_reviewable[-1]["not_linked_because"] = refused[1]
                         continue
+                    own = {"review_id": own}
                     record = (await db.execute(select(reg.ReviewRecord).where(
                         reg.ReviewRecord.review_id == own["review_id"]))).scalars().first()
                     record.sample_id = sample_id
@@ -822,9 +868,12 @@ async def _create_review_cycle(
             if not step:
                 break
 
+            # The writer stamps each review it creates with THIS sample, in the commit that creates it: if this
+            # call dies before the links below are committed, the next call can tell its own reviews from any
+            # other review of the same record.
             result = await verify_and_classify(
                 db, [ref for _member, _entity_id, ref in step], intake_id=intake_id,
-                actor=actor_email or "SYSTEM")
+                actor=actor_email or "SYSTEM", creating_sample_id=sample_id)
             # `lineage` and the references whose evidence was not stored (unanchored) used to be dropped here,
             # so on the official path - this one - neither was visible to the caller or in the audit trail.
             verified = _merge_verification(verified, {k: result.get(k) for k in
@@ -910,7 +959,11 @@ async def _create_review_cycle(
                           "not_reviewable_for_identity": len(not_reviewable),
                           "not_reviewable_reasons": sorted({n["reason"] for n in not_reviewable}),
                           "not_reviewable_members": [
-                              {"entity_id": n["entity_id"], "reason": n["reason"], "kind": n["kind"]}
+                              {"entity_id": n["entity_id"], "reason": n["reason"], "kind": n["kind"],
+                               # the existing review a member was NOT linked to, as a key of its own
+                               **({"existing_review": n["existing_review"],
+                                   "not_linked_because": n.get("not_linked_because")}
+                                  if n.get("existing_review") else {})}
                               for n in not_reviewable[:CYCLE_LIST_CAP]],
                           "lineage": verified.get("lineage"),
                           "evidence_not_stored_unanchored": verified["evidence_not_stored_unanchored_count"],
@@ -961,6 +1014,10 @@ async def _create_review_cycle(
 
     remaining = max(total_unlinked - linked, 0)
     identity_count = sum(1 for n in not_reviewable if n["kind"] == KIND_IDENTITY)
+    needs_person = bool(
+        started_at_front and walk_exhausted and linked == 0 and remaining > 0
+        and len(not_reviewable) == remaining
+        and all(n["kind"] in (KIND_IDENTITY, KIND_ALREADY_REVIEWED) for n in not_reviewable))
     return {
         "intake_id": str(intake_id),
         "review_cycle_id": str(review_cycle_id),
@@ -1001,6 +1058,13 @@ async def _create_review_cycle(
         "identity_check_limit_reached": limit_reached,
         "next_after_member_id": (str(last_examined)
                                  if limit_reached and last_examined is not None else None),
+        # A PERSON IS NEEDED. True when the walk began at the first unlinked member and reached the end in this
+        # call, nothing was linked, nothing set aside may be transient, and EVERY member left is set aside for a
+        # settled identity reason or because its existing review could not be linked. Calling again will not
+        # change any of them; a driver should stop and hand the listed members to a person. The sample is NOT
+        # complete. (`no_further_reviews_possible` below keeps its narrower meaning: identity reasons only.)
+        "needs_person": needs_person,
+        "needs_person_count": remaining if needs_person else 0,
         # THE STOP SIGNAL. True only when ALL of this holds: the walk began at
         # the FIRST unlinked member and reached the end in this one call (so
         # no member was left unexamined in front of a cursor or behind the
@@ -1018,10 +1082,14 @@ async def _create_review_cycle(
         "note": ("The sample is frozen; asking again never redraws it. "
                  "Verification runs only for members not yet linked to a "
                  "review case, so repeated calls converge and never duplicate. "
-                 "Call again until remaining is 0, or until "
-                 "no_further_reviews_possible is true (members remain that "
-                 "cannot be reviewed for identity reasons; the sample is not "
-                 "complete)."),
+                 "Call again until remaining is 0, or until needs_person is "
+                 "true: then every member left either cannot be reviewed for "
+                 "a settled identity reason or already has a review that "
+                 "could not be linked to it, another call will not change "
+                 "that, and the listed members need a person. The sample is "
+                 "not complete in that case. (no_further_reviews_possible is "
+                 "the narrower case in which all of them are identity "
+                 "reasons.)"),
     }
 
 
@@ -1106,6 +1174,8 @@ async def _refs_with_existing_reviews(db, intake_id, entity_ids: List[Any], *, a
                 .order_by(reg.ReviewRecord.created_at, reg.ReviewRecord.review_id))).all():
             reviews_by_record.setdefault(source_record_id, {
                 "review_id": review_id, "review_entity_id": review_entity, "sample_id": review_sample})
+            # (the FIRST review per record is listed only so the member is recognised as already reviewed and
+            #  named in a refusal; which review, if any, is linked is decided by `_own_existing_review`.)
     out: Dict[Any, str] = {}
     existing: Dict[Any, List[Dict[str, Any]]] = {}
     for entity_id, ref, source_record_id in rows:
@@ -1118,28 +1188,150 @@ async def _refs_with_existing_reviews(db, intake_id, entity_ids: List[Any], *, a
     return out, existing
 
 
-async def _own_existing_review(db, entity_id, candidates: List[Dict[str, Any]], *, sample_id):
-    """(the member's OWN existing submitted-values review, None) or (None, (review id, why not)).
+async def _creating_sample(db, intake_uuid, entity_id, candidates: List[Dict[str, Any]]):
+    """For the read-only pre-check: the sample that created the member's existing review, when it is a plan of
+    THIS delivery and the entity is an UNLINKED member of it - the only cycle that could link it - else None."""
+    from app.tefca_registry.rce import arc_pipeline as ap
 
-    Linkable only when ALL hold: the review is about the member's own entity; it covers one of the member's own
-    delivered records in this delivery (`candidates` are exactly those - read through this delivery's curated rows
-    for this entity) and carries `submitted_values_basis`; and it is not already someone's review - not in another
-    sample, and no sample member is linked to it. `sample_id` None (the read-only pre-check, before any sample
-    exists) accepts only a review that is in no sample."""
-    refused = None
     for candidate in candidates:
-        review_id = candidate["review_id"]
-        if str(candidate["review_entity_id"]) != str(entity_id):
-            refused = refused or (review_id, WHY_OTHER_ENTITY)
+        review = (await db.execute(select(reg.ReviewRecord).where(
+            reg.ReviewRecord.review_id == candidate["review_id"]))).scalars().first()
+        created_for = ((review.verification_results or {}).get(ap.CREATED_FOR_SAMPLE_KEY)
+                       if review is not None else None)
+        if not created_for:
             continue
-        if candidate["sample_id"] is not None and (
-                sample_id is None or str(candidate["sample_id"]) != str(sample_id)):
-            refused = refused or (review_id, WHY_OTHER_SAMPLE)
+        try:
+            sample = await db.get(reg.ReviewSample, uuid.UUID(str(created_for)))
+        except (ValueError, TypeError):
+            sample = None
+        if sample is None or str((sample.strata_config or {}).get("source_intake_id")) != str(intake_uuid):
             continue
-        taken = (await db.execute(select(reg.SampleEntity.id).where(
-            reg.SampleEntity.review_id == review_id).limit(1))).first()
-        if taken is not None:
-            refused = refused or (review_id, WHY_OTHER_MEMBER)
-            continue
-        return candidate, None
-    return None, refused
+        member = (await db.execute(select(reg.SampleEntity.id).where(
+            reg.SampleEntity.sample_id == sample.id, reg.SampleEntity.entity_id == entity_id,
+            reg.SampleEntity.review_id.is_(None)).limit(1))).first()
+        if member is not None:
+            return sample
+    return None
+
+
+async def _link_context(db, intake_uuid, sample, assessment) -> Dict[str, Any]:
+    """What `_own_existing_review` compares a review with, read ONCE per call: the sample (owner and draw time),
+    the delivery's whole assessment context, and the rules and source policies in force now. Reads only."""
+    from app.tefca_registry.bucket_classifier import BucketClassifier
+    from app.tefca_registry.rce import source_policy
+
+    return {"intake_uuid": intake_uuid, "sample": sample, "assessment": assessment,
+            "rules": await BucketClassifier().load_rules(db),
+            "policies": await source_policy.load_active_policies(db)}
+
+
+async def _own_existing_review(db, entity_id, candidates: List[Dict[str, Any]], *, context):
+    """(review id to link, None) or (None, (review id or None, why not)). Reads only.
+
+    Owner (2026-11-26): the link "links only the same delivered record and entity, respects the owning cycle and
+    assessment context, and cannot reuse a stale review or link one already owned elsewhere." A member's existing
+    review classified on submitted values is linked only when EVERY one of these holds; the first that fails is
+    the reason reported, and nothing is ever chosen between alternatives:
+
+      a. SAME DELIVERED RECORD - the entity has exactly ONE promoted, not-HELD curated record in this delivery and
+         the review's `source_record_id` is that record (members are entities; with more than one record there is
+         no single record to speak for the member, and a HELD record never does);
+      e. it is the ONLY review classified on submitted values for that record;
+      b. SAME ENTITY - the review is about the member's entity;
+      -  OWNING CYCLE - the writer stamped it as created for THIS sample (`arc_pipeline.CREATED_FOR_SAMPLE_KEY`);
+         a review from the supplementary verify route, another plan or a rehearsal carries another value or none.
+         It is in no other sample and no sample member is linked to it;
+      c. ASSESSMENT CONTEXT - its recorded assessment date AND run are this cycle's, and neither is a fallback;
+      d. NOT STALE - it was created at or after this sample was drawn;
+      f. UNTOUCHED - no decision event, no reviewer resolution, not reportable, not assigned;
+      g. RULE CONTEXT - the rules and source policies in force now classify its STORED classifier input to the
+         bucket, rule and rule version it is recorded with. (A review stores the version of the ONE rule that
+         decided it and no identifier of the rule set as a whole, so the stored input is re-classified - no source
+         is asked - rather than a version number compared.) LIMIT: this shows the rules and policies have the
+         same effect on the STORED input; it does not show the writer would build the same input today.
+    """
+    from sqlalchemy import func as _func
+    from app.tefca_registry.rce import arc_pipeline as ap
+    from app.tefca_registry.rce import assessment_context as ac
+    from app.tefca_registry.rce import source_policy
+
+    sample, assessment = context["sample"], context["assessment"]
+    first = candidates[0]["review_id"] if candidates else None
+    # a. exactly one promoted, not-HELD record
+    records = (await db.execute(
+        select(m.RceCuratedRecord.source_record_id)
+        .where(m.RceCuratedRecord.source_intake_id == context["intake_uuid"],
+               m.RceCuratedRecord.canonical_entity_id == entity_id,
+               m.RceCuratedRecord.record_status != "HELD"))).scalars().all()
+    if len(records) != 1:
+        return None, (first, WHY_SEVERAL_RECORDS.format(n=len(records)))
+    record_id = records[0]
+    # e. exactly one submitted-values review on it
+    reviews = (await db.execute(
+        select(reg.ReviewRecord)
+        .where(reg.ReviewRecord.source_record_id == record_id,
+               reg.ReviewRecord.verification_results.has_key("submitted_values_basis"))    # noqa: W601
+        .order_by(reg.ReviewRecord.created_at, reg.ReviewRecord.review_id))).scalars().all()
+    if not reviews:
+        return None, (first, WHY_NOT_THAT_RECORD)
+    if len(reviews) > 1:
+        return None, (reviews[0].review_id, WHY_SEVERAL_REVIEWS.format(
+            n=len(reviews), reviews=", ".join(r.review_id for r in reviews)))
+    review = reviews[0]
+    review_id = review.review_id
+    results = review.verification_results or {}
+    # b. same entity
+    if str(review.entity_id) != str(entity_id):
+        return None, (review_id, WHY_OTHER_ENTITY)
+    # owning cycle
+    if sample is None:
+        return None, (review_id, WHY_NO_PLAN_YET)
+    created_for = results.get(ap.CREATED_FOR_SAMPLE_KEY)
+    if not created_for or str(created_for) != str(sample.id):
+        return None, (review_id, WHY_NOT_THIS_CYCLE.format(created=created_for or "none recorded"))
+    if review.sample_id is not None and str(review.sample_id) != str(sample.id):
+        return None, (review_id, WHY_OTHER_SAMPLE)
+    taken = (await db.execute(select(reg.SampleEntity.id).where(
+        reg.SampleEntity.review_id == review_id).limit(1))).first()
+    if taken is not None:
+        return None, (review_id, WHY_OTHER_MEMBER)
+    # c. assessment context
+    theirs = results.get("assessment_as_of") if isinstance(results.get("assessment_as_of"), dict) else {}
+    fallbacks = (ac.SOURCE_FALLBACK_NO_INTAKE, ac.SOURCE_FALLBACK_NO_RUN)
+    for source in (theirs.get("source"), assessment.source):
+        if source in fallbacks or not source:
+            return None, (review_id, WHY_ASSESSMENT_FALLBACK.format(source=source or "none recorded"))
+    if theirs.get("assessment_date") != assessment.value.isoformat():
+        return None, (review_id, WHY_ASSESSMENT_DATE.format(
+            theirs=theirs.get("assessment_date") or "no recorded date", ours=assessment.value.isoformat()))
+    if not theirs.get("run_id") or str(theirs.get("run_id")) != str(assessment.run_id):
+        return None, (review_id, WHY_ASSESSMENT_RUN)
+    # d. not stale
+    if review.created_at is None or sample.drawn_at is None or review.created_at < sample.drawn_at:
+        return None, (review_id, WHY_OLDER_THAN_PLAN)
+    # f. untouched
+    events = int((await db.execute(select(_func.count()).select_from(reg.ReviewDecisionEvent).where(
+        reg.ReviewDecisionEvent.review_id == review_id))).scalar() or 0)
+    touched = [what for what, yes in (
+        (f"{events} decision event(s)", events), ("a reviewer resolution", review.reviewer_resolution),
+        ("reportable", review.reportable_at), ("assigned", review.assigned_to_user_id)) if yes]
+    if touched:
+        return None, (review_id, WHY_TOUCHED.format(what="; ".join(touched)))
+    # g. rule context: re-classify the STORED input with what is in force now
+    stored_input = results.get("classifier_input")
+    if not isinstance(stored_input, dict):
+        return None, (review_id, WHY_NO_CLASSIFIER_INPUT)
+    if not context["rules"]:
+        return None, (review_id, WHY_NO_RULES_IN_FORCE)
+    from app.tefca_registry.bucket_classifier import BucketClassifier
+    now = BucketClassifier().classify(stored_input, rules=context["rules"])
+    now, _policy = source_policy.enforce_on_classification(
+        now, stored_input.get("sources") or {}, {"has_submitted_npi": False}, context["policies"])
+    now_facts = (now.bucket, now.rule_code or ap.UNMATCHED_RULE_CODE,
+                 now.rule_version if now.rule_code else ap.UNMATCHED_RULE_VERSION)
+    then_facts = (review.classification_bucket, review.classification_rule, review.classification_rule_version)
+    if now_facts != then_facts:
+        return None, (review_id, WHY_RULES_CHANGED.format(
+            now=f"{now_facts[0]} by {now_facts[1]} v{now_facts[2]}",
+            then=f"{then_facts[0]} by {then_facts[1]} v{then_facts[2]}"))
+    return review_id, None
