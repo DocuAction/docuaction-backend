@@ -238,6 +238,7 @@ jobs:
             tests/test_identity_refusal_no_endless_retry_2026_11_25.py \
             tests/test_blank_npi_classified_on_submitted_values_2026_11_25.py \
             tests/test_mandatory_sam_policy_cases_2026_11_26.py \
+            tests/test_sam_extract_bulk_run_trace_2026_11_26.py \
             tests/test_review_cycle_identity_precheck_2026_11_25.py \
             tests/test_review_cycle_link_recovery_2026_11_26.py \
             tests/test_deferred_disposition_processing_2026_11_18.py \
