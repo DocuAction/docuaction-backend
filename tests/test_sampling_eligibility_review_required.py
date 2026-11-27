@@ -368,3 +368,52 @@ def test_identity_precheck_can_preview_the_full_population_frame():
     assert "full_population=full_population" in inspect.getsource(rc.preview_identity_precheck)
     assert "full_population=full_population" in inspect.getsource(
         workflow_routes.review_cycle_identity_precheck_route)
+
+
+# ── independent review 2026-11-27: BLOCKING 1 and 2 ─────────────────────────
+
+async def test_an_open_extract_candidate_is_uncleared_prior_risk(rolled_back_db):
+    """Lifting the frame exclusion must not let a clean B1 verify an entity whose SAM extract candidate is open:
+    the candidate sets `in_review` without a review record or a BLOCKING finding, so prior_risk must see it."""
+    from app.tefca_registry.rce import prior_risk
+    from app.tefca_registry.rce import verification_findings as vf
+    db = rolled_back_db
+    intake_id, job, curated, entity_id = await _with_qhin(db, "9.99.777.94")
+    assert await prior_risk.unresolved_prior_risk(db, entity_id) is None
+    await vf.record_sam_extract_candidate(
+        db, entity_id=entity_id, npi=None, org_name=f"{SYN} ORG", intake_id=intake_id,
+        source_record_id=curated.source_record_id,
+        extract={"publication_date": "2026-11-26", "extract_sha256": "b" * 64, "candidate_count": 1})
+    await db.flush()
+    prior = await prior_risk.unresolved_prior_risk(db, entity_id)
+    assert prior and prior["open_extract_candidate"] is True
+    assert "SAM public-extract candidate" in prior_risk.rationale_suffix(prior)
+
+
+async def _old_frame(db, plan, excluded):
+    from sqlalchemy.orm.attributes import flag_modified
+    sample = await db.get(reg.ReviewSample, uuid.UUID(plan["sample_id"]))
+    config = dict(sample.strata_config)
+    config.pop("eligibility_basis", None)
+    config["excluded_review_required"] = excluded
+    sample.strata_config = config
+    flag_modified(sample, "strata_config")
+    await db.flush()
+
+
+async def test_a_pre_correction_full_population_plan_that_excluded_entities_is_not_reused(rolled_back_db):
+    db = rolled_back_db
+    intake_id, *_ = await _with_qhin(db, "9.99.777.95")
+    plan = await qs.finalize_plan(db, intake_id, actor=SYN, full_population=True)
+    await _old_frame(db, plan, excluded=3)
+    with pytest.raises(qs.SamplingRefused, match="earlier frame"):
+        await qs.finalize_plan(db, intake_id, actor=SYN, full_population=True)
+
+
+async def test_a_pre_correction_full_population_plan_with_no_exclusion_is_reused(rolled_back_db):
+    db = rolled_back_db
+    intake_id, *_ = await _with_qhin(db, "9.99.777.96")
+    plan = await qs.finalize_plan(db, intake_id, actor=SYN, full_population=True)
+    await _old_frame(db, plan, excluded=0)
+    again = await qs.finalize_plan(db, intake_id, actor=SYN, full_population=True)
+    assert again["already_finalized"] is True and again["sample_id"] == plan["sample_id"]

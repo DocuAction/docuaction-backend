@@ -439,6 +439,17 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
 
     existing = await _existing_plan(db, key)
     if existing is not None:
+        config = existing.strata_config or {}
+        if (full_population and config.get("eligibility_basis") != FULL_POPULATION_ELIGIBILITY_BASIS
+                and int(config.get("excluded_review_required") or 0) > 0):
+            # A full-population plan frozen BEFORE the 2026-11-27 correction whose frame actually left entities out
+            # on their prior `in_review` status. Returning it would silently classify the old, narrower population
+            # under the corrected code. Refuse; the operator decides (a plan with no such exclusion is identical
+            # under either rule and is reused as before).
+            raise SamplingRefused(
+                f"Delivery {intake_id} already has full-population plan {existing.id} drawn under the earlier frame, "
+                f"which excluded {config.get('excluded_review_required')} entities on prior in_review status. It is "
+                f"not reused under the corrected full-population basis; review it before any new plan is drawn.")
         return {**await get_plan(db, existing.id), "already_finalized": True}
 
     eligible, unresolved = await resolve_qhin_strata(
