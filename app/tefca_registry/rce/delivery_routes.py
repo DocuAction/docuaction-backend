@@ -1827,6 +1827,11 @@ async def sam_extract_summary_route(
 
     intake = await _intake_or_404(db, intake_id)
     result = await se.extract_summary(db, intake.id)
+    # The edition IN MEMORY now (full sha256), so an operator can pin exactly that edition for
+    # `scope=sam_extract_edition` and RCE_SAM_EXTRACT_PINNED_SHA256. Read-only: it never loads or refreshes the
+    # extract; null fields mean nothing is loaded in this process yet (a screen or an edition-run attempt loads it).
+    from app.Tefca import sam_extract as _extract
+    result["loaded_edition"] = _extract.loaded_edition()
     result["correlation"] = {"request_id": request_context.get("request_id")}
     return result
 

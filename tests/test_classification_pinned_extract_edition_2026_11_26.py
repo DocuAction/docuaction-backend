@@ -97,3 +97,16 @@ def test_one_bad_member_is_enough_to_refuse_the_call():
     gathered = [_member("ok", _screen("PASS")), _member("bad", _screen("PASS", sha="c" * 64))]
     problems = ap.extract_edition_problems(gathered, PIN)
     assert [p.split(":")[0] for p in problems] == ["bad"]
+
+
+def test_the_summary_route_reports_the_loaded_edition_without_loading_it(monkeypatch):
+    """The operator needs the FULL sha of the edition in memory to pin it; the route reports it read-only."""
+    import inspect
+
+    from app.Tefca import sam_extract
+    from app.tefca_registry.rce import delivery_routes
+    src = inspect.getsource(delivery_routes.sam_extract_summary_route)
+    assert 'result["loaded_edition"] = _extract.loaded_edition()' in src
+    assert "_load_sam_extract" not in src and "screening_not_ready_reason" not in src
+    monkeypatch.setitem(sam_extract._SAM_CACHE, "sha256", "d" * 64)
+    assert sam_extract.loaded_edition()["extract_sha256"] == "d" * 64
