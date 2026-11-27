@@ -134,6 +134,12 @@ TERMINAL_OUTCOMES = frozenset({
 #: refusal is counted in the batch result (`identity_refused`).
 OUTCOME_IDENTITY_REFUSED = "IDENTITY_REFUSED"
 
+#: A NAME-ONLY screen of one delivered record's submitted name was recorded RECORD-SCOPED
+#: (`rce_record_sam_screenings`; owner, 2026-11-27). Deliberately NOT a terminal ENTITY outcome: nothing was
+#: written to the entity evidence store, so the ENTITY stays not-covered for the edition and no other record's
+#: NPI-based screening is satisfied. The record's own result is in `name_only_outcome`.
+OUTCOME_NAME_ONLY_RECORDED = "NAME_ONLY_RECORDED"
+
 #: How many identity refusals one `run_coverage_batch` call may step over
 #: while looking for entities it is allowed to look up. A refusal persists
 #: nothing, so a refused entity stays in the not-covered set and is seen again
@@ -290,6 +296,32 @@ _SAM_EXTRACT_EDITION_NOT_COVERED_COUNT_SQL = """
       )
 """
 
+#: With `name_only_submitted`: the edition candidate set, minus a (reference, entity) whose delivered record already
+#: has a record-scoped name-only screen for THIS edition - otherwise such a record would be selected again on every
+#: call, because a name-only screen deliberately never marks the ENTITY covered. Only the record that reference
+#: anchors is excluded: another reference of the same entity (a sibling record) is still selected and screened on
+#: its own basis.
+_SAM_EXTRACT_EDITION_NAME_ONLY_NOT_COVERED_SQL = _SAM_EXTRACT_EDITION_NOT_COVERED_SQL.replace(
+    "    ORDER BY r.canonical_entity_id, r.rce_org_oid",
+    """      AND NOT EXISTS (
+          SELECT 1 FROM rce_record_sam_screenings s
+          JOIN rce_curated_records r2 ON r2.source_record_id = s.source_record_id
+          WHERE s.source_intake_id = r.source_intake_id
+            AND s.extract_sha256 = :edition_sha256
+            AND r2.source_intake_id = r.source_intake_id
+            AND r2.canonical_entity_id = r.canonical_entity_id
+            AND r2.rce_org_oid = r.rce_org_oid
+      )
+    ORDER BY r.canonical_entity_id, r.rce_org_oid""")
+assert _SAM_EXTRACT_EDITION_NAME_ONLY_NOT_COVERED_SQL != _SAM_EXTRACT_EDITION_NOT_COVERED_SQL
+
+#: Record-scoped name-only screens of one delivery for one edition, by outcome (counts only).
+_NAME_ONLY_RECORDED_COUNT_SQL = """
+    SELECT outcome, count(*) FROM rce_record_sam_screenings
+    WHERE source_intake_id = CAST(:intake_id AS uuid) AND extract_sha256 = :edition_sha256
+    GROUP BY outcome
+"""
+
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 #: The ONE unsuccessful screen that is a fact about the entity rather than the source:
@@ -320,6 +352,19 @@ async def pinned_edition_problem(edition_sha256: Optional[str]) -> Optional[str]
                 f"{(loaded.get('extract_sha256') or 'none')[:12]}...) is not the pinned edition "
                 f"({pinned[:12]}...); nothing was screened. Pin the loaded edition or wait for the pinned one.")
     return None
+
+
+class NameOnlyStoreNotApplied(RuntimeError):
+    """A name-only batch was requested but the record-scoped store (`rce_record_sam_screenings`, migration
+    20261127_rce_record_sam_screen) does not exist. Refused before anything is selected or written."""
+
+
+async def _assert_name_only_store(db) -> None:
+    if (await db.execute(text("SELECT to_regclass('public.rce_record_sam_screenings')"))).scalar() is None:
+        raise NameOnlyStoreNotApplied(
+            "NAME_ONLY_STORE_NOT_APPLIED: rce_record_sam_screenings does not exist; the "
+            "20261127_rce_record_sam_screen migration has not been applied through the governed release path. "
+            "Nothing was screened or written.")
 
 
 class SamExtractScreeningDisabled(RuntimeError):
@@ -557,39 +602,82 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
     return result
 
 
-#: `screen_basis` of an extract row screened ONLY on the delivered record's submitted name (owner, 2026-11-27).
+#: `screen_basis` of a screen of ONLY the delivered record's submitted name (owner, 2026-11-27).
 SCREEN_BASIS_NAME_ONLY_SUBMITTED = "SUBMITTED_VALUES_NAME_ONLY"
+
+#: Outcomes of a record-scoped name-only screen (`RceRecordSamScreening.outcome`).
+NAME_ONLY_CANDIDATE = "CANDIDATE"
+NAME_ONLY_NO_CANDIDATE = "NO_CANDIDATE"
+NAME_ONLY_NOT_SCREENED = "NOT_SCREENED"
 
 
 async def _name_only_submitted_context(db, *, ref: str, canonical_entity_id, intake_id, entity):
     """For an entity identity validation refused: the delivered-record context for a NAME-ONLY screen on
     submitted values, or None (the refusal stands).
 
-    Allowed only when the delivered record submitted NO NPI. `validated_delivery_context` is run with NO probe
-    NPI, so every other identity check still holds: the reference resolves to the QUEUED entity, exactly one
-    delivered record of this delivery carries it and links that entity, and that record is readable. No NPI is
-    sent to the extract, so the probe-NPI comparison that refused the record has nothing to compare. A record
-    that DID submit an NPI keeps its refusal (an NPI mismatch is a person's question), as does a record with no
-    submitted name."""
+    Eligibility is the CLASSIFIER's, exactly (owner, 2026-11-27):
+      * blank NPI = `arc_pipeline._submitted_npi(record) == ""` (the delivered value, stripped). A record that
+        submitted ANY non-blank value - a different NPI, "N/A", "PENDING" - keeps its refusal: the classifier
+        treats it as a submitted NPI, and an NPI question is a person's to resolve;
+      * the delivery's assessment date (`assessment_context.resolve_assessment_date`) is on or after
+        `arc_pipeline.BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE`, so an earlier delivery stays exactly as it was.
+    `validated_delivery_context` is run with NO probe NPI, so every other identity check still holds: the
+    reference resolves to the QUEUED entity, exactly one delivered record of this delivery carries it and links that
+    entity, and that record is readable. A record with no submitted name keeps its refusal too."""
+    from app.tefca_registry.rce import arc_pipeline as ap
+    from app.tefca_registry.rce import assessment_context
     from app.tefca_registry.rce import models as m
     from app.tefca_registry.rce import verification_findings as vf
 
+    assessment = await assessment_context.resolve_assessment_date(db, intake_id)
+    if assessment.value < ap.BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE:
+        return None
     context, _refusal = await vf.validated_delivery_context(
         db, intake_id=intake_id, ref=ref, queued_entity_id=canonical_entity_id, entity=entity, probe_npi="")
-    if context is None or vf.npi_key(context.get("delivered_npi")):
+    if context is None:
         return None
     record = await db.get(m.RceSourceRecord, context["source_record_id"])
-    name = str(((getattr(record, "parsed", None) or {}).get("name")) or "").strip() if record is not None else ""
+    if record is None or ap._submitted_npi(record) != "":
+        return None
+    name = str(((getattr(record, "parsed", None) or {}).get("name")) or "").strip()
     if not name:
         return None
     return {**context, "delivered_name": name}
+
+
+async def _record_name_only_screening(db, *, context, intake_id, entity_uuid, screen, edition: Dict[str, Any],
+                                      outcome: str, candidate_count, not_screened_reason, issue_id,
+                                      actor: str) -> None:
+    """Insert the record-scoped result of one name-only screen. Nothing is written to the entity evidence store."""
+    from app.core import request_context
+    from app.tefca_registry.rce import models as m
+
+    db.add(m.RceRecordSamScreening(
+        id=uuid.uuid4(),
+        source_intake_id=intake_id,
+        source_record_id=context["source_record_id"],
+        canonical_entity_id=entity_uuid,
+        screen_basis=SCREEN_BASIS_NAME_ONLY_SUBMITTED,
+        identity_confirmed=False,
+        extract_sha256=(edition.get("extract_sha256") or "").lower(),
+        extract_filename=edition.get("extract_filename"),
+        publication_date=(str(edition.get("publication_date"))[:10] if edition.get("publication_date") else None),
+        outcome=outcome,
+        candidate_count=candidate_count,
+        not_screened_reason=(not_screened_reason or None) and str(not_screened_reason)[:300],
+        issue_id=issue_id,
+        screened_by=(actor or "SYSTEM")[:320],                     # screened_at: the database clock
+        correlation_id=request_context.correlation_id()[:64],
+    ))
+    await db.flush()
 
 
 async def record_sam_extract_attempt(db, *, ref: str,
                                      canonical_entity_id,
                                      intake_id,
                                      required_edition_sha256: Optional[str] = None,
-                                     name_only_submitted: bool = False) -> Dict[str, Any]:
+                                     name_only_submitted: bool = False,
+                                     actor: str = "SYSTEM") -> Dict[str, Any]:
     """Run ONLY the SAM public-extract supplementary screen for one entity and
     append ONLY that source's evidence row. Never calls `build_evidence`, so
     no other source is re-asked and no quota is re-spent. The row is built by
@@ -687,14 +775,8 @@ async def record_sam_extract_attempt(db, *, ref: str,
                 "not_screened_reason": (getattr(screen, "error", None) or "")[:300],
             }) for item in items]
     if name_only:
-        # Screening is recorded SEPARATELY from identity: the row says it was a name-only screen of the submitted
-        # name and that identity was NOT confirmed. A candidate stays a candidate pending analyst review.
-        items = [_dc_replace(item, original_values={
-            **(item.original_values or {}),
-            "screen_basis": SCREEN_BASIS_NAME_ONLY_SUBMITTED,
-            "registry_npi_not_used": True,
-            "identity_confirmed": False,
-        }) for item in items]
+        return await _finish_name_only(db, ref=ref, context=context, intake_id=intake_id, entity_uuid=entity_uuid,
+                                       screen=screen, candidate=candidate, org_name=org_name, actor=actor)
     # A one-source, one-dimension partial generation. The dimension-level
     # disposition recorded here reflects ONLY this supplementary item — the
     # full D3 determination already persisted for this entity is untouched
@@ -743,12 +825,50 @@ async def record_sam_extract_attempt(db, *, ref: str,
                          entity_uuid, type(exc).__name__, exc_info=True)
 
     await db.flush()
-    result = {"ref": ref, "entity_id": str(entity_uuid) if entity_uuid else None,
-              "outcome": outcome, "dimensions_recorded": len(rows),
-              "candidate_match": candidate}
-    if name_only:
-        result["screen_basis"] = SCREEN_BASIS_NAME_ONLY_SUBMITTED
-    return result
+    return {"ref": ref, "entity_id": str(entity_uuid) if entity_uuid else None,
+            "outcome": outcome, "dimensions_recorded": len(rows),
+            "candidate_match": candidate}
+
+
+async def _finish_name_only(db, *, ref, context, intake_id, entity_uuid, screen, candidate, org_name,
+                            actor) -> Dict[str, Any]:
+    """Persist a name-only screen RECORD-SCOPED (owner, 2026-11-27). The edition was already verified against the
+    pin by the caller. Writes NO `tefca_dimension_evidence` row (so the entity is NOT covered for the edition and no
+    other record's NPI-based screen is satisfied or replaced), never touches the entity's status, and puts a
+    candidate on THIS record's ledger as a pending SAM_EXTRACT_CANDIDATE finding - never a confirmed exclusion."""
+    from app.Tefca import sam_extract as _se
+    from app.tefca_registry.rce import verification_findings as vf
+
+    succeeded = bool(getattr(screen, "success", False))
+    data = dict(screen.data or {}) if succeeded else {}
+    edition = data if succeeded else _se.loaded_edition()
+    # One savepoint for the finding AND the screening row: for a record-scoped screen the finding IS part of the
+    # result, so either both are written or neither (the batch then reports RETRY_PENDING and the record stays
+    # selectable). Never a CANDIDATE row without its finding.
+    async with db.begin_nested():
+        issue_id = None
+        if succeeded and candidate:
+            issue = await vf.record_sam_extract_candidate(
+                db, entity_id=entity_uuid, npi=None, org_name=org_name, extract=data, intake_id=intake_id,
+                source_record_id=context["source_record_id"], name_only_submitted=True)
+            if issue is None:
+                raise RuntimeError("name-only candidate finding could not be anchored to its delivered record")
+            issue_id = issue.id
+            outcome = NAME_ONLY_CANDIDATE
+        elif succeeded:
+            outcome = NAME_ONLY_NO_CANDIDATE
+        else:
+            outcome = NAME_ONLY_NOT_SCREENED
+        await _record_name_only_screening(
+            db, context=context, intake_id=intake_id, entity_uuid=entity_uuid, screen=screen, edition=edition,
+            outcome=outcome, candidate_count=data.get("candidate_count") if succeeded else None,
+            not_screened_reason=None if succeeded else getattr(screen, "error", None), issue_id=issue_id,
+            actor=actor)
+    return {"ref": ref, "entity_id": str(entity_uuid) if entity_uuid else None,
+            "outcome": OUTCOME_NAME_ONLY_RECORDED, "name_only_outcome": outcome,
+            "source_record_id": str(context["source_record_id"]),
+            "candidate_match": bool(succeeded and candidate), "dimensions_recorded": 0,
+            "screen_basis": SCREEN_BASIS_NAME_ONLY_SUBMITTED, "identity_confirmed": False}
 
 
 #: Per-delivery batch single-flight. Two coverage batches running at once for
@@ -811,6 +931,22 @@ def _batch_identity_fields(*, refused: int, exhausted: bool, limit_reached: bool
     }
 
 
+def _count_by(values) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for v in values:
+        out[str(v)] = out.get(str(v), 0) + 1
+    return out
+
+
+async def _name_only_recorded(db, intake_id, edition_sha256: Optional[str]) -> Dict[str, int]:
+    """Read-only: the delivery's record-scoped name-only screens for one edition, by outcome (counts only)."""
+    rows = (await db.execute(text(_NAME_ONLY_RECORDED_COUNT_SQL),
+                             {"intake_id": str(intake_id), "edition_sha256": (edition_sha256 or "").lower()})).all()
+    out = {str(k): int(n) for k, n in rows}
+    out["total"] = sum(out.values())
+    return out
+
+
 async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_SIZE,
                              actor: str = "SYSTEM",
                              scope: str = SCOPE_FULL,
@@ -865,6 +1001,8 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
         raise ValueError("edition_sha256 applies only to the sam_extract_edition scope")
     if name_only_submitted and scope != SCOPE_SAM_EXTRACT_EDITION:
         raise ValueError("name_only_submitted applies only to the sam_extract_edition scope")
+    if name_only_submitted:
+        await _assert_name_only_store(db)
 
     batch_size = max(1, min(int(batch_size or DEFAULT_BATCH_SIZE), MAX_BATCH_SIZE))
     started_after = uuid.UUID(str(after_entity_id)) if after_entity_id else None
@@ -889,7 +1027,8 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
         }
 
     candidate_sql = {SCOPE_SAM_EXTRACT: _SAM_EXTRACT_NOT_COVERED_SQL,
-                     SCOPE_SAM_EXTRACT_EDITION: _SAM_EXTRACT_EDITION_NOT_COVERED_SQL}.get(
+                     SCOPE_SAM_EXTRACT_EDITION: (_SAM_EXTRACT_EDITION_NAME_ONLY_NOT_COVERED_SQL if name_only_submitted
+                                                 else _SAM_EXTRACT_EDITION_NOT_COVERED_SQL)}.get(
                          scope, _ELIGIBLE_NOT_COVERED_SQL)
     extra_params = {"edition_sha256": pinned_edition} if pinned_edition else {}
 
@@ -923,7 +1062,7 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
                     result = await record_sam_extract_attempt(
                         db, ref=ref, canonical_entity_id=canonical_entity_id,
                         intake_id=intake_id, required_edition_sha256=pinned_edition,
-                        name_only_submitted=name_only_submitted)
+                        name_only_submitted=name_only_submitted, actor=actor)
                 else:
                     result = await record_coverage_attempt(
                         db, ref=ref, canonical_entity_id=canonical_entity_id,
@@ -967,8 +1106,14 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
         "intake_id": str(intake_id),
         "scope": scope,
         "name_only_submitted": bool(name_only_submitted),
-        "name_only_screened": sum(1 for o in outcomes
-                                  if o.get("screen_basis") == SCREEN_BASIS_NAME_ONLY_SUBMITTED),
+        # Record-scoped name-only screens recorded THIS call, by the record's outcome. They never count toward the
+        # entity coverage above (`covered` / `remaining` are entity-level and NPI-basis); the delivery's running
+        # totals for the edition are in `name_only_recorded_for_edition`.
+        "name_only_screened": sum(1 for o in outcomes if o.get("outcome") == OUTCOME_NAME_ONLY_RECORDED),
+        "name_only_by_outcome": _count_by(o.get("name_only_outcome") for o in outcomes
+                                          if o.get("outcome") == OUTCOME_NAME_ONLY_RECORDED),
+        **({"name_only_recorded_for_edition": await _name_only_recorded(db, intake_id, pinned_edition)}
+           if name_only_submitted else {}),
         "skipped_lock": False,
         # Entities a source was asked about in this call (never more than
         # `batch_size`). Identity refusals and references that do not resolve

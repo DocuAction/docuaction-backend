@@ -121,7 +121,10 @@ AREA1_FINAL = AREA1_PRESENT + ["rce_delivery_jobs"] + TRACEABILITY + [
     # trigger + app SELECT/INSERT only, owner-owned for the same reason.
     "rce_record_comments",
     # 20261115_rce_npi_research: append-only supplemental research - trigger + app SELECT/INSERT only, owner-owned.
-    "rce_supplemental_npi_research"]
+    "rce_supplemental_npi_research",
+    # 20261127_rce_record_sam_screen: append-only record-scoped SAM name-only screens - trigger + app SELECT/INSERT
+    # only, owner-owned.
+    "rce_record_sam_screenings"]
 ENTRA_ADMIN = "entra_admin"
 CK = "ck_review_record_has_subject"
 

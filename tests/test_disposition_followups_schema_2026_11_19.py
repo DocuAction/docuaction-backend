@@ -96,7 +96,12 @@ def test_the_migration_chains_on_the_previous_head_and_the_chain_has_one_head():
         scripts.get_revision("20261112_rce_record_comments").down_revision
         == "20261124_iqvia_reconciliation"
     )
-    assert scripts.get_heads() == ["20261115_rce_npi_research"]
+    # 20261127_rce_record_sam_screen (record-scoped SAM name-only screens) follows 20261115_rce_npi_research.
+    assert (
+        scripts.get_revision("20261127_rce_record_sam_screen").down_revision
+        == "20261115_rce_npi_research"
+    )
+    assert scripts.get_heads() == ["20261127_rce_record_sam_screen"]
 
 
 async def _catalog():

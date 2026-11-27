@@ -85,6 +85,7 @@ MIGRATION_OWNED_TABLES = (
     "rce_delivery_report_links", "rce_record_comments",
     "rce_supplemental_npi_research",
     "rce_disposition_followups",
+    "rce_record_sam_screenings",
 )
 
 

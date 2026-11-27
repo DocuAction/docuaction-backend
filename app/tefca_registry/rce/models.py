@@ -474,6 +474,58 @@ class RceCorrectionDetail(Base):
     )
 
 
+# ── SAM name-only screening on submitted values (owner, 2026-11-27) ─────────
+
+class RceRecordSamScreening(Base):
+    """ONE name-only SAM public-extract screen of ONE delivered record, bound to that record.
+
+    RECORD-SCOPED BY DESIGN (owner authorization 2026-11-27, independent review of #258). The entity evidence store
+    (`tefca_dimension_evidence`) has no record key, so a screen of one record's submitted name written there would
+    stand for the whole entity: it would mark the entity covered for the edition and could be read as an ordinary
+    extract result for a SIBLING record that submitted an NPI. This table is never read by entity coverage, the
+    classifier or any NPI-based check, so it cannot satisfy or replace another record's screening.
+
+    What a row binds: the delivery and the delivered record; the basis (the record's ORIGINAL submitted name, no NPI
+    sent - the name itself is not copied here, it stays on the delivered record); the edition (filename, publication
+    date, SHA-256) the screen ran against; the outcome; the screening time and actor. `identity_confirmed` is always
+    false: screening is recorded separately from confirmed identity. A CANDIDATE outcome also has an open
+    SAM_EXTRACT_CANDIDATE finding on the same record (`issue_id`) - a candidate, never a confirmed exclusion.
+
+    Append-only by trigger (UPDATE and DELETE are refused by the database); the app holds SELECT, INSERT only.
+    Never created at runtime: the table is in MIGRATION_OWNED_TABLES, so startup create_all skips it and only the
+    governed migration `20261127_rce_record_sam_screen` creates it (with its triggers, indexes and grants).
+    """
+
+    __tablename__ = "rce_record_sam_screenings"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_intake_id = Column(UUID(as_uuid=True), ForeignKey("rce_source_intakes.id", ondelete="RESTRICT"),
+                              nullable=False)
+    source_record_id = Column(UUID(as_uuid=True), ForeignKey("rce_source_records.id", ondelete="RESTRICT"),
+                              nullable=False)
+    #: The entity the delivered record links (informational; never used to mark the entity covered).
+    canonical_entity_id = Column(UUID(as_uuid=True))
+    screen_basis = Column(String(40), nullable=False)
+    identity_confirmed = Column(Boolean, nullable=False, server_default=text("false"))
+    extract_sha256 = Column(String(64), nullable=False)
+    extract_filename = Column(Text)
+    publication_date = Column(String(10))
+    #: CANDIDATE | NO_CANDIDATE | NOT_SCREENED (the pinned edition was loaded but the screen could not be performed).
+    outcome = Column(String(16), nullable=False)
+    candidate_count = Column(Integer)
+    not_screened_reason = Column(Text)
+    issue_id = Column(UUID(as_uuid=True), ForeignKey("rce_issues.id", ondelete="RESTRICT"))
+    screened_at = Column(DateTime(timezone=True), nullable=False, server_default=func.clock_timestamp())
+    screened_by = Column(String(320), nullable=False)
+    correlation_id = Column(String(64))
+
+    __table_args__ = (
+        UniqueConstraint("source_record_id", "extract_sha256", "screen_basis",
+                         name="uq_rce_record_sam_screening_record_edition_basis"),
+        CheckConstraint("identity_confirmed = false", name="ck_rce_record_sam_screening_identity_not_confirmed"),
+    )
+
+
 # ── P8 support — contacts (PII) ──────────────────────────────────────────────
 
 class TefcaEntityContact(Base):
