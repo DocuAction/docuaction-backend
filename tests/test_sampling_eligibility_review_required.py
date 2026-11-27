@@ -429,7 +429,7 @@ async def test_a_recheck_risk_signal_clears_only_by_a_person_cleared_review_afte
     db = rolled_back_db
     intake_id, job, curated, entity_id = await _with_qhin(db, "9.99.777.97")
     t0 = datetime(2026, 11, 20, 12, 0, 0)
-    rj = rm.RceRecheckJob(intake_id=intake_id, trigger_kind="test", source_id="sam_gov", trigger_ref="t",
+    rj = rm.RceRecheckJob(intake_id=intake_id, trigger_kind=rm.TRIGGER_SOURCE_RECOVERY, source_id="sam_gov", trigger_ref="t",
                           idempotency_key=uuid.uuid4().hex, requested_by=SYN, rationale="synthetic",
                           baseline_hash="0" * 64)
     db.add(rj)
