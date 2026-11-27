@@ -134,8 +134,11 @@ async def _open_extract_candidate(db, entity_id) -> bool:
 
 
 async def _uncleared_recheck_risk_signal(db, entity_id):
-    """The newest recheck RISK_SIGNAL time for the entity, unless a review of the entity resolved by a person AND
-    made reportable (independent QA) at or after it. None when there is no such signal or it was cleared."""
+    """The newest recheck RISK_SIGNAL time for the entity, unless a review of the entity was CLEARED by a person AFTER
+    it. Cleared means exactly what `clearance_state` means for an exclusion signal (reclassified to B1/B2 by a person
+    and made reportable by independent QA - a confirmation, or a reclassification to a finding, does not clear), and the
+    person's act (`reclassified_at`) must be at or after the signal: a review resolved before the signal and approved
+    later never adjudicated it (CodeRabbit, 2026-11-27). None when there is no such signal or it was cleared."""
     from sqlalchemy import func
     from app.tefca_registry.rce import recheck_models as rm
     signal_at = (await db.execute(
@@ -144,13 +147,15 @@ async def _uncleared_recheck_risk_signal(db, entity_id):
             rm.RceRecheckItem.outcome == rm.OUTCOME_RISK_SIGNAL))).scalar()
     if signal_at is None:
         return None
-    cleared = (await db.execute(
-        select(func.count()).select_from(reg.ReviewRecord).where(
+    resolved_after = (await db.execute(
+        select(reg.ReviewRecord).where(
             reg.ReviewRecord.entity_id == entity_id,
-            reg.ReviewRecord.reviewer_resolution.isnot(None),
-            reg.ReviewRecord.reportable_at.isnot(None),
-            reg.ReviewRecord.reportable_at >= signal_at))).scalar()
-    return None if cleared else signal_at
+            reg.ReviewRecord.reclassified_at.isnot(None),
+            reg.ReviewRecord.reclassified_at >= signal_at)
+        .order_by(reg.ReviewRecord.reclassified_at.desc()).limit(HISTORY_LIMIT))).scalars().all()
+    if any(clearance_state(record) is None for record in resolved_after):
+        return None
+    return signal_at
 
 
 def rationale_suffix(prior: Dict[str, Any]) -> str:

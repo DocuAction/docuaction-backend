@@ -417,3 +417,45 @@ async def test_a_pre_correction_full_population_plan_with_no_exclusion_is_reused
     await _old_frame(db, plan, excluded=0)
     again = await qs.finalize_plan(db, intake_id, actor=SYN, full_population=True)
     assert again["already_finalized"] is True and again["sample_id"] == plan["sample_id"]
+
+
+async def test_a_recheck_risk_signal_clears_only_by_a_person_cleared_review_after_it(rolled_back_db):
+    """CodeRabbit 2026-11-27: the recheck signal clears exactly as `clearance_state` clears an exclusion signal
+    (reclassified to B1/B2 by a person AND QA-reportable), and only when the person's act postdates the signal."""
+    from datetime import datetime, timedelta
+
+    from app.tefca_registry.rce import prior_risk
+    from app.tefca_registry.rce import recheck_models as rm
+    db = rolled_back_db
+    intake_id, job, curated, entity_id = await _with_qhin(db, "9.99.777.97")
+    t0 = datetime(2026, 11, 20, 12, 0, 0)
+    rj = rm.RceRecheckJob(intake_id=intake_id, trigger_kind="test", source_id="sam_gov", trigger_ref="t",
+                          idempotency_key=uuid.uuid4().hex, requested_by=SYN, rationale="synthetic",
+                          baseline_hash="0" * 64)
+    db.add(rj)
+    await db.flush()
+    db.add(rm.RceRecheckItem(job_id=rj.id, entity_id=entity_id, entity_ref="ref", state="DONE",
+                             outcome=rm.OUTCOME_RISK_SIGNAL, processed_at=t0))
+    await db.flush()
+
+    async def _review(n, **kw):
+        db.add(reg.ReviewRecord(review_id=f"REV-TST-97{n:04d}", entity_id=entity_id, classification_bucket="B3", **kw))
+        await db.flush()
+
+    assert (await prior_risk.unresolved_prior_risk(db, entity_id))["uncleared_recheck_risk_signal_at"]
+    # reclassified to a FINDING after the signal, reportable: not a clearance
+    await _review(1, reviewer_resolution="reclassified", reclassified_to="B3",
+                  reclassified_at=t0 + timedelta(hours=1), reportable_at=t0 + timedelta(hours=2))
+    assert (await prior_risk.unresolved_prior_risk(db, entity_id))["uncleared_recheck_risk_signal_at"]
+    # cleared by a person BEFORE the signal, QA-approved after it: not a clearance of THIS signal
+    await _review(2, reviewer_resolution="reclassified", reclassified_to="B1",
+                  reclassified_at=t0 - timedelta(hours=1), reportable_at=t0 + timedelta(hours=3))
+    assert (await prior_risk.unresolved_prior_risk(db, entity_id))["uncleared_recheck_risk_signal_at"]
+    # reclassified to B1 by a person after the signal but NOT yet QA-approved: still uncleared
+    await _review(3, reviewer_resolution="reclassified", reclassified_to="B1", reclassified_at=t0 + timedelta(hours=4))
+    assert (await prior_risk.unresolved_prior_risk(db, entity_id))["uncleared_recheck_risk_signal_at"]
+    # person-cleared after the signal and QA-reportable: cleared
+    await _review(4, reviewer_resolution="reclassified", reclassified_to="B1",
+                  reclassified_at=t0 + timedelta(hours=5), reportable_at=t0 + timedelta(hours=6))
+    prior = await prior_risk.unresolved_prior_risk(db, entity_id)
+    assert prior is None or "uncleared_recheck_risk_signal_at" not in prior
