@@ -54,7 +54,7 @@ def _flags(monkeypatch):
     # A delivery assessed on/after the blank-NPI effective date unless a test says otherwise (deterministic: never
     # the wall clock).
     monkeypatch.setattr(assessment_context, "resolve_assessment_date",
-                        AsyncMock(return_value=SimpleNamespace(value=date(2026, 11, 26))))
+                        AsyncMock(return_value=SimpleNamespace(value=date(2026, 11, 26), source="run_metadata")))
 
 
 def _screen(candidate: bool) -> SourceResult:
@@ -220,12 +220,24 @@ async def test_a_whitespace_only_npi_is_blank_as_the_classifier_reads_it(rolled_
 async def test_a_delivery_assessed_before_the_effective_date_is_unchanged(rolled_back_db, monkeypatch):
     db = rolled_back_db
     monkeypatch.setattr(assessment_context, "resolve_assessment_date",
-                        AsyncMock(return_value=SimpleNamespace(value=date(2026, 11, 8))))   # the October delivery
+                        AsyncMock(return_value=SimpleNamespace(value=date(2026, 11, 8), source="run_metadata")))   # the October delivery
     ent, intake, recs = await _one_delivery(db, "9.99.778.15", entity_npi=NPI, delivered_npi="")
     out, screen = await _attempt(db, ent=ent, intake=intake, ref=recs[0].source_rce_id, resolved=_resolved(ent))
     screen.assert_not_awaited()
     assert out["outcome"] == av.OUTCOME_IDENTITY_REFUSED
     _untouched(await _state(db, ent, *recs))
+    assert await _screenings(db, intake) == []
+
+
+async def test_a_wall_clock_fallback_assessment_date_is_refused(rolled_back_db, monkeypatch):
+    """No completed run: the resolver falls back to UTC today, which would let an earlier delivery pass the guard."""
+    db = rolled_back_db
+    monkeypatch.setattr(assessment_context, "resolve_assessment_date", AsyncMock(return_value=SimpleNamespace(
+        value=date(2026, 11, 27), source=assessment_context.SOURCE_FALLBACK_NO_RUN)))
+    ent, intake, recs = await _one_delivery(db, "9.99.778.27", entity_npi=NPI, delivered_npi="")
+    out, screen = await _attempt(db, ent=ent, intake=intake, ref=recs[0].source_rce_id, resolved=_resolved(ent))
+    screen.assert_not_awaited()
+    assert out["outcome"] == av.OUTCOME_IDENTITY_REFUSED
     assert await _screenings(db, intake) == []
 
 
@@ -308,6 +320,22 @@ async def test_a_name_only_candidate_is_not_absorbed_by_a_siblings_open_finding(
     assert sorted(i.source_record_id for i in issues) == sorted([r1.id, r2.id])
     (screening,) = await _screenings(db, intake)
     assert screening.issue_id == next(i.id for i in issues if i.source_record_id == r2.id)
+
+
+async def test_an_npi_candidate_is_not_absorbed_by_a_siblings_name_only_finding(rolled_back_db):
+    """The reverse order: R2's NAME-ONLY candidate is opened first; R1's NPI-basis candidate must still get its own
+    finding, so ruling out R2's (a different organisation's name) cannot leave the NPI match without a work item."""
+    db = rolled_back_db
+    ent, intake, r1, r2 = await _siblings(db, "9.99.778.28")
+    await _attempt(db, ent=ent, intake=intake, ref=r2.source_rce_id, resolved=_resolved(ent), candidate=True)
+    out1, screen1 = await _attempt(db, ent=ent, intake=intake, ref=r1.source_rce_id, resolved=_resolved(ent),
+                                   candidate=True)
+    assert screen1.await_args.args[0] == NPI and out1["outcome"] != av.OUTCOME_NAME_ONLY_RECORDED
+    issues = await _candidates(db, intake)
+    assert sorted(i.source_record_id for i in issues) == sorted([r1.id, r2.id])
+    (screening,) = await _screenings(db, intake)
+    r1_issue = next(i for i in issues if i.source_record_id == r1.id)
+    assert screening.issue_id != r1_issue.id and "NAME-ONLY" not in r1_issue.description
 
 
 async def test_the_record_scoped_candidate_writer_requires_its_record():

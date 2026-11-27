@@ -484,6 +484,13 @@ def sam_extract_candidate_values(evidence: Dict[str, Any]) -> Optional[Dict[str,
     return None
 
 
+async def _name_only_store_exists(db) -> bool:
+    """Whether the record-scoped name-only store (migration 20261127_rce_record_sam_screen) exists. Before it is
+    applied no name-only finding can exist, so nothing needs excluding."""
+    from sqlalchemy import text
+    return (await db.execute(text("SELECT to_regclass('public.rce_record_sam_screenings')"))).scalar() is not None
+
+
 async def record_sam_extract_candidate(db, *, entity_id, npi: Optional[str],
                                        org_name: Optional[str] = None,
                                        extract: Optional[Dict[str, Any]] = None,
@@ -561,13 +568,18 @@ async def record_sam_extract_candidate(db, *, entity_id, npi: Optional[str],
         scope_records = select(m.RceCuratedRecord.source_record_id).where(
             m.RceCuratedRecord.canonical_entity_id == entity_id,
             m.RceCuratedRecord.source_intake_id == curated.source_intake_id)
-    existing = (await db.execute(
-        select(m.RceIssue).where(
-            m.RceIssue.source_record_id.in_(scope_records),
-            m.RceIssue.rule_id == rule_id,
-            m.RceIssue.issue_type == SAM_EXTRACT_CANDIDATE,
-            m.RceIssue.resolution.in_(sorted(UNDECIDED_RESOLUTIONS)))
-        .limit(1))).scalar_one_or_none()
+    existing_stmt = select(m.RceIssue).where(
+        m.RceIssue.source_record_id.in_(scope_records),
+        m.RceIssue.rule_id == rule_id,
+        m.RceIssue.issue_type == SAM_EXTRACT_CANDIDATE,
+        m.RceIssue.resolution.in_(sorted(UNDECIDED_RESOLUTIONS)))
+    if not name_only_submitted and await _name_only_store_exists(db):
+        # ISOLATION BOTH WAYS (independent re-review of #258): an entity-level (NPI-basis) candidate is never
+        # absorbed by a NAME-ONLY finding on a sibling record - ruling that one out (its submitted name may be a
+        # different organisation) would otherwise leave the NPI-based possible match with no open worklist item.
+        existing_stmt = existing_stmt.where(m.RceIssue.id.notin_(
+            select(m.RceRecordSamScreening.issue_id).where(m.RceRecordSamScreening.issue_id.isnot(None))))
+    existing = (await db.execute(existing_stmt.limit(1))).scalar_one_or_none()
     if existing is not None:
         return existing
 

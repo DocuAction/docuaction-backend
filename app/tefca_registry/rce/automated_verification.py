@@ -630,6 +630,10 @@ async def _name_only_submitted_context(db, *, ref: str, canonical_entity_id, int
     from app.tefca_registry.rce import verification_findings as vf
 
     assessment = await assessment_context.resolve_assessment_date(db, intake_id)
+    if str(getattr(assessment, "source", "") or "").startswith("fallback_"):
+        # No completed run supplies the delivery's own assessment date; the resolver fell back to the wall clock,
+        # which would let an EARLIER delivery pass the guard. Refuse rather than guess (independent re-review).
+        return None
     if assessment.value < ap.BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE:
         return None
     context, _refusal = await vf.validated_delivery_context(
