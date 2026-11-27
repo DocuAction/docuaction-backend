@@ -375,9 +375,10 @@ async def test_a_later_delivery_proceeds_and_its_count_includes_the_earlier_deli
     (entity-scoped, UNCHANGED) and therefore includes the earlier delivery's unadjudicated reviews; the response
     says so; the later delivery's job ends READY_FOR_REVIEW with reconciliation_passed stored FALSE."""
     d = delivery
-    # ONE batch on the earlier delivery. (Entities already under review are kept out of a new sample draw by the
-    # existing `verification_status=in_review` exclusion in qhin_sampling - unchanged, and not this question - so
-    # the later delivery's frame is the four entities the earlier cycle has not reached.)
+    # ONE batch on the earlier delivery. (Owner, 2026-11-27: a FULL-POPULATION frame no longer excludes an entity
+    # because an earlier delivery's review set its status to `in_review` - qhin_sampling
+    # FULL_POPULATION_ELIGIBILITY_BASIS - so the later delivery's frame is ALL the entities, including those the
+    # earlier cycle reached. Statistical draws keep that exclusion.)
     await rc._create_review_cycle(d.db, d.intake, user=_PM, full_population=True, batch=BATCH)
     earlier = len(await _default_routed(d.db, d.entities))
     assert earlier >= 1
@@ -405,7 +406,7 @@ async def test_a_later_delivery_proceeds_and_its_count_includes_the_earlier_deli
     assert calls[0]["reconciliation_passed_at_gate"] is False
     total = len(await _default_routed(d.db, d.entities))
     assert calls[-1]["default_routed_unadjudicated"] == total > earlier
-    assert sum(c["linked_this_call"] for c in calls) == MEMBERS - BATCH
+    assert sum(c["linked_this_call"] for c in calls) == MEMBERS
     assert "earlier delivery of the same organisation" in calls[-1]["open_requirements"][0]["scope"]
 
 

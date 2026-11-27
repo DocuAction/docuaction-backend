@@ -141,9 +141,25 @@ def plan_key(intake_id: Any, review_type: str, *, confidence: float,
             f"{proportion}:{int(use_fpc)}:held={int(include_held)}")
 
 
-async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
+#: FULL-POPULATION CLASSIFICATION FRAME (owner authorization, 2026-11-27). Methodology v1.4 §205 separates automated
+#: full-population processing from statistically selected manual review, and §69 has automated processing assign
+#: B1-B4 to the delivery. The `in_review` exclusion below is a SAMPLING-eligibility rule; on the full-population
+#: path it also kept every entity an EARLIER delivery had classified B2-B4 (the overloaded status, see D-08 above)
+#: out of THIS delivery's classification. A full-population frame therefore does not exclude on the entity-level
+#: `verification_status`. Unchanged: statistical draws (and D-08, still undecided), HELD records, the QHIN edge
+#: requirement, the reviewed-on-submitted-values exclusion, the cycle's identity pre-check, and every finding and
+#: hold. A B1 still cannot clear an open blocking finding or prior risk (`prior_risk.unresolved_prior_risk`).
+FULL_POPULATION_ELIGIBILITY_BASIS = (
+    "full_population: entity-level verification_status (in_review) does not exclude; HELD, QHIN-edge and "
+    "reviewed-on-submitted-values exclusions apply (owner authorization 2026-11-27; methodology v1.4 §205/§69)")
+
+
+async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False, full_population: bool = False
                               ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """(eligible units, unresolved units) for one delivery.
+
+    `full_population=True` is the frame of a full-population classification plan: the entity-level `in_review`
+    exclusion is not applied (see FULL_POPULATION_ELIGIBILITY_BASIS). Every other rule is identical.
 
     QHIN comes from the CANONICAL relationship — the `managed_by_qhin` edge
     written at promotion — not from a convenient column and never from state,
@@ -204,7 +220,10 @@ async def resolve_qhin_strata(db, intake_id, *, include_held: bool = False
         BLOCKING_OUTCOMES, REVIEW_REQUIRED_STATUS)
 
     blocking_only = _proposed_blocking_only()
-    if blocking_only:
+    if full_population:
+        # Not asked at all: no entity-level review status excludes from a full-population classification frame.
+        review_required = set()
+    elif blocking_only:
         # D-08 proposed semantics: only an unresolved finding of an enumerated
         # BLOCKING type excludes — read from rce_issues (the table the resolve
         # path maintains), never from the overloaded status flag.
@@ -420,10 +439,21 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
 
     existing = await _existing_plan(db, key)
     if existing is not None:
+        config = existing.strata_config or {}
+        if (full_population and config.get("eligibility_basis") != FULL_POPULATION_ELIGIBILITY_BASIS
+                and int(config.get("excluded_review_required") or 0) > 0):
+            # A full-population plan frozen BEFORE the 2026-11-27 correction whose frame actually left entities out
+            # on their prior `in_review` status. Returning it would silently classify the old, narrower population
+            # under the corrected code. Refuse; the operator decides (a plan with no such exclusion is identical
+            # under either rule and is reused as before).
+            raise SamplingRefused(
+                f"Delivery {intake_id} already has full-population plan {existing.id} drawn under the earlier frame, "
+                f"which excluded {config.get('excluded_review_required')} entities on prior in_review status. It is "
+                f"not reused under the corrected full-population basis; review it before any new plan is drawn.")
         return {**await get_plan(db, existing.id), "already_finalized": True}
 
     eligible, unresolved = await resolve_qhin_strata(
-        db, intake_id, include_held=include_held)
+        db, intake_id, include_held=include_held, full_population=full_population)
     excluded = review_required_exclusions(unresolved)
     reviewed_excluded = reviewed_on_submitted_values_exclusions(unresolved)
     if not eligible:
@@ -460,6 +490,7 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
                            "source_intake_id": str(intake_id),
                            "include_held": include_held,
                            "full_population": True,
+                           "eligibility_basis": FULL_POPULATION_ELIGIBILITY_BASIS,
                            "unresolved_units": len(unresolved),
                            "excluded_review_required": len(excluded),
                            **_reviewed_exclusion_facts(unresolved)})
@@ -530,7 +561,8 @@ async def finalize_plan(db, intake_id, *, review_type: str = "quarterly",
                   "random_seed": result.random_seed,
                   "unresolved_units": len(unresolved),
                   "excluded_review_required": len(excluded),
-                  "excluded_reviewed_on_submitted_values": len(reviewed_excluded)})
+                  "excluded_reviewed_on_submitted_values": len(reviewed_excluded),
+                  "eligibility_basis": result.strata_config.get("eligibility_basis")})
     if reviewed_excluded:
         # The same audit fact for the other eligibility exclusion: which delivered records were kept out of THIS
         # plan's frame because each already has its own review classified on submitted values.

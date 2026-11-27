@@ -66,11 +66,13 @@ def exclusion_signals(verification_results: Optional[Dict[str, Any]]) -> List[st
 async def unresolved_prior_risk(db, entity_id) -> Optional[Dict[str, Any]]:
     """The entity's uncleared prior risk, or None.
 
-    Two independent sources, either is enough:
+    Independent sources, any one is enough:
       * the MOST RECENT review record carrying an exclusion signal, when no
         person cleared it (see `clearance_state`);
       * an OPEN BLOCKING finding in the issue ledger
-        (`post_promotion_verification.has_unresolved_blocking_finding`).
+        (`post_promotion_verification.has_unresolved_blocking_finding`);
+      * an OPEN SAM public-extract candidate finding on any record of the entity;
+      * a recheck RISK_SIGNAL no person-resolved, QA-reportable review postdates.
     """
     from app.tefca_registry.rce import post_promotion_verification as ppv
 
@@ -95,6 +97,18 @@ async def unresolved_prior_risk(db, entity_id) -> Optional[Dict[str, Any]]:
     if await ppv.has_unresolved_blocking_finding(db, entity_id):
         out["open_blocking_finding"] = True
 
+    # 2026-11-27 (full-population frame no longer excludes on `in_review`, independent review BLOCKING 1): two more
+    # risk sources set the entity to `in_review` WITHOUT a review record or a BLOCKING finding, so neither check above
+    # saw them, and a clean B1 would have marked the entity verified while they stood.
+    #   * an OPEN SAM public-extract candidate on any delivered record of the entity (a potential exclusion match no
+    #     analyst has confirmed or dismissed);
+    #   * a recheck RISK_SIGNAL that no human-adjudicated, QA-reportable review of the entity postdates.
+    if await _open_extract_candidate(db, entity_id):
+        out["open_extract_candidate"] = True
+    recheck_signal_at = await _uncleared_recheck_risk_signal(db, entity_id)
+    if recheck_signal_at is not None:
+        out["uncleared_recheck_risk_signal_at"] = recheck_signal_at.isoformat()
+
     if not out:
         return None
     out.setdefault("open_blocking_finding", False)
@@ -106,6 +120,44 @@ async def unresolved_prior_risk(db, entity_id) -> Optional[Dict[str, Any]]:
     return out
 
 
+async def _open_extract_candidate(db, entity_id) -> bool:
+    from sqlalchemy import func
+    from app.tefca_registry.rce import models as m
+    from app.tefca_registry.rce.curation import UNDECIDED_RESOLUTIONS
+    from app.tefca_registry.rce.verification_findings import SAM_EXTRACT_CANDIDATE
+    records = select(m.RceCuratedRecord.source_record_id).where(m.RceCuratedRecord.canonical_entity_id == entity_id)
+    return bool((await db.execute(
+        select(func.count()).select_from(m.RceIssue).where(
+            m.RceIssue.issue_type == SAM_EXTRACT_CANDIDATE,
+            m.RceIssue.resolution.in_(sorted(UNDECIDED_RESOLUTIONS)),
+            m.RceIssue.source_record_id.in_(records)))).scalar())
+
+
+async def _uncleared_recheck_risk_signal(db, entity_id):
+    """The newest recheck RISK_SIGNAL time for the entity, unless a review of the entity was CLEARED by a person AFTER
+    it. Cleared means exactly what `clearance_state` means for an exclusion signal (reclassified to B1/B2 by a person
+    and made reportable by independent QA - a confirmation, or a reclassification to a finding, does not clear), and the
+    person's act (`reclassified_at`) must be at or after the signal: a review resolved before the signal and approved
+    later never adjudicated it (CodeRabbit, 2026-11-27). None when there is no such signal or it was cleared."""
+    from sqlalchemy import func
+    from app.tefca_registry.rce import recheck_models as rm
+    signal_at = (await db.execute(
+        select(func.max(rm.RceRecheckItem.processed_at)).where(
+            rm.RceRecheckItem.entity_id == entity_id,
+            rm.RceRecheckItem.outcome == rm.OUTCOME_RISK_SIGNAL))).scalar()
+    if signal_at is None:
+        return None
+    resolved_after = (await db.execute(
+        select(reg.ReviewRecord).where(
+            reg.ReviewRecord.entity_id == entity_id,
+            reg.ReviewRecord.reclassified_at.isnot(None),
+            reg.ReviewRecord.reclassified_at >= signal_at)
+        .order_by(reg.ReviewRecord.reclassified_at.desc()).limit(HISTORY_LIMIT))).scalars().all()
+    if any(clearance_state(record) is None for record in resolved_after):
+        return None
+    return signal_at
+
+
 def rationale_suffix(prior: Dict[str, Any]) -> str:
     parts = []
     if prior.get("prior_review_id"):
@@ -113,6 +165,10 @@ def rationale_suffix(prior: Dict[str, Any]) -> str:
                      f"{', '.join(prior['signals'])} ({prior['why_not_cleared']})")
     if prior.get("open_blocking_finding"):
         parts.append("an open BLOCKING ledger finding exists")
+    if prior.get("open_extract_candidate"):
+        parts.append("an open SAM public-extract candidate finding exists")
+    if prior.get("uncleared_recheck_risk_signal_at"):
+        parts.append(f"a recheck risk signal ({prior['uncleared_recheck_risk_signal_at']}) has not been adjudicated")
     return (" [PRIOR-RISK-NOT-CLEARED: " + "; ".join(parts) + ". This cycle's clean "
             "result does not clear it; entity held in review.]")
 

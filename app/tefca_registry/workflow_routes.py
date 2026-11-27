@@ -280,6 +280,9 @@ async def review_cycle_identity_precheck_route(
     limit: int = Query(150, ge=1, le=180, description=(
         "Members examined per call (~0.2 s each on DEV); bounded so a page returns inside a minute (a slower "
         "response was re-sent by the browser and ran twice). Walk the frame with page.next_after_entity_id.")),
+    full_population: bool = Query(False, description=(
+        "Preview the FULL-POPULATION classification frame (entity-level in_review status does not exclude), the "
+        "frame a full_population review cycle enumerates. Default: the statistical sampling frame.")),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("program_manager")),
 ):
@@ -299,7 +302,7 @@ async def review_cycle_identity_precheck_route(
         raise HTTPException(404, f"No delivery {intake_id}")
     try:
         return await rc.preview_identity_precheck(
-            db, intake_id, after_entity_id=after_entity_id, limit=limit)
+            db, intake_id, after_entity_id=after_entity_id, limit=limit, full_population=full_population)
     except rc.IdentityPrecheckUnavailable as exc:
         raise HTTPException(409, str(exc))
 
