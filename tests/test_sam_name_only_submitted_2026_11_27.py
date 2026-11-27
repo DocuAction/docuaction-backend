@@ -134,8 +134,11 @@ async def test_a_record_that_submitted_a_different_npi_keeps_its_refusal(rolled_
 async def test_a_blank_npi_reference_that_resolves_to_another_entity_keeps_its_refusal(rolled_back_db):
     db = rolled_back_db
     ent, intake, recs = await _one_delivery(db, "9.99.778.14", entity_npi=NPI, delivered_npi="")
-    other = await seed_entity(db, oid=f"{SYN}-NAMEONLY-{uuid.uuid4().hex[:8]}", name=f"{SYN} other", npi=NPI)
-    out, screen = await _attempt(db, ent=ent, intake=intake, ref=recs[0].source_rce_id, resolved=_resolved(other))
+    # Seeded WITHOUT an NPI, as in test_coverage_identity_gate's same case: seeding a second entity with the same NPI
+    # would move the first entity's NPI identifier and break the "untouched" baseline, not test the refusal.
+    other = await seed_entity(db, oid=f"{SYN}-NAMEONLY-{uuid.uuid4().hex[:8]}", name=f"{SYN} other")
+    out, screen = await _attempt(db, ent=ent, intake=intake, ref=recs[0].source_rce_id,
+                                 resolved=_resolved(other, NPI))
     screen.assert_not_awaited()
     assert out["outcome"] == av.OUTCOME_IDENTITY_REFUSED
     _untouched(await _state(db, ent, *recs))
