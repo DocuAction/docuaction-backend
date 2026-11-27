@@ -329,7 +329,8 @@ PRECHECK_NOTE = (
 
 
 async def preview_identity_precheck(db, intake_id, *, after_entity_id=None,
-                                    limit: int = PRECHECK_DEFAULT_LIMIT) -> Dict[str, Any]:
+                                    limit: int = PRECHECK_DEFAULT_LIMIT,
+                                    full_population: bool = False) -> Dict[str, Any]:
     """Count, BEFORE any review cycle exists, the members the cycle would not be able to review for identity
     reasons. READ-ONLY: selects only, no flush, no commit, no audit row, no source call.
 
@@ -363,7 +364,10 @@ async def preview_identity_precheck(db, intake_id, *, after_entity_id=None,
     assessment = await resolve_assessment_date(db, intake_uuid)
     rule_applies = assessment.value >= ap.BLANK_NPI_SUBMITTED_VALUES_EFFECTIVE
 
-    eligible, unresolved = await resolve_qhin_strata(db, intake_uuid, include_held=False)
+    # `full_population=True` previews the frame a full-population classification plan enumerates (no entity-level
+    # review-status exclusion; see qhin_sampling.FULL_POPULATION_ELIGIBILITY_BASIS). Default: the sampling frame.
+    eligible, unresolved = await resolve_qhin_strata(db, intake_uuid, include_held=False,
+                                                     full_population=full_population)
     # Entities with MORE THAN ONE promoted, not-HELD record in this delivery - whatever the frame says about each.
     # The cycle works one member per entity; it must not be started while this is above zero.
     from sqlalchemy import func as _func
@@ -479,6 +483,7 @@ async def preview_identity_precheck(db, intake_id, *, after_entity_id=None,
         },
         # The whole delivery, the same on every page.
         "frame": {
+            "full_population": bool(full_population),
             "members_total": len(member_ids),
             # One eligible unit per member is what the cycle assumes. False means some entity has more than one
             # eligible record in this delivery: DO NOT START THE CYCLE until that is understood.

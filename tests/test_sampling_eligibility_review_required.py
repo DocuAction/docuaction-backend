@@ -296,3 +296,75 @@ async def test_d08_blocking_only_flag_narrows_exclusion_to_enumerated_findings(
     meta = next(u for u in unresolved if u["entity_id"] == entity_id)
     assert meta["exclusion"] == qs.EXCLUSION_REVIEW_REQUIRED
     assert "rce_issues" in meta["reason"]
+
+
+# ── FULL-POPULATION classification frame (owner authorization 2026-11-27) ─────
+# Methodology v1.4 §205/§69: automated full-population classification is separate from statistical sampling. A
+# prior entity-level `in_review` status no longer keeps a delivered record out of a FULL-POPULATION frame; statistical
+# draws and D-08 are unchanged; findings, holds and statuses are untouched by the frame decision.
+
+@pytest.mark.parametrize("blocking_only_flag", [None, "1"])
+async def test_full_population_frame_ignores_entity_level_review_status(rolled_back_db, monkeypatch,
+                                                                        blocking_only_flag):
+    db = rolled_back_db
+    intake_id, job, curated, entity_id = await _with_qhin(db, f"9.99.777.9{1 if blocking_only_flag else 0}")
+    if blocking_only_flag:
+        monkeypatch.setenv(qs.PROPOSED_SAMPLING_BLOCKING_ONLY_ENV, blocking_only_flag)
+    else:
+        monkeypatch.delenv(qs.PROPOSED_SAMPLING_BLOCKING_ONLY_ENV, raising=False)
+    await _block(db, entity_id)                            # a genuine unresolved BLOCKING finding -> in_review
+
+    # Statistical frame: still excluded, under either D-08 setting (unchanged behaviour).
+    eligible, unresolved = await qs.resolve_qhin_strata(db, intake_id)
+    assert eligible == [] and qs.review_required_exclusions(unresolved)
+    # Full-population frame: in.
+    eligible, unresolved = await qs.resolve_qhin_strata(db, intake_id, full_population=True)
+    assert [u["entity_id"] for u in eligible] == [entity_id]
+    assert qs.review_required_exclusions(unresolved) == []
+
+    plan = await qs.finalize_plan(db, intake_id, actor=SYN, full_population=True)
+    assert entity_id in await _members(db, uuid.UUID(plan["sample_id"]))
+    sample = await db.get(reg.ReviewSample, uuid.UUID(plan["sample_id"]))
+    assert sample.strata_config["eligibility_basis"] == qs.FULL_POPULATION_ELIGIBILITY_BASIS
+    assert sample.strata_config["excluded_review_required"] == 0
+    finalized = [r for r in await _audit(db, "sampling_plan_finalized")
+                 if r.metadata_.get("sample_id") == plan["sample_id"]]
+    assert finalized[0].metadata_["eligibility_basis"] == qs.FULL_POPULATION_ELIGIBILITY_BASIS
+
+    # The frame decision changes nothing else: status, finding and record untouched; statistical plan still refused.
+    assert (await db.get(reg.TefcaRegEntity, entity_id)).verification_status == ppv.REVIEW_REQUIRED_STATUS
+    assert await ppv.has_unresolved_blocking_finding(db, entity_id)
+    ledger = await exception_ledger.list_exceptions(db, str(intake_id))
+    assert "NPI_DEACTIVATED" in {i["issue_type"] for i in ledger["items"]}
+    with pytest.raises(qs.SamplingRefused):
+        await qs.finalize_plan(db, intake_id, seed=7, actor=SYN)
+
+
+async def test_full_population_frame_still_excludes_held_and_missing_qhin(rolled_back_db):
+    """Only the entity-status exclusion is lifted: a unit with no QHIN edge stays unresolved with its reason."""
+    db = rolled_back_db
+    rows, intake_id, job, curated, promo = await _promoted(db, "9.99.777.93")
+    await db.execute(reg.TefcaEntityRelationship.__table__.update().where(
+        reg.TefcaEntityRelationship.child_entity_id == curated.canonical_entity_id).values(status="inactive"))
+    eligible, unresolved = await qs.resolve_qhin_strata(db, intake_id, full_population=True)
+    assert eligible == [] and unresolved[0]["reason"] == "no canonical managed_by_qhin edge"
+
+
+def test_statistical_paths_do_not_pass_full_population():
+    """preview_plan and the workload rollup are sampling views and keep the statistical frame."""
+    import inspect
+
+    from app.tefca_registry import qhin_workload
+    assert "full_population" not in inspect.getsource(qs.preview_plan)
+    assert "full_population=True" not in inspect.getsource(qhin_workload)
+    assert "full_population=full_population" in inspect.getsource(qs.finalize_plan)
+
+
+def test_identity_precheck_can_preview_the_full_population_frame():
+    import inspect
+
+    from app.tefca_registry import review_cycle as rc
+    from app.tefca_registry import workflow_routes
+    assert "full_population=full_population" in inspect.getsource(rc.preview_identity_precheck)
+    assert "full_population=full_population" in inspect.getsource(
+        workflow_routes.review_cycle_identity_precheck_route)
