@@ -236,6 +236,7 @@ jobs:
             tests/test_npi_outcome_record_anchoring_2026_11_16.py \
             tests/test_recheck_identity_validation_2026_11_16.py \
             tests/test_coverage_identity_gate_2026_11_25.py \
+            tests/test_sam_name_only_submitted_2026_11_27.py \
             tests/test_identity_refusal_no_endless_retry_2026_11_25.py \
             tests/test_blank_npi_classified_on_submitted_values_2026_11_25.py \
             tests/test_mandatory_sam_policy_cases_2026_11_26.py \
