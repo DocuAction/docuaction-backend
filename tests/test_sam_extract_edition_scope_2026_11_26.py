@@ -150,8 +150,9 @@ async def test_an_answer_from_another_edition_mid_run_is_not_persisted(screened_
 async def test_not_screenable_is_recorded_against_the_pinned_edition_never_as_clear(screened_on_old_edition):
     db, intake_id = screened_on_old_edition
     a, b = _loaded(NEW, "2026-11-26")
-    not_screenable = SourceResult(source_name="SAM_EXTRACT", success=False,
-                                  error="no_usable_identifier: neither a valid NPI nor an organisation name")
+    # Built exactly as SAMExtractConnector.screen builds it (prefixed "SAM_EXTRACT unavailable: ..."; CodeRabbit).
+    not_screenable = SourceResult.unavailable(
+        "SAM_EXTRACT", "no_usable_identifier: neither a valid NPI nor an organisation name", {"npi": None})
     with a, b, patch("app.Tefca.sam_extract.SAMExtractConnector.screen", new=AsyncMock(return_value=not_screenable)):
         result = await av.run_coverage_batch(db, intake_id, batch_size=100,
                                              scope=av.SCOPE_SAM_EXTRACT_EDITION, edition_sha256=NEW)
@@ -172,7 +173,7 @@ async def test_a_source_failure_mid_run_is_retried_never_recorded_as_screened(sc
     hash: the attempt did not happen, so nothing is persisted and the entity stays selected."""
     db, intake_id = screened_on_old_edition
     a, b = _loaded(NEW, "2026-11-26")
-    failed = SourceResult(source_name="SAM_EXTRACT", success=False, error=source_failure)
+    failed = SourceResult.unavailable("SAM_EXTRACT", source_failure, {"npi": None})
     with a, b, patch("app.Tefca.sam_extract.SAMExtractConnector.screen", new=AsyncMock(return_value=failed)):
         result = await av.run_coverage_batch(db, intake_id, batch_size=100,
                                              scope=av.SCOPE_SAM_EXTRACT_EDITION, edition_sha256=NEW)

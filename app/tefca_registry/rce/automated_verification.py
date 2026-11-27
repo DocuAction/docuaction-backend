@@ -621,7 +621,8 @@ async def record_sam_extract_attempt(db, *, ref: str,
         else:
             from app.Tefca import sam_extract as _se
             loaded = _se.loaded_edition()
-            entity_specific = (getattr(screen, "error", None) or "").startswith(NOT_SCREENABLE_ENTITY_PREFIX)
+            # `SourceResult.unavailable` prefixes the reason ("SAM_EXTRACT unavailable: ..."): one shared matcher.
+            entity_specific = _se.is_not_screenable_error(getattr(screen, "error", None))
             if not entity_specific or (loaded.get("extract_sha256") or "").lower() != pinned:
                 # Flag off, extract unavailable/refused (e.g. a failed 24 h refetch mid-run), stale edition, or a
                 # different edition loaded: the attempt against the pinned edition did not happen. Persist

@@ -59,9 +59,30 @@ def test_a_screen_that_did_not_happen_is_refused(note):
     assert len(ap.extract_edition_problems([_member("r1", _unavailable(note))], PIN)) == 1
 
 
-def test_entity_specific_not_screenable_is_accepted():
-    note = "no_usable_identifier: neither a valid NPI nor an organisation name is available to screen on"
-    assert ap.extract_edition_problems([_member("r1", _unavailable(note))], PIN) == []
+def test_entity_specific_not_screenable_is_accepted_in_the_stored_form():
+    """The note is `sam_extract.error` copied verbatim, i.e. SourceResult.unavailable's prefixed form (CodeRabbit)."""
+    from app.Tefca.connectors import SourceResult
+    error = SourceResult.unavailable(
+        "SAM_EXTRACT", "no_usable_identifier: neither a valid NPI nor an organisation name is available", {}).error
+    assert error.startswith("SAM_EXTRACT unavailable: no_usable_identifier:")
+    assert ap.extract_edition_problems([_member("r1", _unavailable(error))], PIN) == []
+
+
+@pytest.mark.parametrize("reason", ["extract unavailable or refused", "stale_source: 2.1 day(s) old",
+                                    "ENABLE_SAM_EXTRACT_SCREENING not enabled"])
+def test_source_failures_in_the_stored_form_are_refused(reason):
+    from app.Tefca.connectors import SourceResult
+    error = SourceResult.unavailable("SAM_EXTRACT", reason, {}).error
+    assert len(ap.extract_edition_problems([_member("r1", _unavailable(error))], PIN)) == 1
+
+
+def test_the_shared_matcher_is_exact():
+    from app.Tefca.sam_extract import is_not_screenable_error
+    assert is_not_screenable_error("SAM_EXTRACT unavailable: no_usable_identifier: x")
+    assert is_not_screenable_error("no_usable_identifier: x")
+    assert not is_not_screenable_error("SAM_EXTRACT unavailable: stale_source: no_usable_identifier: x")
+    assert not is_not_screenable_error("no_usable_identifiers are fine")
+    assert not is_not_screenable_error(None)
 
 
 def test_missing_extract_evidence_is_refused():

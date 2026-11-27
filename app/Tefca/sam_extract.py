@@ -336,6 +336,22 @@ async def screening_not_ready_reason() -> Optional[str]:
     return f"stale_source: {stale}" if stale else None
 
 
+#: The ONE unsuccessful screen that is a fact about the ENTITY, not the source: `screen` found neither a usable NPI
+#: nor an organisation name. Every other unsuccessful screen (flag off, extract unavailable, stale) is about the
+#: source and must be retried, never recorded as an attempt against an edition.
+NOT_SCREENABLE_REASON = "no_usable_identifier"
+_UNAVAILABLE_PREFIX = "SAM_EXTRACT unavailable: "        # what SourceResult.unavailable puts before every reason
+
+
+def is_not_screenable_error(error: Optional[str]) -> bool:
+    """True only for the entity-specific `no_usable_identifier` refusal, in the form `SourceResult.unavailable`
+    stores it (`"SAM_EXTRACT unavailable: no_usable_identifier: ..."`) or as the bare reason."""
+    text = (error or "").strip()
+    if text.startswith(_UNAVAILABLE_PREFIX):
+        text = text[len(_UNAVAILABLE_PREFIX):]
+    return text.startswith(NOT_SCREENABLE_REASON + ":")
+
+
 def loaded_edition() -> Dict[str, Any]:
     """The edition currently loaded, for attribution: filename, publication date, sha256, rows."""
     pub = _SAM_CACHE.get("publication_date")
@@ -444,7 +460,7 @@ class SAMExtractConnector:
         if not has_usable_npi and not has_name:
             return SourceResult.unavailable(
                 "SAM_EXTRACT",
-                "no_usable_identifier: neither a valid NPI nor an organisation "
+                f"{NOT_SCREENABLE_REASON}: neither a valid NPI nor an organisation "
                 "name is available to screen on",
                 qp, API_VERSION)
         if not await _load_sam_extract():

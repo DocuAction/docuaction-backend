@@ -89,7 +89,10 @@ EXTRACT_EVIDENCE_SOURCE = "SAM_EXTRACT_SUPPLEMENTARY"
 #: default) keeps today's behaviour byte-identical. Persisted rows are never read here: the evidence is the
 #: screen this run actually performed, not whichever row of the shared entity happens to be newest.
 SAM_EXTRACT_PINNED_EDITION_ENV = "RCE_SAM_EXTRACT_PINNED_SHA256"
-_EXTRACT_NOT_SCREENABLE_PREFIX = "no_usable_identifier"   # same prefix as SAMExtractConnector.screen's refusal
+#: A NAME-keyed extract screen later withheld by `withhold_unestablished_name_screens` (record with no submitted NPI
+#: whose delivered name is not the entity's) is deliberately NOT a refusal: the identity safeguard removed it, the
+#: member then carries NO extract evidence - never another edition's - and the mandatory-source policy treats the
+#: source as NOT_CHECKED (fails closed). Refusing would block such records permanently.
 
 
 class SamExtractEditionMismatch(RuntimeError):
@@ -113,6 +116,7 @@ def pinned_extract_edition() -> Optional[str]:
 def extract_edition_problems(gathered: List[Dict[str, Any]], pinned: str) -> List[str]:
     """For each gathered member WITH evidence, why its extract evidence is not the pinned edition's (empty = all
     good). Members with no evidence (refused before gathering, unresolved) are not classified and are skipped."""
+    from app.Tefca.sam_extract import is_not_screenable_error
     problems: List[str] = []
     for g in gathered:
         evidence = g.get("evidence")
@@ -129,7 +133,7 @@ def extract_edition_problems(gathered: List[Dict[str, Any]], pinned: str) -> Lis
                 sha = str((item.get("original_values") or {}).get("extract_sha256") or "").lower()
                 if sha != pinned:
                     problems.append(f"{g.get('ref')}: screened against edition {sha[:12] or 'not recorded'}")
-            elif not str(item.get("note") or "").startswith(_EXTRACT_NOT_SCREENABLE_PREFIX):
+            elif not is_not_screenable_error(item.get("note")):
                 problems.append(f"{g.get('ref')}: extract screen not performed ({str(item.get('note') or '')[:80]})")
     return problems
 
