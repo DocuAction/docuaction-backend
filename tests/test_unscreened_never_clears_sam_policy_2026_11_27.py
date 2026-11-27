@@ -5,9 +5,12 @@ active mandatory-source policy and the submitted methodology; and to distinguish
 SCREENED and CLEAR. Every step below is the production function, in the writer's order
 (`arc_pipeline.verify_and_classify`): the connector's SourceResult -> `sam_extract_evidence_items` (EvidenceItem)
 -> `withhold_unestablished_name_screens` (identity safeguard) -> `dimensions_to_verification_results` (classifier
-input) -> `source_policy.enforce_on_classification` with the M-1 policy row as recorded on DEV
-(`rce_source_policies`: one active row, sam_gov mandatory v1, applicability {} - read from the DEV database
-2026-11-26, qa-evidence/2026-11-24-release-review/PROGRESS.md:207,277). The live SAM API does not answer on DEV (HTTP
+input) -> `source_policy.enforce_on_classification` with the M-1 policy row as on DEV. The DEV database read of
+2026-11-26 recorded one active row, "sam_gov mandatory v1 (M-1)" (qa-evidence/2026-11-24-release-review/PROGRESS.md:207,
+277); its applicability is NOT in that record. It was inserted at Gate C on 2026-11-10 by the activation script from
+`PROPOSED_POLICY_M1` (applicability {}), and the later activation script's G5 refuses unless the row is mandatory with
+applicability {}. Not assumed at run time: `require_m1_for_pinned_run` re-reads the active row on every pinned call
+and refuses if it is not mandatory with applicability {}. The live SAM API does not answer on DEV (HTTP
 404 since 2026-11-12, PROGRESS.md:222,279), so `sam_gov` is UNAVAILABLE in every case: only a completed extract screen
 with no candidate satisfies M-1 (source_policy.py:170-184; methodology v1.4 §55, IN-04 §358, M-1 decision).
 
