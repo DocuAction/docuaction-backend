@@ -37,7 +37,9 @@ separated by a caller that only reads one field.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
@@ -55,6 +57,19 @@ CLASSIFICATION_GOVERNMENT = "GOVERNMENT"
 #: No dataset of any kind — the clean production state before first intake.
 #: Distinct from DEVELOPMENT_TEST, which asserts that development data exists.
 CLASSIFICATION_NONE = "NO_DATASET_LOADED"
+
+#: A REAL delivered source file, processed in a development deployment, that the owner has attested as such
+#: for ONE intake (`RCE_REAL_DELIVERY_PERIODS`). It is not GOVERNMENT (no authorisation marker is implied or
+#: set) and it is not synthetic: DEVELOPMENT_TEST's "synthetic demonstration data" wording is false for it.
+#: Used only by the per-delivery record-review export (`resolve_export_classification`). <= 32 characters
+#: (export_jobs.classification / artifact data_classification are String(32)).
+CLASSIFICATION_REAL_DELIVERY_DEV = "REAL_DELIVERY_PROCESSED_IN_DEV"
+#: App setting, set by the owner: JSON object {"<intake uuid>": "<Month YYYY>"}, e.g.
+#: {"cc1716a0-...": "November 2026"}. Absent, unparseable or not matching => no attestation (DEVELOPMENT_TEST).
+REAL_DELIVERY_PERIODS_ENV = "RCE_REAL_DELIVERY_PERIODS"
+_PERIOD = re.compile(r"^(January|February|March|April|May|June|July|August|September|October|November|December)"
+                     r" 20\d{2}$")
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 #: Why no authoritative hash was available, when that is the answer.
 REASON_NO_INTAKE = "NO_DELIVERY_RECORDED"
@@ -191,6 +206,51 @@ async def resolve_classification(db) -> str:
         logger.warning("data state unavailable, falling back to the "
                        "session-free classification: %s", exc)
         return _classification()
+
+
+def attested_real_delivery_period(intake_id: Any) -> Optional[str]:
+    """The reporting period the owner attested for this intake as a REAL delivery processed in development,
+    or None. Read from `RCE_REAL_DELIVERY_PERIODS` only; anything malformed is ignored (logged), never guessed,
+    so a bad setting falls back to the existing DEVELOPMENT_TEST label rather than to a stronger claim."""
+    raw = (os.getenv(REAL_DELIVERY_PERIODS_ENV) or "").strip()
+    key = str(intake_id or "").strip().lower()
+    if not raw or not _UUID.match(key):
+        return None
+    try:
+        mapping = json.loads(raw)
+    except ValueError:
+        logger.warning("%s is not valid JSON; ignored", REAL_DELIVERY_PERIODS_ENV)
+        return None
+    if not isinstance(mapping, dict):
+        logger.warning("%s is not a JSON object; ignored", REAL_DELIVERY_PERIODS_ENV)
+        return None
+    period = next((v for k, v in mapping.items() if str(k).strip().lower() == key), None)
+    if period is None:
+        return None
+    if not isinstance(period, str) or not _PERIOD.match(period.strip()):
+        logger.warning("%s: the period for intake %s is not 'Month YYYY'; ignored", REAL_DELIVERY_PERIODS_ENV, key)
+        return None
+    return period.strip()
+
+
+def real_delivery_label(period: str) -> str:
+    """The client-facing provenance title of an attested real delivery processed in development. Fixed wording:
+    it never says Government, production, approved or final, and always says pending human QA acceptance."""
+    return f"{period} RCE Results — Processed in DEV — Pending Human QA Acceptance"
+
+
+async def resolve_export_classification(db, intake_id: Any) -> str:
+    """The classification of a PER-DELIVERY export (record review). Same as `resolve_classification`, except that
+    in a development deployment an intake the owner attested as a real delivery is REAL_DELIVERY_PROCESSED_IN_DEV
+    instead of DEVELOPMENT_TEST. GOVERNMENT, NO_DATASET_LOADED and production deployments are never changed."""
+    base = await resolve_classification(db)
+    if base != CLASSIFICATION_DEVELOPMENT:
+        return base
+    from app.Tefca.data_state import Environment, current_environment
+
+    if current_environment() is not Environment.DEVELOPMENT:
+        return base
+    return CLASSIFICATION_REAL_DELIVERY_DEV if attested_real_delivery_period(intake_id) else base
 
 
 async def authoritative_source_provenance(db) -> SourceProvenance:

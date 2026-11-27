@@ -2205,7 +2205,11 @@ async def export_record_review(
     except ValueError as exc:                       # run of another delivery, etc.
         raise HTTPException(409, str(exc))
 
-    classification = await _export_classification(db)
+    # Per delivery: an owner-attested real delivery processed in development is labelled as such, never as
+    # synthetic demonstration data (source_provenance.resolve_export_classification). Nothing else changes.
+    from app.reports.data.source_provenance import resolve_export_classification
+
+    classification = await resolve_export_classification(db, intake_uuid)
     export_type = f"{RECORD_REVIEW_EXPORT_TYPE_PREFIX}{request.format}"
     generator_version = freeze.generator_version()
     # Read once, before request_job(): the losing side of a duplicate-request race rolls the session back, which
