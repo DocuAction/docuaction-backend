@@ -1966,6 +1966,11 @@ async def run_verification_coverage(
         "sam_extract_edition only (required there): SHA-256 of the extract edition this run is pinned to - "
         "the loaded edition's `extract_sha256` (GET .../sam-extract or the extract readiness). Refused (409) "
         "when the loaded edition is a different one.")),
+    name_only_submitted: bool = Query(False, description=(
+        "sam_extract_edition only. For a record identity validation refused whose delivered record submitted NO "
+        "NPI: screen the delivered record's submitted name only (no NPI sent), keep every other identity check, "
+        "and record the row as screen_basis=SUBMITTED_VALUES_NAME_ONLY with identity_confirmed=false. Any other "
+        "refusal stands.")),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("program_manager")),
 ):
@@ -1991,11 +1996,14 @@ async def run_verification_coverage(
         raise HTTPException(status_code=422, detail="scope=sam_extract_edition requires edition_sha256")
     if scope != av.SCOPE_SAM_EXTRACT_EDITION and edition_sha256:
         raise HTTPException(status_code=422, detail="edition_sha256 applies only to scope=sam_extract_edition")
+    if name_only_submitted and scope != av.SCOPE_SAM_EXTRACT_EDITION:
+        raise HTTPException(status_code=422, detail="name_only_submitted applies only to scope=sam_extract_edition")
     try:
         result = await av.run_coverage_batch(
             db, intake.id, batch_size=batch_size, scope=scope,
             actor=getattr(user, "email", None) or "SYSTEM",
-            after_entity_id=after_entity_id, edition_sha256=edition_sha256)
+            after_entity_id=after_entity_id, edition_sha256=edition_sha256,
+            name_only_submitted=name_only_submitted)
     except (av.SamExtractScreeningDisabled, av.SamExtractEditionRefused) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     if result.get("identity_refused"):
