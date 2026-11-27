@@ -91,9 +91,10 @@ EXTRACT_EVIDENCE_SOURCE = "SAM_EXTRACT_SUPPLEMENTARY"
 SAM_EXTRACT_PINNED_EDITION_ENV = "RCE_SAM_EXTRACT_PINNED_SHA256"
 #: A NAME-keyed extract screen later withheld by `withhold_unestablished_name_screens` (record with no submitted NPI
 #: whose delivered name is not the entity's) is deliberately NOT a refusal: the identity safeguard removed it, the
-#: member then carries NO extract evidence - never another edition's. (It is NOT automatically fail-closed: with no
-#: active mandatory-source policy rows such a record can still reach B1 without an extract screen, so a run must
-#: count and disclose these records.) Refusing would block such records permanently.
+#: member then carries NO extract evidence - never another edition's. Missing evidence is then B3
+#: SOURCE_NOT_COMPLETED_SAM_GOV under the M-1 policy, and a PINNED run refuses to start without that policy active
+#: (`require_m1_for_pinned_run`), so it can never count as clearance. Refusing such members instead would block them
+#: permanently. Demonstrated end to end in tests/test_unscreened_never_clears_sam_policy_2026_11_27.py.
 
 
 class SamExtractEditionMismatch(RuntimeError):
@@ -112,6 +113,19 @@ def pinned_extract_edition() -> Optional[str]:
         raise SamExtractEditionMismatch(
             f"{SAM_EXTRACT_PINNED_EDITION_ENV} is set but is not a 64-hex sha256; refusing to classify")
     return raw
+
+
+def require_m1_for_pinned_run(active_source_policies: List[Dict[str, Any]]) -> None:
+    """A PINNED run must also be one in which a missing or incomplete SAM screen can never count as clearance: that
+    holds only while the M-1 row (sam_gov, mandatory, applicability {} = every record) is active - then a record
+    without a completed extract screen is B3 SOURCE_NOT_COMPLETED_SAM_GOV (source_policy.py:170-195). With no such
+    row the policy hook is a no-op and an unscreened record can keep B1, so the run is refused (owner, 2026-11-27)."""
+    ok = any(p.get("source") == "sam_gov" and p.get("role") == "mandatory" and not (p.get("applicability") or {})
+             for p in active_source_policies or [])
+    if not ok:
+        raise SamExtractEditionMismatch(
+            "a pinned classification requires the active M-1 mandatory sam_gov policy (applies to every record); "
+            "without it a record with no completed SAM extract screen could be classified B1. Nothing was written.")
 
 
 def extract_edition_problems(gathered: List[Dict[str, Any]], pinned: str) -> List[str]:
@@ -1222,6 +1236,9 @@ async def verify_and_classify(
     # the shipped state — this list is empty and the hook below never runs.
     from app.tefca_registry.rce import source_policy as _source_policy
     active_source_policies = await _source_policy.load_active_policies(db)
+    if pinned_extract_edition() is not None:
+        # Before any write: a pinned run is refused unless missing SAM evidence is guaranteed not to clear.
+        require_m1_for_pinned_run(active_source_policies)
 
     outcomes: List[Dict[str, Any]] = []
     buckets: Dict[str, int] = {}
