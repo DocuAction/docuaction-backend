@@ -152,12 +152,17 @@ _CANDIDATES_SQL = _LATEST_CTE + """,
                   SELECT rec2.source_record_id FROM rce_curated_records rec2
                   WHERE rec2.source_intake_id = CAST(:i AS uuid)
                     AND rec2.canonical_entity_id::text = r.entity_id)
+              /*NAME_ONLY_EXCLUSION*/
             ORDER BY i.created_at DESC LIMIT 1) AS ledger_issue_code
     FROM reps r
     WHERE r.rep_rn = 1
     ORDER BY r.line_number NULLS LAST, r.entity_id
     LIMIT :limit OFFSET :offset
 """
+
+#: Applied only when the name-only store exists (before its migration no name-only finding can exist).
+_NAME_ONLY_ISSUE_EXCLUSION = (
+    "AND i.id NOT IN (SELECT s.issue_id FROM rce_record_sam_screenings s WHERE s.issue_id IS NOT NULL)")
 
 _CANDIDATES_COUNT_SQL = _LATEST_CTE + """
     SELECT count(*) FROM latest WHERE outcome = 'candidate'
@@ -253,7 +258,13 @@ async def list_candidates(db, intake_id, *, limit: int = DEFAULT_PAGE_SIZE,
 
     `ledger_issue_code` is the entity's newest SAM_EXTRACT_CANDIDATE finding
     when one exists — null marks a candidate persisted before EXC-001 that
-    the (owner-authorized) backfill has not yet placed on the worklist."""
+    the (owner-authorized) backfill has not yet placed on the worklist.
+
+    A record-scoped NAME-ONLY finding (PR #258, `rce_record_sam_screenings`) never counts: these candidates are
+    NPI-basis entity candidates, and a sibling record's name-only finding (a possibly different organisation)
+    must not mark them "already on the worklist" - same isolation as `record_sam_extract_candidate`."""
+    from app.tefca_registry.rce import verification_findings as vf
+
     limit = max(1, min(int(limit), MAX_PAGE_SIZE))
     offset = max(0, int(offset))
     params = {"i": str(intake_id), "src": EXTRACT_SOURCE,
@@ -261,7 +272,10 @@ async def list_candidates(db, intake_id, *, limit: int = DEFAULT_PAGE_SIZE,
     total = int((await db.execute(
         text(_CANDIDATES_COUNT_SQL),
         {"i": str(intake_id), "src": EXTRACT_SOURCE})).scalar() or 0)
-    rows = (await db.execute(text(_CANDIDATES_SQL), params)).all()
+    sql = _CANDIDATES_SQL.replace(
+        "/*NAME_ONLY_EXCLUSION*/",
+        _NAME_ONLY_ISSUE_EXCLUSION if await vf._name_only_store_exists(db) else "")
+    rows = (await db.execute(text(sql), params)).all()
     items = [{
         "entity_id": str(r.entity_id),
         "entity_name": r.entity_name,

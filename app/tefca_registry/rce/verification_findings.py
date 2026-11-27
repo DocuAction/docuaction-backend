@@ -527,9 +527,13 @@ async def record_sam_extract_candidate(db, *, entity_id, npi: Optional[str],
     commit; the caller's verification transaction owns the commit.
 
     `name_only_submitted` (owner, 2026-11-27): the candidate came from a NAME-ONLY screen of ONE delivered record's
-    submitted name. It is RECORD-scoped: `source_record_id` and `intake_id` are required, the idempotency check looks
-    only at THAT record (a sibling record's finding neither absorbs it nor is absorbed), and the description says
-    the basis and that identity was NOT confirmed.
+    submitted name. It is RECORD-scoped: `source_record_id` and `intake_id` are required, and the description says
+    the basis and that identity was NOT confirmed. Isolation is enforced by explicit filters in BOTH directions,
+    not by an assumption about which records can carry which basis:
+      * a name-only candidate's idempotency check matches only NAME-ONLY findings (issues referenced by
+        `rce_record_sam_screenings`) on THAT record - never an NPI-basis finding, on that record or a sibling;
+      * an NPI-basis candidate's check excludes every name-only finding (see also
+        `sam_extract_enumeration.list_candidates`, which applies the same exclusion for the backfill).
     """
     extract = extract or {}
     if name_only_submitted and (source_record_id is None or intake_id is None):
@@ -573,12 +577,17 @@ async def record_sam_extract_candidate(db, *, entity_id, npi: Optional[str],
         m.RceIssue.rule_id == rule_id,
         m.RceIssue.issue_type == SAM_EXTRACT_CANDIDATE,
         m.RceIssue.resolution.in_(sorted(UNDECIDED_RESOLUTIONS)))
-    if not name_only_submitted and await _name_only_store_exists(db):
-        # ISOLATION BOTH WAYS (independent re-review of #258): an entity-level (NPI-basis) candidate is never
-        # absorbed by a NAME-ONLY finding on a sibling record - ruling that one out (its submitted name may be a
-        # different organisation) would otherwise leave the NPI-based possible match with no open worklist item.
-        existing_stmt = existing_stmt.where(m.RceIssue.id.notin_(
-            select(m.RceRecordSamScreening.issue_id).where(m.RceRecordSamScreening.issue_id.isnot(None))))
+    name_only_issue_ids = select(m.RceRecordSamScreening.issue_id).where(
+        m.RceRecordSamScreening.issue_id.isnot(None))
+    if name_only_submitted:
+        # Name-only -> only an existing NAME-ONLY finding on this record satisfies it; an NPI-basis finding on the
+        # same record is a different basis and must not absorb it. (The store is asserted to exist by the caller.)
+        existing_stmt = existing_stmt.where(m.RceIssue.id.in_(name_only_issue_ids))
+    elif await _name_only_store_exists(db):
+        # NPI-basis -> never absorbed by a NAME-ONLY finding (on any record): ruling that one out (its submitted
+        # name may be a different organisation) would otherwise leave the NPI-based possible match with no open
+        # worklist item. Before the store's migration no name-only finding can exist, so nothing is excluded.
+        existing_stmt = existing_stmt.where(m.RceIssue.id.notin_(name_only_issue_ids))
     existing = (await db.execute(existing_stmt.limit(1))).scalar_one_or_none()
     if existing is not None:
         return existing

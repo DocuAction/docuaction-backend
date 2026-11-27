@@ -338,6 +338,54 @@ async def test_an_npi_candidate_is_not_absorbed_by_a_siblings_name_only_finding(
     assert screening.issue_id != r1_issue.id and "NAME-ONLY" not in r1_issue.description
 
 
+async def test_the_backfill_listing_never_reports_a_siblings_name_only_finding_as_the_entitys(rolled_back_db):
+    """Backfill path (focused re-review of #258): R1's NPI candidate opens I1, then R2's NAME-ONLY candidate opens the
+    newer I2. The candidate enumeration's `ledger_issue_code` must be I1, never R2's name-only finding."""
+    from app.tefca_registry.rce import sam_extract_enumeration as se_enum
+    db = rolled_back_db
+    ent, intake, r1, r2 = await _siblings(db, "9.99.778.29")
+    await _attempt(db, ent=ent, intake=intake, ref=r1.source_rce_id, resolved=_resolved(ent), candidate=True)
+    await _attempt(db, ent=ent, intake=intake, ref=r2.source_rce_id, resolved=_resolved(ent), candidate=True)
+    issues = await _candidates(db, intake)
+    i1 = next(i for i in issues if i.source_record_id == r1.id)
+    page = await se_enum.list_candidates(db, intake)
+    (item,) = [it for it in page["items"] if it["entity_id"] == str(ent)]
+    assert item["ledger_issue_code"] == i1.issue_code
+
+
+async def test_the_backfill_does_not_skip_an_npi_candidate_because_a_sibling_has_a_name_only_finding(rolled_back_db):
+    """R2's NAME-ONLY candidate is on the ledger; R1's NPI candidate evidence exists but its ledger write failed.
+    The backfill must see R1's entity as NOT on the worklist (so it can place it), not as covered by R2's finding."""
+    from app.tefca_registry.rce import sam_extract_enumeration as se_enum
+    db = rolled_back_db
+    ent, intake, r1, r2 = await _siblings(db, "9.99.778.30")
+    await _attempt(db, ent=ent, intake=intake, ref=r2.source_rce_id, resolved=_resolved(ent), candidate=True)
+    with patch.object(vf, "record_sam_extract_candidate", new=AsyncMock(side_effect=RuntimeError("ledger down"))):
+        await _attempt(db, ent=ent, intake=intake, ref=r1.source_rce_id, resolved=_resolved(ent), candidate=True)
+    assert [i.source_record_id for i in await _candidates(db, intake)] == [r2.id]   # only the name-only finding
+    page = await se_enum.list_candidates(db, intake)
+    (item,) = [it for it in page["items"] if it["entity_id"] == str(ent)]
+    assert item["ledger_issue_code"] is None
+    plan = await se_enum.backfill_candidate_issues(db, intake, dry_run=True)
+    assert plan["already_on_worklist"] == 0
+
+
+async def test_a_name_only_candidate_is_not_absorbed_by_an_npi_finding_on_the_same_record(rolled_back_db):
+    """Reverse filter, explicit (not an assumption): an NPI-basis EXC-001 already open on the SAME record does not
+    satisfy a name-only candidate for that record; the name-only result gets its own finding."""
+    db = rolled_back_db
+    ent, intake, (rec,) = await _one_delivery(db, "9.99.778.31", entity_npi=NPI, delivered_npi="")
+    npi_issue = await vf.record_sam_extract_candidate(db, entity_id=ent, npi=NPI, org_name="x", extract=EDITION,
+                                                      intake_id=intake, source_record_id=rec.id)
+    assert npi_issue is not None
+    out, _ = await _attempt(db, ent=ent, intake=intake, ref=rec.source_rce_id, resolved=_resolved(ent),
+                            candidate=True)
+    assert out["outcome"] == av.OUTCOME_NAME_ONLY_RECORDED
+    (screening,) = await _screenings(db, intake)
+    assert screening.issue_id is not None and screening.issue_id != npi_issue.id
+    assert len(await _candidates(db, intake)) == 2
+
+
 async def test_the_record_scoped_candidate_writer_requires_its_record():
     with pytest.raises(ValueError, match="record-scoped"):
         await vf.record_sam_extract_candidate(None, entity_id=uuid.uuid4(), npi=None, org_name="x",
