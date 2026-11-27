@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -207,7 +208,16 @@ _NOT_COVERED_COUNT_SQL = """
 #: other sources, so no quota is re-spent on an already-covered entity.
 SCOPE_FULL = "full"
 SCOPE_SAM_EXTRACT = "sam_extract"
-SCOPES = (SCOPE_FULL, SCOPE_SAM_EXTRACT)
+#: EDITION-BOUND extract screen (2026-11-26). Methodology v1.4 §55 / IN-04 / step 4: screen against a DATED
+#: extract, "run authorized checks against fixed source versions" and "append attributable outcomes". The plain
+#: `sam_extract` scope skips any entity that has ANY extract row, so an entity screened against an October edition
+#: is never screened again and its October answer is what the policy reads. This scope selects every eligible
+#: entity of the delivery that has no extract row FOR ONE PINNED EDITION (the extract's SHA-256), screens it, and
+#: APPENDS a row carrying that edition's filename, publication date, hash and matching basis. Older rows are never
+#: touched. The run is pinned: a batch refuses to start, and a single screen is not persisted, when the edition in
+#: memory is not the pinned one - an edition cannot change part-way through a population.
+SCOPE_SAM_EXTRACT_EDITION = "sam_extract_edition"
+SCOPES = (SCOPE_FULL, SCOPE_SAM_EXTRACT, SCOPE_SAM_EXTRACT_EDITION)
 
 EXTRACT_SOURCE = "SAM_EXTRACT_SUPPLEMENTARY"
 
@@ -246,6 +256,71 @@ _SAM_EXTRACT_NOT_COVERED_COUNT_SQL = """
       )
 """
 
+#: SCOPE_SAM_EXTRACT_EDITION: not covered = no extract row attributed to THE PINNED edition. The edition is
+#: identified by the SHA-256 of the extract CSV the row itself records (`original_values.extract_sha256`), never by
+#: a date the cycle or the batch assumes.
+_SAM_EXTRACT_EDITION_NOT_COVERED_SQL = """
+    SELECT DISTINCT ON (r.canonical_entity_id)
+           r.rce_org_oid, r.canonical_entity_id
+    FROM rce_curated_records r
+    WHERE r.source_intake_id = CAST(:intake_id AS uuid)
+      AND r.canonical_entity_id IS NOT NULL
+      AND r.rce_org_oid IS NOT NULL
+      AND (CAST(:after AS uuid) IS NULL OR r.canonical_entity_id > CAST(:after AS uuid))
+      AND NOT EXISTS (
+          SELECT 1 FROM tefca_dimension_evidence d
+          WHERE d.entity_id = CAST(r.canonical_entity_id AS TEXT)
+            AND d.source = 'SAM_EXTRACT_SUPPLEMENTARY'
+            AND d.original_values ->> 'extract_sha256' = :edition_sha256
+      )
+    ORDER BY r.canonical_entity_id, r.rce_org_oid
+    LIMIT :limit
+"""
+
+_SAM_EXTRACT_EDITION_NOT_COVERED_COUNT_SQL = """
+    SELECT count(DISTINCT r.canonical_entity_id)
+    FROM rce_curated_records r
+    WHERE r.source_intake_id = CAST(:intake_id AS uuid)
+      AND r.canonical_entity_id IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM tefca_dimension_evidence d
+          WHERE d.entity_id = CAST(r.canonical_entity_id AS TEXT)
+            AND d.source = 'SAM_EXTRACT_SUPPLEMENTARY'
+            AND d.original_values ->> 'extract_sha256' = :edition_sha256
+      )
+"""
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+#: The ONE unsuccessful screen that is a fact about the entity rather than the source:
+#: `SAMExtractConnector.screen` found neither a usable NPI nor an organisation name. Only this is recorded as
+#: "attempted, not screened" against the pinned edition; every other unsuccessful screen is retried.
+NOT_SCREENABLE_ENTITY_PREFIX = "no_usable_identifier"
+
+
+class SamExtractEditionRefused(RuntimeError):
+    """An edition-bound batch cannot run as asked: no valid pinned edition, the extract cannot screen now, or the
+    edition in memory is not the pinned one. Refused before anything is selected or written."""
+
+
+async def pinned_edition_problem(edition_sha256: Optional[str]) -> Optional[str]:
+    """Why an edition-bound screen against `edition_sha256` cannot run now, or None. Loads the extract the way
+    a screen would (same flag, load and freshness checks), then compares the loaded edition's hash."""
+    from app.Tefca import sam_extract as se
+
+    pinned = (edition_sha256 or "").strip().lower()
+    if not _SHA256_RE.match(pinned):
+        return "edition_sha256 must be the 64-hex SHA-256 of the extract edition to pin"
+    not_ready = await se.screening_not_ready_reason()
+    if not_ready:
+        return f"the SAM public extract cannot screen now: {not_ready}"
+    loaded = se.loaded_edition()
+    if (loaded.get("extract_sha256") or "").lower() != pinned:
+        return (f"the extract edition in memory ({loaded.get('publication_date')}, sha256 "
+                f"{(loaded.get('extract_sha256') or 'none')[:12]}...) is not the pinned edition "
+                f"({pinned[:12]}...); nothing was screened. Pin the loaded edition or wait for the pinned one.")
+    return None
+
 
 class SamExtractScreeningDisabled(RuntimeError):
     """A sam_extract-scope batch was requested while ENABLE_SAM_EXTRACT_SCREENING
@@ -265,17 +340,26 @@ def automated_coverage_enabled() -> bool:
     return os.environ.get(ENV_FLAG, "").strip().lower() in ("1", "true", "yes", "on")
 
 
-async def coverage_progress(db, intake_id, *, scope: str = SCOPE_FULL) -> Dict[str, int]:
+async def coverage_progress(db, intake_id, *, scope: str = SCOPE_FULL,
+                            edition_sha256: Optional[str] = None) -> Dict[str, Any]:
     """Read-only: how many of the delivery's eligible entities still need a
     first coverage attempt (for `scope="sam_extract"`: a first SAM-extract
-    row). Never writes."""
-    count_sql = (_SAM_EXTRACT_NOT_COVERED_COUNT_SQL if scope == SCOPE_SAM_EXTRACT
-                 else _NOT_COVERED_COUNT_SQL)
+    row; for `scope="sam_extract_edition"`: a row for the pinned edition). Never writes."""
+    params: Dict[str, Any] = {"intake_id": str(intake_id)}
+    if scope == SCOPE_SAM_EXTRACT_EDITION:
+        count_sql = _SAM_EXTRACT_EDITION_NOT_COVERED_COUNT_SQL
+        params["edition_sha256"] = (edition_sha256 or "").strip().lower()
+    elif scope == SCOPE_SAM_EXTRACT:
+        count_sql = _SAM_EXTRACT_NOT_COVERED_COUNT_SQL
+    else:
+        count_sql = _NOT_COVERED_COUNT_SQL
     eligible = int((await db.execute(
         text(_ELIGIBLE_COUNT_SQL), {"intake_id": str(intake_id)})).scalar() or 0)
-    remaining = int((await db.execute(
-        text(count_sql), {"intake_id": str(intake_id)})).scalar() or 0)
-    return {"eligible": eligible, "remaining": remaining, "covered": eligible - remaining}
+    remaining = int((await db.execute(text(count_sql), params)).scalar() or 0)
+    out: Dict[str, Any] = {"eligible": eligible, "remaining": remaining, "covered": eligible - remaining}
+    if scope == SCOPE_SAM_EXTRACT_EDITION:
+        out["edition_sha256"] = params["edition_sha256"]
+    return out
 
 
 def _classify_entity_outcome(evidence: Dict[str, Any]) -> str:
@@ -475,7 +559,8 @@ async def record_coverage_attempt(db, *, ref: str, canonical_entity_id,
 
 async def record_sam_extract_attempt(db, *, ref: str,
                                      canonical_entity_id,
-                                     intake_id) -> Dict[str, Any]:
+                                     intake_id,
+                                     required_edition_sha256: Optional[str] = None) -> Dict[str, Any]:
     """Run ONLY the SAM public-extract supplementary screen for one entity and
     append ONLY that source's evidence row. Never calls `build_evidence`, so
     no other source is re-asked and no quota is re-spent. The row is built by
@@ -523,6 +608,41 @@ async def record_sam_extract_attempt(db, *, ref: str,
 
     dim = Dimension.D3_EXCLUSION_REVOCATION.value
     items, candidate = sam_extract_evidence_items(dim, screen)
+    if required_edition_sha256:
+        pinned = required_edition_sha256.strip().lower()
+        if getattr(screen, "success", False):
+            screened_against = ((screen.data or {}).get("extract_sha256") or "").lower()
+            if screened_against != pinned:
+                # The in-memory extract changed between the batch check and this screen. Persist nothing: an
+                # answer from another edition must not be recorded as this run's.
+                return {"ref": ref, "entity_id": str(entity_uuid) if entity_uuid else None,
+                        "outcome": OUTCOME_RETRY_PENDING,
+                        "reason": "extract edition changed during the run; not persisted"}
+        else:
+            from app.Tefca import sam_extract as _se
+            loaded = _se.loaded_edition()
+            # `SourceResult.unavailable` prefixes the reason ("SAM_EXTRACT unavailable: ..."): one shared matcher.
+            entity_specific = _se.is_not_screenable_error(getattr(screen, "error", None))
+            if not entity_specific or (loaded.get("extract_sha256") or "").lower() != pinned:
+                # Flag off, extract unavailable/refused (e.g. a failed 24 h refetch mid-run), stale edition, or a
+                # different edition loaded: the attempt against the pinned edition did not happen. Persist
+                # nothing, so the entity stays selected and is screened when the source recovers.
+                return {"ref": ref, "entity_id": str(entity_uuid) if entity_uuid else None,
+                        "outcome": OUTCOME_RETRY_PENDING,
+                        "reason": "extract not screenable against the pinned edition now; not persisted"}
+            # The pinned edition IS loaded and the screen still could not be performed for THIS entity (e.g. no
+            # usable NPI and no organisation name). Record that, attributed to the edition it was attempted
+            # against, so the entity is accounted for as "attempted, not screenable" - never as clear, and never
+            # left to be re-selected forever.
+            items = [_dc_replace(item, original_values={
+                **(item.original_values or {}),
+                "source_dataset": "SAM_Exclusions_Public_Extract_V2",
+                "extract_filename": loaded.get("extract_filename"),
+                "publication_date": loaded.get("publication_date"),
+                "extract_sha256": loaded.get("extract_sha256"),
+                "screen_status": "not_screened",
+                "not_screened_reason": (getattr(screen, "error", None) or "")[:300],
+            }) for item in items]
     # A one-source, one-dimension partial generation. The dimension-level
     # disposition recorded here reflects ONLY this supplementary item — the
     # full D3 determination already persisted for this entity is untouched
@@ -545,10 +665,18 @@ async def record_sam_extract_attempt(db, *, ref: str,
         db.add(TEFCADimensionEvidence(**row))
 
     if candidate and entity_uuid is not None:
-        row_shape = await _entity_row_shape(db, entity_uuid)
-        if row_shape is not None and row_shape.verification_status != "in_review":
-            row_shape.verification_status = "in_review"
-            row_shape.updated_at = datetime.utcnow()
+        # EDITION-BOUND SCREENING DOES NOT TOUCH THE ENTITY'S STATUS (owner, 2026-11-26: resolve the frame
+        # interaction before screening the real population). `verification_status = in_review` is what the review
+        # frame excludes on (`qhin_sampling.resolve_qhin_strata`, D-08 still undecided), so writing it here would
+        # take every candidate entity OUT of the delivery's classification - while methodology §326 routes an
+        # unadjudicated extract candidate INTO classification (B3, RULE-008). The candidate is still recorded: the
+        # REVIEW evidence row above and the open SAM_EXTRACT_CANDIDATE finding below; classification sets the
+        # status itself. The legacy `sam_extract` scope (no pinned edition) keeps its behaviour unchanged.
+        if not required_edition_sha256:
+            row_shape = await _entity_row_shape(db, entity_uuid)
+            if row_shape is not None and row_shape.verification_status != "in_review":
+                row_shape.verification_status = "in_review"
+                row_shape.updated_at = datetime.utcnow()
         try:
             from app.tefca_registry.rce import verification_findings as vf
             # Savepoint: same reason as in record_coverage_attempt — the
@@ -631,7 +759,8 @@ def _batch_identity_fields(*, refused: int, exhausted: bool, limit_reached: bool
 async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_SIZE,
                              actor: str = "SYSTEM",
                              scope: str = SCOPE_FULL,
-                             after_entity_id=None) -> Dict[str, Any]:
+                             after_entity_id=None,
+                             edition_sha256: Optional[str] = None) -> Dict[str, Any]:
     """Process up to `batch_size` not-yet-covered eligible entities of one
     delivery. Commits once at the end of the call (the batch is the unit of
     atomicity, matching `review_cycle.create_review_cycle`'s own batching) and
@@ -666,10 +795,18 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
 
     if scope not in SCOPES:
         raise ValueError(f"unknown coverage scope {scope!r}; one of {SCOPES}")
-    if scope == SCOPE_SAM_EXTRACT and not sam_extract_screening_enabled():
+    if scope in (SCOPE_SAM_EXTRACT, SCOPE_SAM_EXTRACT_EDITION) and not sam_extract_screening_enabled():
         raise SamExtractScreeningDisabled(
             "ENABLE_SAM_EXTRACT_SCREENING is off; a sam_extract-scope batch "
             "would record UNAVAILABLE for every entity and cover nothing")
+    pinned_edition = None
+    if scope == SCOPE_SAM_EXTRACT_EDITION:
+        problem = await pinned_edition_problem(edition_sha256)
+        if problem:
+            raise SamExtractEditionRefused(problem)
+        pinned_edition = edition_sha256.strip().lower()
+    elif edition_sha256:
+        raise ValueError("edition_sha256 applies only to the sam_extract_edition scope")
 
     batch_size = max(1, min(int(batch_size or DEFAULT_BATCH_SIZE), MAX_BATCH_SIZE))
     started_after = uuid.UUID(str(after_entity_id)) if after_entity_id else None
@@ -678,7 +815,7 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
         # No rollback: the failed try-lock was a plain read, and the caller's
         # session (a route dependency, the scheduler tick, or a test's
         # savepoint-wrapped session) owns its own transaction lifecycle.
-        progress = await coverage_progress(db, intake_id, scope=scope)
+        progress = await coverage_progress(db, intake_id, scope=scope, edition_sha256=pinned_edition)
         return {
             "intake_id": str(intake_id), "scope": scope,
             "skipped_lock": True,
@@ -693,8 +830,10 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
             "batch_size": batch_size,
         }
 
-    candidate_sql = (_SAM_EXTRACT_NOT_COVERED_SQL if scope == SCOPE_SAM_EXTRACT
-                     else _ELIGIBLE_NOT_COVERED_SQL)
+    candidate_sql = {SCOPE_SAM_EXTRACT: _SAM_EXTRACT_NOT_COVERED_SQL,
+                     SCOPE_SAM_EXTRACT_EDITION: _SAM_EXTRACT_EDITION_NOT_COVERED_SQL}.get(
+                         scope, _ELIGIBLE_NOT_COVERED_SQL)
+    extra_params = {"edition_sha256": pinned_edition} if pinned_edition else {}
 
     local_store = make_local_store(db)
     outcomes: List[Dict[str, Any]] = []
@@ -712,7 +851,7 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
         rows = (await db.execute(
             text(candidate_sql),
             {"intake_id": str(intake_id), "limit": page_limit,
-             "after": str(cursor) if cursor is not None else None})).all()
+             "after": str(cursor) if cursor is not None else None, **extra_params})).all()
         for ref, canonical_entity_id in rows:
             if looked_up >= batch_size:
                 stop = True
@@ -722,10 +861,10 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
                 break
             cursor = canonical_entity_id
             try:
-                if scope == SCOPE_SAM_EXTRACT:
+                if scope in (SCOPE_SAM_EXTRACT, SCOPE_SAM_EXTRACT_EDITION):
                     result = await record_sam_extract_attempt(
                         db, ref=ref, canonical_entity_id=canonical_entity_id,
-                        intake_id=intake_id)
+                        intake_id=intake_id, required_edition_sha256=pinned_edition)
                 else:
                     result = await record_coverage_attempt(
                         db, ref=ref, canonical_entity_id=canonical_entity_id,
@@ -757,7 +896,10 @@ async def run_coverage_batch(db, intake_id, *, batch_size: int = DEFAULT_BATCH_S
                        "identity validation; nothing was gathered or persisted for them",
                        refused, intake_id, scope)
 
-    progress = await coverage_progress(db, intake_id, scope=scope)
+    progress = await coverage_progress(db, intake_id, scope=scope, edition_sha256=pinned_edition)
+    if pinned_edition:
+        from app.Tefca import sam_extract as _se
+        progress["pinned_edition"] = _se.loaded_edition()
     by_outcome: Dict[str, int] = {}
     for o in outcomes:
         by_outcome[o["outcome"]] = by_outcome.get(o["outcome"], 0) + 1
