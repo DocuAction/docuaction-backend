@@ -91,8 +91,9 @@ EXTRACT_EVIDENCE_SOURCE = "SAM_EXTRACT_SUPPLEMENTARY"
 SAM_EXTRACT_PINNED_EDITION_ENV = "RCE_SAM_EXTRACT_PINNED_SHA256"
 #: A NAME-keyed extract screen later withheld by `withhold_unestablished_name_screens` (record with no submitted NPI
 #: whose delivered name is not the entity's) is deliberately NOT a refusal: the identity safeguard removed it, the
-#: member then carries NO extract evidence - never another edition's - and the mandatory-source policy treats the
-#: source as NOT_CHECKED (fails closed). Refusing would block such records permanently.
+#: member then carries NO extract evidence - never another edition's. (It is NOT automatically fail-closed: with no
+#: active mandatory-source policy rows such a record can still reach B1 without an extract screen, so a run must
+#: count and disclose these records.) Refusing would block such records permanently.
 
 
 class SamExtractEditionMismatch(RuntimeError):
