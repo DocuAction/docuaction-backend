@@ -1966,6 +1966,14 @@ async def run_verification_coverage(
         "sam_extract_edition only (required there): SHA-256 of the extract edition this run is pinned to - "
         "the loaded edition's `extract_sha256` (GET .../sam-extract or the extract readiness). Refused (409) "
         "when the loaded edition is a different one.")),
+    name_only_submitted: bool = Query(False, description=(
+        "sam_extract_edition only. For a record identity validation refused whose delivered record submitted NO "
+        "NPI (the classifier's definition: the delivered value, stripped, is empty) in a delivery assessed on or "
+        "after the blank-NPI effective date: screen that record's submitted name only (no NPI sent), keep every "
+        "other identity check, and record the result RECORD-SCOPED (rce_record_sam_screenings, "
+        "screen_basis=SUBMITTED_VALUES_NAME_ONLY, identity_confirmed=false). Nothing is written to the entity "
+        "evidence store, so the entity is not counted as covered. Any other refusal stands. Every call is "
+        "audited.")),
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role("program_manager")),
 ):
@@ -1991,17 +1999,52 @@ async def run_verification_coverage(
         raise HTTPException(status_code=422, detail="scope=sam_extract_edition requires edition_sha256")
     if scope != av.SCOPE_SAM_EXTRACT_EDITION and edition_sha256:
         raise HTTPException(status_code=422, detail="edition_sha256 applies only to scope=sam_extract_edition")
+    if name_only_submitted and scope != av.SCOPE_SAM_EXTRACT_EDITION:
+        raise HTTPException(status_code=422, detail="name_only_submitted applies only to scope=sam_extract_edition")
     try:
         result = await av.run_coverage_batch(
             db, intake.id, batch_size=batch_size, scope=scope,
             actor=getattr(user, "email", None) or "SYSTEM",
-            after_entity_id=after_entity_id, edition_sha256=edition_sha256)
-    except (av.SamExtractScreeningDisabled, av.SamExtractEditionRefused) as exc:
+            after_entity_id=after_entity_id, edition_sha256=edition_sha256,
+            name_only_submitted=name_only_submitted)
+    except (av.SamExtractScreeningDisabled, av.SamExtractEditionRefused, av.NameOnlyStoreNotApplied) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     if result.get("identity_refused"):
         await _audit(db, "verification_coverage_identity_refused", user, request,
                      coverage_refusal_audit_metadata(intake.id, result))
+    if name_only_submitted:
+        # EVERY name-only call is audited (owner, 2026-11-27), including one that screened nothing: it is a
+        # deliberate change of screening basis. Ids and counts only - never a submitted name.
+        await _audit(db, "verification_coverage_name_only_screening", user, request,
+                     name_only_audit_metadata(intake.id, result, edition_sha256))
     return result
+
+
+#: Screened records named in one name-only audit row; the counts are always exact.
+NAME_ONLY_AUDIT_CAP = 500
+
+
+def name_only_audit_metadata(intake_id, result: Dict[str, Any], edition_sha256: Optional[str]) -> Dict[str, Any]:
+    """What a name-only screening call leaves in the audit trail: the basis, the edition, exact counts by outcome,
+    and the delivered records screened (ids and outcome only; capped). No delivered value is included."""
+    from app.tefca_registry.rce import automated_verification as av
+
+    screened = [o for o in result.get("outcomes") or [] if o.get("outcome") == av.OUTCOME_NAME_ONLY_RECORDED]
+    return {
+        "intake_id": str(intake_id), "scope": result.get("scope"),
+        "screen_basis": av.SCREEN_BASIS_NAME_ONLY_SUBMITTED, "identity_confirmed": False,
+        "edition_sha256": edition_sha256,
+        "name_only_screened": len(screened),
+        "name_only_by_outcome": result.get("name_only_by_outcome") or {},
+        "name_only_recorded_for_edition": result.get("name_only_recorded_for_edition") or {},
+        "identity_refused": result.get("identity_refused"),
+        "retry_pending": (result.get("by_outcome") or {}).get(av.OUTCOME_RETRY_PENDING, 0),
+        "screened_records": [{"source_record_id": o.get("source_record_id"), "outcome": o.get("name_only_outcome")}
+                             for o in screened[:NAME_ONLY_AUDIT_CAP]],
+        "screened_records_truncated": len(screened) > NAME_ONLY_AUDIT_CAP,
+        "entity_evidence_written_for_name_only": False,
+        "correlation_id": request_context.correlation_id(),
+    }
 
 
 #: Refused entities named in one coverage audit row; the count is always exact.

@@ -484,11 +484,19 @@ def sam_extract_candidate_values(evidence: Dict[str, Any]) -> Optional[Dict[str,
     return None
 
 
+async def _name_only_store_exists(db) -> bool:
+    """Whether the record-scoped name-only store (migration 20261127_rce_record_sam_screen) exists. Before it is
+    applied no name-only finding can exist, so nothing needs excluding."""
+    from sqlalchemy import text
+    return (await db.execute(text("SELECT to_regclass('public.rce_record_sam_screenings')"))).scalar() is not None
+
+
 async def record_sam_extract_candidate(db, *, entity_id, npi: Optional[str],
                                        org_name: Optional[str] = None,
                                        extract: Optional[Dict[str, Any]] = None,
                                        intake_id=None,
                                        source_record_id=None,
+                                       name_only_submitted: bool = False,
                                        ) -> Optional[m.RceIssue]:
     """Write the ledger finding for one SAM public-extract CANDIDATE match.
 
@@ -517,8 +525,19 @@ async def record_sam_extract_candidate(db, *, entity_id, npi: Optional[str],
     Never confirms anything: the finding is a candidate requiring human
     determination, and its absence is never exclusion clearance. Does not
     commit; the caller's verification transaction owns the commit.
+
+    `name_only_submitted` (owner, 2026-11-27): the candidate came from a NAME-ONLY screen of ONE delivered record's
+    submitted name. It is RECORD-scoped: `source_record_id` and `intake_id` are required, and the description says
+    the basis and that identity was NOT confirmed. Isolation is enforced by explicit filters in BOTH directions,
+    not by an assumption about which records can carry which basis:
+      * a name-only candidate's idempotency check matches only NAME-ONLY findings (issues referenced by
+        `rce_record_sam_screenings`) on THAT record - never an NPI-basis finding, on that record or a sibling;
+      * an NPI-basis candidate's check excludes every name-only finding (see also
+        `sam_extract_enumeration.list_candidates`, which applies the same exclusion for the backfill).
     """
     extract = extract or {}
+    if name_only_submitted and (source_record_id is None or intake_id is None):
+        raise ValueError("a name-only candidate is record-scoped: source_record_id and intake_id are required")
     lookup_value = (npi or "").strip() or (org_name or "").strip() or None
 
     stmt = select(m.RceCuratedRecord).where(
@@ -546,16 +565,30 @@ async def record_sam_extract_candidate(db, *, entity_id, npi: Optional[str],
         return None
 
     rule_id, severity, authority = NON_QUALITY_ISSUE_TYPES[SAM_EXTRACT_CANDIDATE]
-    same_delivery_records = select(m.RceCuratedRecord.source_record_id).where(
-        m.RceCuratedRecord.canonical_entity_id == entity_id,
-        m.RceCuratedRecord.source_intake_id == curated.source_intake_id)
-    existing = (await db.execute(
-        select(m.RceIssue).where(
-            m.RceIssue.source_record_id.in_(same_delivery_records),
-            m.RceIssue.rule_id == rule_id,
-            m.RceIssue.issue_type == SAM_EXTRACT_CANDIDATE,
-            m.RceIssue.resolution.in_(sorted(UNDECIDED_RESOLUTIONS)))
-        .limit(1))).scalar_one_or_none()
+    if name_only_submitted:
+        scope_records = select(m.RceCuratedRecord.source_record_id).where(
+            m.RceCuratedRecord.source_record_id == curated.source_record_id)
+    else:
+        scope_records = select(m.RceCuratedRecord.source_record_id).where(
+            m.RceCuratedRecord.canonical_entity_id == entity_id,
+            m.RceCuratedRecord.source_intake_id == curated.source_intake_id)
+    existing_stmt = select(m.RceIssue).where(
+        m.RceIssue.source_record_id.in_(scope_records),
+        m.RceIssue.rule_id == rule_id,
+        m.RceIssue.issue_type == SAM_EXTRACT_CANDIDATE,
+        m.RceIssue.resolution.in_(sorted(UNDECIDED_RESOLUTIONS)))
+    name_only_issue_ids = select(m.RceRecordSamScreening.issue_id).where(
+        m.RceRecordSamScreening.issue_id.isnot(None))
+    if name_only_submitted:
+        # Name-only -> only an existing NAME-ONLY finding on this record satisfies it; an NPI-basis finding on the
+        # same record is a different basis and must not absorb it. (The store is asserted to exist by the caller.)
+        existing_stmt = existing_stmt.where(m.RceIssue.id.in_(name_only_issue_ids))
+    elif await _name_only_store_exists(db):
+        # NPI-basis -> never absorbed by a NAME-ONLY finding (on any record): ruling that one out (its submitted
+        # name may be a different organisation) would otherwise leave the NPI-based possible match with no open
+        # worklist item. Before the store's migration no name-only finding can exist, so nothing is excluded.
+        existing_stmt = existing_stmt.where(m.RceIssue.id.notin_(name_only_issue_ids))
+    existing = (await db.execute(existing_stmt.limit(1))).scalar_one_or_none()
     if existing is not None:
         return existing
 
@@ -581,6 +614,8 @@ async def record_sam_extract_candidate(db, *, entity_id, npi: Optional[str],
         suggested_confidence=None,
         correction_authority=authority,
         description=(
+            ("NAME-ONLY screen of this delivered record's submitted name (no NPI submitted; no NPI was sent); "
+             "identity NOT confirmed. " if name_only_submitted else "") +
             f"Potential match in the GSA public SAM exclusions extract "
             f"(edition {edition}, sha256 {sha}, "
             f"{count if count is not None else 'unrecorded number of'} candidate "

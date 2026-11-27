@@ -70,6 +70,8 @@ ABSENT = {"rce_source_intakes", "rce_source_records", "rce_ingestion_runs", "rce
           "rce_record_comments",
           # 20261115_rce_npi_research: FKs to rce_source_intakes/rce_source_records (already ABSENT above)
           "rce_supplemental_npi_research",
+          # 20261127_rce_record_sam_screen: FKs to rce_source_intakes/rce_source_records (already ABSENT above)
+          "rce_record_sam_screenings",
           # 20261003_preflight_shadow_workspace: the whole preflight/shadow-reassessment
           # chain FKs (directly or transitively) to rce_source_intakes/rce_source_records
           # or review_records (already ABSENT above) -- none of it could exist pre-chain
