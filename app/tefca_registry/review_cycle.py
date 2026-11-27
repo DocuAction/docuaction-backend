@@ -920,9 +920,16 @@ async def _create_review_cycle(
             # The writer stamps each review it creates with THIS sample, in the commit that creates it: if this
             # call dies before the links below are committed, the next call can tell its own reviews from any
             # other review of the same record.
-            result = await verify_and_classify(
-                db, [ref for _member, _entity_id, ref in step], intake_id=intake_id,
-                actor=actor_email or "SYSTEM", creating_sample_id=sample_id)
+            from app.tefca_registry.rce.arc_pipeline import SamExtractEditionMismatch
+            try:
+                result = await verify_and_classify(
+                    db, [ref for _member, _entity_id, ref in step], intake_id=intake_id,
+                    actor=actor_email or "SYSTEM", creating_sample_id=sample_id)
+            except SamExtractEditionMismatch as exc:
+                # The writer refused before committing anything; discard its uncommitted work and refuse the call.
+                # Members stay unreviewed and are picked up by the next call once the pinned edition is loaded.
+                await db.rollback()
+                raise CycleRefused(str(exc)) from exc
             # `lineage` and the references whose evidence was not stored (unanchored) used to be dropped here,
             # so on the official path - this one - neither was visible to the caller or in the audit trail.
             verified = _merge_verification(verified, {k: result.get(k) for k in

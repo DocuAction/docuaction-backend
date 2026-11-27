@@ -78,6 +78,62 @@ UNMATCHED_RULE_VERSION = 0
 #: detail the rules need.
 #: The GSA public-extract screen's evidence source (supplementary to the live SAM API; see source_policy M-1).
 EXTRACT_EVIDENCE_SOURCE = "SAM_EXTRACT_SUPPLEMENTARY"
+
+#: PINNED EXTRACT EDITION FOR CLASSIFICATION (owner, 2026-11-26: "classification uses the pinned edition's actual
+#: evidence"). The bulk writer screens the extract LIVE through `build_evidence`, against whatever edition is in
+#: memory at that moment; the in-memory extract reloads every 24 h, so a long run can straddle two editions, and a
+#: stale/unavailable extract silently yields UNAVAILABLE rows. When this variable holds an edition's sha256, every
+#: member a writer call classifies must carry a SAM_EXTRACT_SUPPLEMENTARY item screened against THAT edition (or be
+#: entity-specifically not screenable: no usable identifier). Otherwise the call is refused BEFORE its first write
+#: (the writer commits once, at the end), so no review is ever created on another edition's evidence. Unset (the
+#: default) keeps today's behaviour byte-identical. Persisted rows are never read here: the evidence is the
+#: screen this run actually performed, not whichever row of the shared entity happens to be newest.
+SAM_EXTRACT_PINNED_EDITION_ENV = "RCE_SAM_EXTRACT_PINNED_SHA256"
+_EXTRACT_NOT_SCREENABLE_PREFIX = "no_usable_identifier"   # same prefix as SAMExtractConnector.screen's refusal
+
+
+class SamExtractEditionMismatch(RuntimeError):
+    """A classification call refused because its extract evidence is not from the pinned edition."""
+
+
+def pinned_extract_edition() -> Optional[str]:
+    """The pinned edition's sha256 (lower-case), None when no pin is set. A malformed pin refuses rather than being
+    ignored: a pin someone set but mistyped must not silently become 'no pin'."""
+    import os
+    import re
+    raw = (os.getenv(SAM_EXTRACT_PINNED_EDITION_ENV) or "").strip().lower()
+    if not raw:
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", raw):
+        raise SamExtractEditionMismatch(
+            f"{SAM_EXTRACT_PINNED_EDITION_ENV} is set but is not a 64-hex sha256; refusing to classify")
+    return raw
+
+
+def extract_edition_problems(gathered: List[Dict[str, Any]], pinned: str) -> List[str]:
+    """For each gathered member WITH evidence, why its extract evidence is not the pinned edition's (empty = all
+    good). Members with no evidence (refused before gathering, unresolved) are not classified and are skipped."""
+    problems: List[str] = []
+    for g in gathered:
+        evidence = g.get("evidence")
+        if not evidence:
+            continue
+        items = [i for d in evidence.get("dimensions", []) for i in (d.get("evidence") or [])
+                 if isinstance(i, dict) and i.get("source") == EXTRACT_EVIDENCE_SOURCE]
+        if not items:
+            problems.append(f"{g.get('ref')}: no SAM extract screen in its evidence")
+            continue
+        for item in items:
+            disposition = str(item.get("disposition") or "").upper()
+            if disposition in ("PASS", "REVIEW"):
+                sha = str((item.get("original_values") or {}).get("extract_sha256") or "").lower()
+                if sha != pinned:
+                    problems.append(f"{g.get('ref')}: screened against edition {sha[:12] or 'not recorded'}")
+            elif not str(item.get("note") or "").startswith(_EXTRACT_NOT_SCREENABLE_PREFIX):
+                problems.append(f"{g.get('ref')}: extract screen not performed ({str(item.get('note') or '')[:80]})")
+    return problems
+
+
 _EVIDENCE_SOURCE_TO_RULE_SOURCE = {
     "NPPES": "nppes",
     "OIG_LEIE": "oig_leie",
@@ -1219,6 +1275,8 @@ async def verify_and_classify(
     # with an unproven fix.
     import time as _dbgtime, os as _dbgos, json as _dbgjson
     _dbg_path = _dbgos.environ.get("ARC_PIPELINE_TIMING_LOG")
+    # Read once per call (see SAM_EXTRACT_PINNED_EDITION_ENV); a malformed pin refuses here, before any write.
+    _pinned_edition = pinned_extract_edition()
 
     for _chunk_start in range(0, len(entity_refs), _GATHER_CHUNK_SIZE):
         chunk_refs = entity_refs[_chunk_start:_chunk_start + _GATHER_CHUNK_SIZE]
@@ -1257,6 +1315,15 @@ async def verify_and_classify(
         # Back in request order; a refused reference carries its entity and NO evidence (none was gathered).
         gathered = [({"ref": r, "entity": _pre[r], "evidence": None} if r in _refused_before else next(_asked))
                     for r in chunk_refs]
+        if _pinned_edition is not None:
+            _edition_problems = extract_edition_problems(gathered, _pinned_edition)
+            if _edition_problems:
+                # Before this chunk's first write; earlier chunks of this call are uncommitted (one commit, at
+                # the end), so nothing from this call persists.
+                raise SamExtractEditionMismatch(
+                    f"{len(_edition_problems)} member(s) in this batch were not screened against the pinned SAM "
+                    f"extract edition {_pinned_edition[:12]}…; nothing from this call was written. First: "
+                    + "; ".join(_edition_problems[:5]))
         refused_before_gather.extend(r for r in chunk_refs if r in _refused_before)
         _dbg_gather_s = _dbgtime.perf_counter() - _dbg_t0
         if _dbg_path:

@@ -181,8 +181,16 @@ async def test_a_source_failure_mid_run_is_retried_never_recorded_as_screened(sc
     assert {r.sha for r in await _rows(db, intake_id)} == {OLD}
 
 
+async def _statuses(db, intake_id):
+    return sorted((await db.execute(text(
+        "SELECT e.verification_status FROM tefca_reg_entities e WHERE e.id IN ("
+        "  SELECT r.canonical_entity_id FROM rce_curated_records r WHERE r.source_intake_id = CAST(:i AS uuid))"),
+        {"i": str(intake_id)})).scalars().all())
+
+
 async def test_candidate_on_the_pinned_edition_is_review_never_exclusion(screened_on_old_edition):
     db, intake_id = screened_on_old_edition
+    statuses_before = await _statuses(db, intake_id)
     a, b = _loaded(NEW, "2026-11-26")
     with a, b, patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
                      new=AsyncMock(return_value=_answer(NEW, "2026-11-26", candidate=True))):
@@ -199,6 +207,25 @@ async def test_candidate_on_the_pinned_edition_is_review_never_exclusion(screene
         "WHERE r.source_intake_id = CAST(:i AS uuid) AND i.issue_type = :t AND i.resolution = 'OPEN'"),
         {"i": str(intake_id), "t": SAM_EXTRACT_CANDIDATE})).scalar()
     assert findings == 3
+    # ...and it does NOT write the entity's verification_status: `in_review` is what the review frame excludes on
+    # (D-08 undecided), and methodology §326 routes an unadjudicated candidate INTO classification (B3, RULE-008).
+    statuses_after = await _statuses(db, intake_id)
+    assert statuses_after == statuses_before and "in_review" not in statuses_after
+    from app.tefca_registry.qhin_sampling import resolve_qhin_strata, review_required_exclusions
+    _eligible, unresolved = await resolve_qhin_strata(db, intake_id)
+    assert review_required_exclusions(unresolved) == []
+
+
+async def test_legacy_scope_candidate_still_sets_in_review(rolled_back_db):
+    """The unpinned `sam_extract` scope is deliberately unchanged by the edition-scope change."""
+    db = rolled_back_db
+    intake_id, _job = await seed_intake(db, make_rows(2, arc="9.99.777.72"))
+    await run_quality_and_curation(db, intake_id)
+    await promote_delivery(db, intake_id, actor=SYN)
+    with patch("app.Tefca.sam_extract.SAMExtractConnector.screen",
+               new=AsyncMock(return_value=_answer(OLD, "2026-10-30", candidate=True))):
+        await av.run_coverage_batch(db, intake_id, batch_size=100, scope=av.SCOPE_SAM_EXTRACT)
+    assert await _statuses(db, intake_id) == ["in_review", "in_review"]
 
 
 def test_edition_candidate_query_matches_on_the_recorded_hash_and_deduplicates():

@@ -614,7 +614,7 @@ async def verify(
     """
     from sqlalchemy import select
     from app.tefca_registry.rce import models as m
-    from app.tefca_registry.rce.arc_pipeline import verify_and_classify
+    from app.tefca_registry.rce.arc_pipeline import SamExtractEditionMismatch, verify_and_classify
 
     refs = list(body.entity_refs)
     if not refs:
@@ -624,9 +624,13 @@ async def verify(
                    m.RceCuratedRecord.canonical_entity_id.isnot(None))
             .order_by(m.RceCuratedRecord.rce_org_oid)
             .limit(body.limit))).scalars().all())
-    return await verify_and_classify(
-        db, refs, intake_id=intake_id,
-        actor=getattr(user, "email", None) or "SYSTEM")
+    try:
+        return await verify_and_classify(
+            db, refs, intake_id=intake_id,
+            actor=getattr(user, "email", None) or "SYSTEM")
+    except SamExtractEditionMismatch as exc:
+        await db.rollback()
+        raise HTTPException(409, str(exc)) from exc
 
 
 # ── P12 — reconciliation ─────────────────────────────────────────────────────

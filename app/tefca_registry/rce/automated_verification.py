@@ -664,10 +664,18 @@ async def record_sam_extract_attempt(db, *, ref: str,
         db.add(TEFCADimensionEvidence(**row))
 
     if candidate and entity_uuid is not None:
-        row_shape = await _entity_row_shape(db, entity_uuid)
-        if row_shape is not None and row_shape.verification_status != "in_review":
-            row_shape.verification_status = "in_review"
-            row_shape.updated_at = datetime.utcnow()
+        # EDITION-BOUND SCREENING DOES NOT TOUCH THE ENTITY'S STATUS (owner, 2026-11-26: resolve the frame
+        # interaction before screening the real population). `verification_status = in_review` is what the review
+        # frame excludes on (`qhin_sampling.resolve_qhin_strata`, D-08 still undecided), so writing it here would
+        # take every candidate entity OUT of the delivery's classification - while methodology §326 routes an
+        # unadjudicated extract candidate INTO classification (B3, RULE-008). The candidate is still recorded: the
+        # REVIEW evidence row above and the open SAM_EXTRACT_CANDIDATE finding below; classification sets the
+        # status itself. The legacy `sam_extract` scope (no pinned edition) keeps its behaviour unchanged.
+        if not required_edition_sha256:
+            row_shape = await _entity_row_shape(db, entity_uuid)
+            if row_shape is not None and row_shape.verification_status != "in_review":
+                row_shape.verification_status = "in_review"
+                row_shape.updated_at = datetime.utcnow()
         try:
             from app.tefca_registry.rce import verification_findings as vf
             # Savepoint: same reason as in record_coverage_attempt — the
