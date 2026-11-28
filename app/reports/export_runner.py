@@ -316,11 +316,18 @@ async def run_record_review_export_job(db, job) -> str:
         await export_jobs.note_request_parameters(db, job_id, {
             "dataset_job_id": obtained["dataset_job_id"], "dataset_id": obtained["dataset_id"],
             "dataset_sha256": obtained["sha256"], "dataset_frozen_at": frozen.get("frozen_at")})
+        # An attested real delivery processed in development carries its fixed provenance title. The attestation
+        # is re-read here: if it was withdrawn after the freeze, build_dataset refuses rather than print the
+        # title without it (or the classification without the title).
+        from app.reports.data import source_provenance as _sp
+        _period = (_sp.attested_real_delivery_period(job.source_intake_id)
+                   if frozen["classification"] == _sp.CLASSIFICATION_REAL_DELIVERY_DEV else None)
         dataset = ds.build_dataset(
             frozen["facts"], report_id=report_id, findings_count=None,
             assessment_date=frozen["assessment_date"], classification=frozen["classification"],
             load_meta=frozen["load_meta"], stored_comments=frozen["stored_comments"],
-            frozen=freeze.stated(obtained))
+            frozen=freeze.stated(obtained),
+            provenance_label=_sp.real_delivery_label(_period) if _period else None)
 
         await export_jobs.heartbeat(db, job_id, phase=PHASE_BUILDING)
         render, content_type = renderers[fmt]

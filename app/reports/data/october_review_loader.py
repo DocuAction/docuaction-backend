@@ -1112,7 +1112,8 @@ async def load_record_facts(
 async def load_dataset(
         db, *, intake_id: Any, evidence_cutoff: Any, report_id: str,
         run_id: Any = None, annotations=None, comments=None,
-        findings_count: int = 0, classification: str = "DRAFT") -> Dict[str, Any]:
+        findings_count: int = 0, classification: str = "DRAFT",
+        provenance_label: Optional[str] = None) -> Dict[str, Any]:
     """Load the facts and build the shared dataset (the one every format renders)."""
     from app.reports.data import october_review_dataset as ds
 
@@ -1122,4 +1123,5 @@ async def load_dataset(
     return ds.build_dataset(
         loaded["facts"], report_id=report_id, findings_count=findings_count,
         assessment_date=loaded["assessment_date"], classification=classification,
-        load_meta=loaded["meta"], stored_comments=loaded["stored_comments"])
+        load_meta=loaded["meta"], stored_comments=loaded["stored_comments"],
+        provenance_label=provenance_label)

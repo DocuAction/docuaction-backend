@@ -537,7 +537,17 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                   load_meta: Optional[Dict[str, Any]] = None,
                   stored_comments: Optional[Dict[str, Dict[str, Any]]] = None,
                   frozen: Optional[Dict[str, Any]] = None,
+                  provenance_label: Optional[str] = None,
                   ) -> Dict[str, Any]:
+    # `provenance_label` (2026-11-27): the client-facing title of an owner-attested REAL delivery processed in
+    # development (source_provenance.real_delivery_label). Required exactly when `classification` is
+    # REAL_DELIVERY_PROCESSED_IN_DEV, refused otherwise, so the title can never be attached to synthetic or
+    # Government data. It leads the banner (every sheet note, the CSV first line, the PDF) and has a Summary row.
+    from app.reports.data.source_provenance import CLASSIFICATION_REAL_DELIVERY_DEV
+
+    if (classification == CLASSIFICATION_REAL_DELIVERY_DEV) != bool(provenance_label):
+        raise DatasetRefused("a provenance label is required for, and only for, classification "
+                             f"{CLASSIFICATION_REAL_DELIVERY_DEV}")
     # `frozen` = {"sha256", "dataset_id", "frozen_at", "capture_started_at"} when the facts come from a stored,
     # hashed dataset (the export job: record_review_freeze). The banner (first CSV line, every sheet note, the
     # PDF) and the Summary rows then state the hash and the freeze time, and curated status is labelled as
@@ -624,7 +634,7 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
     if sum(automated.values()) != sum(counts.values()):         # guard: nothing lost, nothing duplicated
         raise DatasetRefused("automated and reporting bucket totals do not reconcile")
     incomplete = bool(unclassified)
-    banner = DRAFT_BANNER
+    banner = (f"{provenance_label}. " if provenance_label else "") + DRAFT_BANNER
     if incomplete:
         banner += (f" DATASET INCOMPLETE: {len(unclassified)} record(s) have no "
                    "usable persisted classification; no bucket was assigned to "
@@ -723,6 +733,7 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
                         FINDINGS_NOT_INCLUDED if findings_count is None
                         else str(int(findings_count))],
                        ["Assessment date (D-12)", assessment_date]]
+                    + ([["Data provenance", provenance_label]] if provenance_label else [])
                     + ([[PROVENANCE_SUMMARY_ROW, str(gaps["total"])]] if gaps["total"] else [])
                     + ([[RECLASSIFIED_SUMMARY_ROW, str(reclassified)]]
                        + [[f"  moved {k}", str(v)] for k, v in sorted(transitions.items())]
@@ -763,7 +774,7 @@ def build_dataset(facts: Iterable[Dict[str, Any]], *, report_id: str,
         order.append("Unclassified")
     return {
         "report_id": report_id, "workbook_version": DATASET_VERSION,
-        "classification": classification, "banner": banner,
+        "classification": classification, "banner": banner, "provenance_label": provenance_label,
         "summary": summary, "sheet_order": order, "sheets": sheets,
         "load_meta": load_meta or {},
         "not_applied_moves": not_applied_moves,
